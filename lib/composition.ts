@@ -1,0 +1,1148 @@
+import {
+  clampFontWeight,
+  parseCssColor,
+  parseFontId,
+  parseInsertStyle,
+  type FontId,
+  type FontWeight,
+  type InsertStyle,
+} from "./compose/insert-style.ts"
+import {
+  parseStyleRef,
+  styleRefFromLegacy,
+  DEFAULT_CTA_STYLE_REF,
+  type StyleRef,
+  type TrackId,
+  type UserPreset,
+} from "./style/index.ts"
+import { migrateInsertTransform, parseInsertTransform, type InsertTransform } from "./insert-transform.ts"
+import {
+  isIdentitySourceTransform,
+  parseSourceTransform,
+  serializeSourceTransform,
+  type SourceTransform,
+} from "./source-transform.ts"
+import { parseCustomPresets } from "./style/user-presets.ts"
+import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
+import { migrateTextPresetId } from "./text-presets/migrate.ts"
+import {
+  clampAbsoluteCaptionWords,
+  toAbsoluteCaptionWords,
+} from "./caption-time.ts"
+
+export const COMPOSITION_VERSION = 5 as const
+export const LEGACY_COMPOSITION_VERSION = 1 as const
+export const COMPOSITION_VERSION_V2 = 2 as const
+export const PREVIOUS_COMPOSITION_VERSION = 3 as const
+export const COMPOSITION_VERSION_V4 = 4 as const
+export const MIN_DURATION = 0.5
+export const DEFAULT_FPS = 30
+export const DEFAULT_WIDTH = 1080
+export const DEFAULT_HEIGHT = 1920
+export const DEFAULT_OUTPUT_WIDTH = 1080
+export const DEFAULT_OUTPUT_HEIGHT = 1920
+export const DEFAULT_OUTPUT_FPS = 30
+export const DEFAULT_VIDEO_BITRATE = 8_000_000
+export const OUTPUT_720_WIDTH = 720
+export const OUTPUT_720_HEIGHT = 1280
+export const OUTPUT_720_BITRATE = 5_000_000
+export const OUTPUT_SOURCE_BITRATE = 4_000_000
+export const DEFAULT_FONT_ID = "geist"
+export const DEFAULT_BRAND_PRIMARY = "#EE4D2D"
+export const DEFAULT_BRAND_LOGO =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#EE4D2D"/><path fill="#fff" d="M18 26h28v26H18z"/><path fill="none" stroke="#fff" stroke-width="4" d="M24 26a8 8 0 0 1 16 0"/></svg>`,
+  )
+export const PLACEHOLDER_DURATION = 15
+
+export type InsertKind = "chip" | "text" | "sticker" | "caption"
+export type CaptionPreset = "viral" | "limpo"
+export type OverlayTextAlign = "left" | "center" | "right"
+export type StickerSourceKind = "library" | "upload" | "paste"
+
+export type InsertType =
+  | "logo-shopee"
+  | "selo-frete"
+  | "alerta-desconto"
+  | "preco-riscado"
+  | "cupom"
+  | "contador"
+  | "barra-estoque"
+  | "estrelas"
+  | "seta"
+  | "tarja-frete"
+  | "seta-mao"
+  | "circulo-destaque"
+  | "bubble-comentario"
+  | "divisor-antes-depois"
+  | "passo"
+  | "tarja-espera"
+  | "texto-livre"
+  | "sticker-png"
+  | "legenda"
+
+export type InsertAnchor = "top" | "center" | "bottom"
+export type AnimPresetId =
+  | "none"
+  | "pop"
+  | "slide-up"
+  | "blur-in"
+  | "typewriter"
+  | "shake"
+
+export const TEXT_INSERT_TYPE = "texto-livre" as const
+export const STICKER_INSERT_TYPE = "sticker-png" as const
+export const CAPTION_INSERT_TYPE = "legenda" as const
+export const MAX_STICKERS = 20
+export const DEFAULT_TEXT_PRESET = "bold-outline"
+export const DEFAULT_TEXT_FONT_SIZE = 56
+export const DEFAULT_TEXT_X = 50
+export const DEFAULT_TEXT_Y = 35
+export const DEFAULT_CAPTION_X = 50
+export const DEFAULT_CAPTION_Y = 72
+export const DEFAULT_CAPTION_FONT_SIZE = 64
+export const DEFAULT_CAPTION_PRESET: CaptionPreset = "viral"
+export const DEFAULT_CAPTION_HIGHLIGHT = "#FFE500"
+export const DEFAULT_CAPTION_COLOR = "#FFFFFF"
+export const DEFAULT_CAPTION_BG = "rgba(0,0,0,0.72)"
+export const DEFAULT_CAPTION_STROKE = "#000000"
+export const DEFAULT_CAPTION_STROKE_WIDTH = 6
+export const DEFAULT_STICKER_X = 50
+export const DEFAULT_STICKER_Y = 78
+export const DEFAULT_STICKER_SCALE = 0.7
+export const DEFAULT_MAX_WIDTH_PCT = 84
+export const FONT_SIZE_MIN = 40
+export const FONT_SIZE_MAX = 360
+export const CHIP_FONT_SIZE_MIN = 12
+export const DEFAULT_CHIP_FONT_SIZE = 13
+export const SCALE_MIN = 0.2
+export const SCALE_MAX = 4
+export const DEFAULT_CHIP_SCALE = 1
+export const OVERLAY_X_MIN = 0
+export const OVERLAY_X_MAX = 100
+export const OVERLAY_Y_MIN = 0
+export const OVERLAY_Y_MAX = 100
+export const TEXT_DRAW_Y_MIN = 5
+export const TEXT_DRAW_Y_MAX = 95
+
+export type { FontId, FontWeight, InsertStyle, ShadowPreset } from "./compose/insert-style.ts"
+export type { StyleRef, TrackId } from "./style/index.ts"
+export type { InsertTransform } from "./insert-transform.ts"
+export type { SourceTransform }
+
+export type TrackStyle = {
+  styleRef?: StyleRef
+}
+
+export interface CaptionWord {
+  text: string
+  start: number
+  end: number
+}
+
+export interface CompositionInsert {
+  id: string
+  type: InsertType
+  kind?: InsertKind
+  start: number
+  duration: number
+  text?: string
+  words?: CaptionWord[]
+  anchor: InsertAnchor
+  animIn: AnimPresetId
+  animOut: AnimPresetId
+  x?: number
+  y?: number
+  fontSize?: number
+  preset?: string
+  fontFamily?: string
+  rotation?: number
+  maxWidthPct?: number
+  textAlign?: OverlayTextAlign
+  scale?: number
+  fillColor?: string
+  accentColor?: string
+  label?: string
+  sourceKind?: StickerSourceKind
+  libraryId?: string
+  fileId?: string
+  style?: InsertStyle
+  styleRef?: StyleRef
+  transform?: InsertTransform
+}
+
+export interface CompositionSource {
+  duration: number
+  fps: number
+  width: number
+  height: number
+  fileName: string
+  fileId?: string
+  remoteUrl?: string
+  canonicalUrl?: string
+  provider?: string
+  author?: string
+  title?: string
+  codec?: string
+  watermarked?: boolean
+  transform?: SourceTransform
+}
+
+export interface CompositionBrand {
+  fontId: string
+  primary: string
+  logo: string
+}
+
+export type OutputQualityId = "1080" | "720" | "source"
+
+export interface CompositionOutput {
+  width: number
+  height: number
+  fps: number
+  videoBitrate: number
+}
+
+export interface CompositionBatch {
+  hooks: string[]
+  fonts: string[]
+  positions: InsertAnchor[]
+  baseName: string
+}
+
+export interface CaptionStyle {
+  x: number
+  y: number
+  fontSize: number
+  maxWidthPct: number
+  fontFamily: FontId
+  fontWeight: FontWeight
+  color: string
+  highlightColor: string
+  bgColor: string
+  strokeColor: string
+  strokeWidth: number
+  rotation: number
+}
+
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
+  x: DEFAULT_CAPTION_X,
+  y: DEFAULT_CAPTION_Y,
+  fontSize: DEFAULT_CAPTION_FONT_SIZE,
+  maxWidthPct: DEFAULT_MAX_WIDTH_PCT,
+  fontFamily: "geist",
+  fontWeight: 800,
+  color: DEFAULT_CAPTION_COLOR,
+  highlightColor: DEFAULT_CAPTION_HIGHLIGHT,
+  bgColor: DEFAULT_CAPTION_BG,
+  strokeColor: DEFAULT_CAPTION_STROKE,
+  strokeWidth: DEFAULT_CAPTION_STROKE_WIDTH,
+  rotation: 0,
+}
+
+export function mergeCaptionStylePatch(
+  style: CaptionStyle,
+  patch: Partial<CaptionStyle>,
+): CaptionStyle {
+  const next = { ...style, ...patch }
+  next.x = clamp(roundTenths(next.x), OVERLAY_X_MIN, OVERLAY_X_MAX)
+  next.y = clamp(roundTenths(next.y), OVERLAY_Y_MIN, OVERLAY_Y_MAX)
+  next.fontSize = Math.round(clamp(next.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX))
+  next.maxWidthPct = clamp(next.maxWidthPct, 20, 100)
+  next.fontFamily = parseFontId(next.fontFamily) ?? DEFAULT_CAPTION_STYLE.fontFamily
+  next.fontWeight = clampFontWeight(next.fontFamily, next.fontWeight)
+  next.strokeWidth = Math.round(clamp(next.strokeWidth, 0, 12))
+  next.color = parseCssColor(next.color) ?? DEFAULT_CAPTION_COLOR
+  next.highlightColor = parseCssColor(next.highlightColor) ?? DEFAULT_CAPTION_HIGHLIGHT
+  next.bgColor = parseCssColor(next.bgColor) ?? DEFAULT_CAPTION_BG
+  next.strokeColor = parseCssColor(next.strokeColor) ?? DEFAULT_CAPTION_STROKE
+  next.rotation = Number.isFinite(next.rotation) ? next.rotation : 0
+  return next
+}
+
+export function captionInsertForLayout(
+  insert: CompositionInsert,
+  style: CaptionStyle,
+): CompositionInsert {
+  if (insertKind(insert) !== "caption") return insert
+  return {
+    ...insert,
+    x: style.x,
+    y: style.y,
+    fontSize: style.fontSize,
+    maxWidthPct: style.maxWidthPct,
+    style: {
+      fontFamily: style.fontFamily,
+      fontWeight: style.fontWeight,
+      uppercase: false,
+      color: style.color,
+      bgColor: style.bgColor,
+      strokeWidth: style.strokeWidth,
+      strokeColor: style.strokeColor,
+      shadow: "none",
+      opacity: 1,
+      rotation: style.rotation,
+    },
+  }
+}
+
+export interface Composition {
+  version: typeof COMPOSITION_VERSION
+  source: CompositionSource
+  brand: CompositionBrand
+  inserts: CompositionInsert[]
+  batch: CompositionBatch
+  output: CompositionOutput
+  captionPreset: CaptionPreset
+  captionStyle: CaptionStyle
+  styleRef?: StyleRef
+  tracks?: Partial<Record<TrackId, TrackStyle>>
+  customPresets?: Record<string, UserPreset>
+  watermarkEnabled?: boolean
+}
+
+const INSERT_TYPES: readonly InsertType[] = [
+  "logo-shopee",
+  "selo-frete",
+  "alerta-desconto",
+  "preco-riscado",
+  "cupom",
+  "contador",
+  "barra-estoque",
+  "estrelas",
+  "seta",
+  "tarja-frete",
+  "seta-mao",
+  "circulo-destaque",
+  "bubble-comentario",
+  "divisor-antes-depois",
+  "passo",
+  "tarja-espera",
+  "texto-livre",
+  "sticker-png",
+  "legenda",
+]
+
+export const CHIP_INSERT_TYPES: readonly InsertType[] = [
+  "logo-shopee",
+  "selo-frete",
+  "alerta-desconto",
+  "preco-riscado",
+  "cupom",
+  "contador",
+  "barra-estoque",
+  "estrelas",
+  "seta",
+  "tarja-frete",
+  "seta-mao",
+  "circulo-destaque",
+  "bubble-comentario",
+  "divisor-antes-depois",
+  "passo",
+  "tarja-espera",
+]
+
+const ANIM_IDS: readonly AnimPresetId[] = [
+  "none",
+  "pop",
+  "slide-up",
+  "blur-in",
+  "typewriter",
+  "shake",
+]
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isInsertType(value: unknown): value is InsertType {
+  return typeof value === "string" && INSERT_TYPES.includes(value as InsertType)
+}
+
+function isAnim(value: unknown): value is AnimPresetId {
+  return typeof value === "string" && ANIM_IDS.includes(value as AnimPresetId)
+}
+
+function isAnchor(value: unknown): value is InsertAnchor {
+  return value === "top" || value === "center" || value === "bottom"
+}
+
+function isKind(value: unknown): value is InsertKind {
+  return value === "chip" || value === "text" || value === "sticker" || value === "caption"
+}
+
+function isTextAlign(value: unknown): value is OverlayTextAlign {
+  return value === "left" || value === "center" || value === "right"
+}
+
+function isSourceKind(value: unknown): value is StickerSourceKind {
+  return value === "library" || value === "upload" || value === "paste"
+}
+
+export function insertKind(insert: Pick<CompositionInsert, "kind" | "type">): InsertKind {
+  if (isKind(insert.kind)) return insert.kind
+  if (insert.type === TEXT_INSERT_TYPE) return "text"
+  if (insert.type === STICKER_INSERT_TYPE) return "sticker"
+  if (insert.type === CAPTION_INSERT_TYPE) return "caption"
+  return "chip"
+}
+
+export function isChipInsert(insert: Pick<CompositionInsert, "kind" | "type">): boolean {
+  return insertKind(insert) === "chip"
+}
+
+export function insertHasFontSize(
+  insert: Pick<CompositionInsert, "kind" | "type" | "text">,
+): boolean {
+  const kind = insertKind(insert)
+  if (kind === "caption" || kind === "text") return true
+  if (kind !== "chip") return false
+  if (insert.type === "logo-shopee") return false
+  return Boolean(insert.text?.trim())
+}
+
+export function scaleRangeLabel(): string {
+  return `Escala ${String(SCALE_MIN).replace(".", ",")}–${SCALE_MAX}`
+}
+
+function clampScale(value: number): number {
+  return Math.round(clamp(value, SCALE_MIN, SCALE_MAX) * 1000) / 1000
+}
+
+function clampChipFontSize(value: number): number {
+  return Math.round(clamp(value, CHIP_FONT_SIZE_MIN, FONT_SIZE_MAX))
+}
+
+function resolvedKind(type: InsertType, rawKind: unknown): InsertKind | null {
+  const kind = isKind(rawKind)
+    ? rawKind
+    : type === TEXT_INSERT_TYPE
+      ? "text"
+      : type === STICKER_INSERT_TYPE
+        ? "sticker"
+        : type === CAPTION_INSERT_TYPE
+          ? "caption"
+          : "chip"
+  if (kind === "text" && type !== TEXT_INSERT_TYPE) return null
+  if (kind === "sticker" && type !== STICKER_INSERT_TYPE) return null
+  if (kind === "caption" && type !== CAPTION_INSERT_TYPE) return null
+  if (
+    kind === "chip" &&
+    (type === TEXT_INSERT_TYPE || type === STICKER_INSERT_TYPE || type === CAPTION_INSERT_TYPE)
+  ) {
+    return null
+  }
+  return kind
+}
+
+function asStoredString(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value || value.startsWith("blob:")) return undefined
+  return value
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(",", "."))
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function roundTenths(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
+export type ClampField = "start" | "duration" | "both"
+
+function clampCaptionWords(
+  words: CaptionWord[],
+  insertStart: number,
+  insertDuration: number,
+): CaptionWord[] {
+  return clampAbsoluteCaptionWords(
+    toAbsoluteCaptionWords(words, insertStart, insertDuration),
+    insertStart,
+    insertDuration,
+  )
+}
+
+export function clampInsert(
+  insert: CompositionInsert,
+  videoDuration: number,
+  field: ClampField = "both",
+): CompositionInsert {
+  const withCaptionWords = (result: CompositionInsert): CompositionInsert => {
+    if (insertKind(result) !== "caption" || !result.words?.length) return result
+    return { ...result, words: clampCaptionWords(result.words, result.start, result.duration) }
+  }
+
+  if (!(videoDuration > 0)) {
+    return withCaptionWords({
+      ...insert,
+      start: Math.max(0, roundTenths(insert.start)),
+      duration: Math.max(MIN_DURATION, roundTenths(insert.duration)),
+    })
+  }
+
+  if (field === "duration") {
+    const start = Math.max(0, insert.start)
+    const maxDuration = Math.max(MIN_DURATION, videoDuration - start)
+    let duration = roundTenths(clamp(insert.duration, MIN_DURATION, maxDuration))
+    if (start + duration > videoDuration + 1e-9) {
+      duration = Math.max(MIN_DURATION, Math.floor(maxDuration * 10 + 1e-8) / 10)
+    }
+    return withCaptionWords({ ...insert, start, duration })
+  }
+
+  let duration = insert.duration
+  if (duration > videoDuration) {
+    duration = videoDuration
+  }
+  duration = Math.max(MIN_DURATION, roundTenths(duration))
+  const maxStart = Math.max(0, videoDuration - duration)
+  const start = roundTenths(clamp(insert.start, 0, maxStart))
+  return withCaptionWords({ ...insert, start, duration })
+}
+
+export function mergeInsertPatch(
+  insert: CompositionInsert,
+  patch: Partial<CompositionInsert>,
+): CompositionInsert {
+  const next: CompositionInsert = { ...insert, ...patch }
+  const kind = insertKind(next)
+  if (kind === "text" || kind === "caption" || kind === "sticker" || kind === "chip") {
+    if (typeof next.x === "number") {
+      next.x = clamp(roundTenths(next.x), OVERLAY_X_MIN, OVERLAY_X_MAX)
+    }
+    if (typeof next.y === "number") {
+      next.y = clamp(roundTenths(next.y), OVERLAY_Y_MIN, OVERLAY_Y_MAX)
+    }
+  }
+  if ((kind === "text" || kind === "caption") && typeof next.fontSize === "number") {
+    next.fontSize = Math.round(clamp(next.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX))
+  }
+  if (kind === "chip" && typeof next.fontSize === "number") {
+    next.fontSize = clampChipFontSize(next.fontSize)
+  }
+  if ((kind === "sticker" || kind === "chip") && typeof next.scale === "number") {
+    next.scale = clampScale(next.scale)
+  }
+  if ((kind === "text" || kind === "caption" || kind === "chip") && typeof next.maxWidthPct === "number") {
+    next.maxWidthPct = clamp(next.maxWidthPct, 20, 100)
+  }
+  return next
+}
+
+export function clampComposition(composition: Composition): Composition {
+  const duration = composition.source.duration
+  if (!(duration > 0)) return composition
+  return {
+    ...composition,
+    inserts: composition.inserts.map((insert) => clampInsert(insert, duration)),
+  }
+}
+
+function parseCaptionWords(
+  raw: unknown,
+  insertStart: number,
+  insertDuration: number,
+): CaptionWord[] {
+  if (!Array.isArray(raw)) return []
+  const words: CaptionWord[] = []
+  for (const item of raw) {
+    if (!isRecord(item)) continue
+    if (typeof item.text !== "string" || !item.text) continue
+    const start = asNumber(item.start)
+    const end = asNumber(item.end)
+    if (start === null || end === null) continue
+    if (!(start >= 0)) continue
+    if (!(end > start)) continue
+    words.push({ text: item.text, start, end })
+  }
+  return clampCaptionWords(words, insertStart, insertDuration)
+}
+
+function parseCaptionPreset(raw: unknown): CaptionPreset {
+  return raw === "limpo" ? "limpo" : DEFAULT_CAPTION_PRESET
+}
+
+function parseCaptionStyle(
+  raw: unknown,
+  fallback: CaptionStyle = DEFAULT_CAPTION_STYLE,
+): CaptionStyle {
+  if (!isRecord(raw)) return { ...fallback }
+  const patch: Partial<CaptionStyle> = {}
+  const x = asNumber(raw.x)
+  if (x !== null) patch.x = x
+  const y = asNumber(raw.y)
+  if (y !== null) patch.y = y
+  const fontSize = asNumber(raw.fontSize)
+  if (fontSize !== null) patch.fontSize = fontSize
+  const maxWidthPct = asNumber(raw.maxWidthPct)
+  if (maxWidthPct !== null) patch.maxWidthPct = maxWidthPct
+  const fontFamily = parseFontId(raw.fontFamily)
+  if (fontFamily) patch.fontFamily = fontFamily
+  const fontWeight = asNumber(raw.fontWeight)
+  if (fontWeight !== null) patch.fontWeight = fontWeight as FontWeight
+  if (typeof raw.color === "string") patch.color = raw.color
+  if (typeof raw.highlightColor === "string") patch.highlightColor = raw.highlightColor
+  if (typeof raw.bgColor === "string") patch.bgColor = raw.bgColor
+  if (typeof raw.strokeColor === "string") patch.strokeColor = raw.strokeColor
+  const strokeWidth = asNumber(raw.strokeWidth)
+  if (strokeWidth !== null) patch.strokeWidth = strokeWidth
+  const rotation = asNumber(raw.rotation)
+  if (rotation !== null) patch.rotation = rotation
+  return mergeCaptionStylePatch(fallback, patch)
+}
+
+function migrateCaptionStyle(input: Record<string, unknown>): CaptionStyle {
+  if (isRecord(input.captionStyle)) {
+    return parseCaptionStyle(input.captionStyle)
+  }
+  const rawInserts = Array.isArray(input.inserts) ? input.inserts : []
+  const rawCaption = rawInserts.find(
+    (item) => isRecord(item) && (item.type === "legenda" || item.kind === "caption"),
+  )
+  if (!isRecord(rawCaption)) return { ...DEFAULT_CAPTION_STYLE }
+  const style = isRecord(rawCaption.style) ? rawCaption.style : {}
+  return parseCaptionStyle({
+    x: rawCaption.x,
+    y: rawCaption.y,
+    fontSize: rawCaption.fontSize,
+    maxWidthPct: rawCaption.maxWidthPct,
+    fontFamily: style.fontFamily,
+    fontWeight: style.fontWeight,
+    color: style.color,
+    bgColor: style.bgColor === null ? undefined : style.bgColor,
+    strokeColor: style.strokeColor,
+    strokeWidth: style.strokeWidth,
+  })
+}
+
+function parseTracks(raw: unknown): Composition["tracks"] | undefined {
+  if (!isRecord(raw)) return undefined
+  const tracks: NonNullable<Composition["tracks"]> = {}
+  for (const id of ["gancho", "prova", "cta"] as const) {
+    const entry = raw[id]
+    if (!isRecord(entry)) continue
+    const styleRef = parseStyleRef(entry.styleRef)
+    if (styleRef) tracks[id] = { styleRef }
+  }
+  return Object.keys(tracks).length ? tracks : undefined
+}
+
+function attachStyleRef(
+  insert: CompositionInsert,
+  raw: Record<string, unknown>,
+): CompositionInsert {
+  const explicit = parseStyleRef(raw.styleRef)
+  const withRef = explicit
+    ? { ...insert, styleRef: explicit }
+    : insertKind(insert) === "sticker"
+      ? insert
+      : attachLegacyStyleRef(insert, raw)
+  const transform = parseInsertTransform(raw.transform)
+  const next = transform ? { ...withRef, transform } : withRef
+  return reconcileInsertStyle(next)
+}
+
+function attachLegacyStyleRef(
+  insert: CompositionInsert,
+  raw: Record<string, unknown>,
+): CompositionInsert {
+  const x = asNumber(raw.x)
+  const y = asNumber(raw.y)
+  const fontSize = asNumber(raw.fontSize)
+  const rotation = asNumber(raw.rotation)
+  const migrated = styleRefFromLegacy({
+    fontFamily: asStoredString(raw.fontFamily),
+    fontSize: fontSize === null ? undefined : fontSize,
+    rotation: rotation === null ? undefined : rotation,
+    x: x === null ? undefined : x,
+    y: y === null ? undefined : y,
+    style: insert.style,
+  })
+  if (!migrated) return insert
+  return { ...insert, styleRef: migrated }
+}
+
+function parseInsert(raw: unknown): CompositionInsert | null {
+  if (!isRecord(raw)) return null
+  if (!isInsertType(raw.type)) return null
+  const kind = resolvedKind(raw.type, raw.kind)
+  if (!kind) return null
+  const start = asNumber(raw.start ?? raw.startTime)
+  const duration = asNumber(raw.duration)
+  if (start === null || duration === null) return null
+  const id =
+    typeof raw.id === "string" && raw.id
+      ? raw.id
+      : `insert-${Math.random().toString(36).slice(2)}`
+  const anchor = isAnchor(raw.anchor)
+    ? raw.anchor
+    : isAnchor(raw.position)
+      ? raw.position
+      : kind === "sticker" || kind === "caption"
+        ? "bottom"
+        : kind === "text"
+          ? "center"
+          : "top"
+  const style = parseInsertStyle(raw.style)
+  const base: CompositionInsert = {
+    id,
+    type: raw.type,
+    start,
+    duration,
+    ...(typeof raw.text === "string" ? { text: raw.text } : {}),
+    anchor,
+    animIn: isAnim(raw.animIn) ? raw.animIn : kind === "caption" ? "none" : "pop",
+    animOut: isAnim(raw.animOut) ? raw.animOut : "none",
+    ...(style ? { style } : {}),
+  }
+
+  if (kind === "chip") {
+    const x = asNumber(raw.x)
+    const y = asNumber(raw.y)
+    const scale = asNumber(raw.scale)
+    const fontSize = asNumber(raw.fontSize)
+    const fillColor = parseCssColor(raw.fillColor)
+    const accentColor = parseCssColor(raw.accentColor)
+    return attachStyleRef(
+      {
+        ...base,
+        ...(x !== null ? { x: clamp(roundTenths(x), OVERLAY_X_MIN, OVERLAY_X_MAX) } : {}),
+        ...(y !== null ? { y: clamp(roundTenths(y), OVERLAY_Y_MIN, OVERLAY_Y_MAX) } : {}),
+        ...(scale !== null ? { scale: clampScale(scale) } : {}),
+        ...(fontSize !== null ? { fontSize: clampChipFontSize(fontSize) } : {}),
+        ...(fillColor ? { fillColor } : {}),
+        ...(accentColor ? { accentColor } : {}),
+        ...(asNumber(raw.maxWidthPct) !== null
+          ? { maxWidthPct: clamp(asNumber(raw.maxWidthPct)!, 20, 100) }
+          : {}),
+      },
+      raw,
+    )
+  }
+
+  if (kind === "caption") {
+    return attachStyleRef(
+      {
+        id,
+        type: raw.type,
+        start,
+        duration,
+        kind: "caption",
+        text: typeof raw.text === "string" ? raw.text : "",
+        words: parseCaptionWords(raw.words, start, duration),
+        anchor,
+        animIn: "none",
+        animOut: "none",
+        ...(asNumber(raw.x) !== null
+          ? { x: clamp(roundTenths(asNumber(raw.x)!), OVERLAY_X_MIN, OVERLAY_X_MAX) }
+          : {}),
+        ...(asNumber(raw.y) !== null
+          ? { y: clamp(roundTenths(asNumber(raw.y)!), OVERLAY_Y_MIN, OVERLAY_Y_MAX) }
+          : {}),
+        ...(asNumber(raw.rotation) !== null ? { rotation: asNumber(raw.rotation)! } : {}),
+        ...(asNumber(raw.maxWidthPct) !== null
+          ? { maxWidthPct: clamp(asNumber(raw.maxWidthPct)!, 20, 100) }
+          : {}),
+      },
+      raw,
+    )
+  }
+
+  const x = clamp(
+    asNumber(raw.x) ?? (kind === "sticker" ? DEFAULT_STICKER_X : DEFAULT_TEXT_X),
+    OVERLAY_X_MIN,
+    OVERLAY_X_MAX,
+  )
+  const y = clamp(
+    asNumber(raw.y) ?? (kind === "sticker" ? DEFAULT_STICKER_Y : DEFAULT_TEXT_Y),
+    OVERLAY_Y_MIN,
+    OVERLAY_Y_MAX,
+  )
+
+  if (kind === "text") {
+    const fontSize = Math.round(
+      clamp(
+        asNumber(raw.fontSize) ?? DEFAULT_TEXT_FONT_SIZE,
+        FONT_SIZE_MIN,
+        FONT_SIZE_MAX,
+      ),
+    )
+    return attachStyleRef(
+      {
+        ...base,
+        kind: "text",
+        text: typeof raw.text === "string" ? raw.text : "NOVO",
+        x,
+        y,
+        fontSize,
+        preset: migrateTextPresetId(
+          typeof raw.preset === "string" && raw.preset ? raw.preset : undefined,
+        ),
+        maxWidthPct: clamp(asNumber(raw.maxWidthPct) ?? DEFAULT_MAX_WIDTH_PCT, 20, 100),
+        textAlign: isTextAlign(raw.textAlign) ? raw.textAlign : "center",
+        ...(asStoredString(raw.fontFamily) ? { fontFamily: asStoredString(raw.fontFamily) } : {}),
+        ...(asNumber(raw.rotation) !== null ? { rotation: asNumber(raw.rotation)! } : {}),
+      },
+      raw,
+    )
+  }
+
+  const scale = clampScale(asNumber(raw.scale) ?? DEFAULT_STICKER_SCALE)
+  const libraryId = asStoredString(raw.libraryId)
+  const fileId = asStoredString(raw.fileId)
+  const sourceKind = isSourceKind(raw.sourceKind)
+    ? raw.sourceKind
+    : libraryId
+      ? "library"
+      : "upload"
+  return attachStyleRef(
+    {
+      ...base,
+      kind: "sticker",
+      x,
+      y,
+      scale,
+      sourceKind,
+      ...(libraryId ? { libraryId } : {}),
+      ...(fileId ? { fileId } : {}),
+      ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
+    },
+    raw,
+  )
+}
+
+function parseSource(raw: unknown): CompositionSource {
+  const record = isRecord(raw) ? raw : {}
+  const remote =
+    typeof record.remoteUrl === "string" && !record.remoteUrl.startsWith("blob:")
+      ? record.remoteUrl
+      : undefined
+  const canonical = asStoredString(record.canonicalUrl)
+  const provider = asStoredString(record.provider)
+  const author = asStoredString(record.author)
+  const title = asStoredString(record.title)
+  const codec = asStoredString(record.codec)
+  const width = asNumber(record.width) ?? DEFAULT_WIDTH
+  const height = asNumber(record.height) ?? DEFAULT_HEIGHT
+  const transform = parseSourceTransform(record.transform, width, height)
+  return {
+    duration: asNumber(record.duration) ?? 0,
+    fps: asNumber(record.fps) ?? DEFAULT_FPS,
+    width,
+    height,
+    fileName: typeof record.fileName === "string" ? record.fileName : "",
+    ...(typeof record.fileId === "string" ? { fileId: record.fileId } : {}),
+    ...(remote ? { remoteUrl: remote } : {}),
+    ...(canonical ? { canonicalUrl: canonical } : {}),
+    ...(provider ? { provider } : {}),
+    ...(author ? { author } : {}),
+    ...(title ? { title } : {}),
+    ...(codec ? { codec } : {}),
+    ...(typeof record.watermarked === "boolean" ? { watermarked: record.watermarked } : {}),
+    ...(transform ? { transform } : {}),
+  }
+}
+
+function evenSize(value: number): number {
+  return Math.max(2, Math.round(value / 2) * 2)
+}
+
+function clampBitrate(value: number): number {
+  return Math.round(clamp(value, 1_000_000, 20_000_000))
+}
+
+function clampOutputFps(value: number): number {
+  return value >= 24 && value <= 60 ? Math.round(value) : DEFAULT_OUTPUT_FPS
+}
+
+export function defaultOutput(): CompositionOutput {
+  return {
+    width: DEFAULT_OUTPUT_WIDTH,
+    height: DEFAULT_OUTPUT_HEIGHT,
+    fps: DEFAULT_OUTPUT_FPS,
+    videoBitrate: DEFAULT_VIDEO_BITRATE,
+  }
+}
+
+export function outputFromQuality(
+  quality: OutputQualityId,
+  source: Pick<CompositionSource, "width" | "height" | "fps">,
+): CompositionOutput {
+  if (quality === "1080") return defaultOutput()
+  if (quality === "720") {
+    return {
+      width: OUTPUT_720_WIDTH,
+      height: OUTPUT_720_HEIGHT,
+      fps: DEFAULT_OUTPUT_FPS,
+      videoBitrate: OUTPUT_720_BITRATE,
+    }
+  }
+  return {
+    width: evenSize(Math.min(source.width || DEFAULT_OUTPUT_WIDTH, DEFAULT_OUTPUT_WIDTH)),
+    height: evenSize(Math.min(source.height || DEFAULT_OUTPUT_HEIGHT, DEFAULT_OUTPUT_HEIGHT)),
+    fps: clampOutputFps(source.fps),
+    videoBitrate: OUTPUT_SOURCE_BITRATE,
+  }
+}
+
+export function qualityFromOutput(
+  output: CompositionOutput,
+  source: Pick<CompositionSource, "width" | "height">,
+): OutputQualityId {
+  if (output.width === DEFAULT_OUTPUT_WIDTH && output.height === DEFAULT_OUTPUT_HEIGHT) {
+    return "1080"
+  }
+  if (output.width === OUTPUT_720_WIDTH && output.height === OUTPUT_720_HEIGHT) {
+    return "720"
+  }
+  void source
+  return "source"
+}
+
+function parseOutput(
+  raw: unknown,
+  source: CompositionSource,
+): CompositionOutput {
+  if (!isRecord(raw)) return defaultOutput()
+  const width = asNumber(raw.width)
+  const height = asNumber(raw.height)
+  if (width === null || height === null) return defaultOutput()
+  return {
+    width: evenSize(clamp(width, 2, DEFAULT_OUTPUT_WIDTH)),
+    height: evenSize(clamp(height, 2, DEFAULT_OUTPUT_HEIGHT)),
+    fps: clampOutputFps(asNumber(raw.fps) ?? source.fps),
+    videoBitrate: clampBitrate(asNumber(raw.videoBitrate) ?? DEFAULT_VIDEO_BITRATE),
+  }
+}
+
+function isSupportedVersion(value: unknown): boolean {
+  return (
+    value === COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V4 ||
+    value === PREVIOUS_COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V2 ||
+    value === LEGACY_COMPOSITION_VERSION
+  )
+}
+
+export function parseComposition(input: unknown): Composition {
+  if (!isRecord(input)) {
+    throw new Error("versão de composição inválida")
+  }
+  if (!isSupportedVersion(input.version)) {
+    throw new Error(`versão (version) de composição não suportada: ${String(input.version)}`)
+  }
+  const brand = isRecord(input.brand) ? input.brand : {}
+  const batch = isRecord(input.batch) ? input.batch : {}
+  const captionStyle = migrateCaptionStyle(input)
+  const inserts = Array.isArray(input.inserts)
+    ? input.inserts
+        .map(parseInsert)
+        .filter((insert): insert is CompositionInsert => insert !== null)
+        .map((insert) => migrateInsertTransform(insert, captionStyle))
+    : []
+  const positions = Array.isArray(batch.positions)
+    ? batch.positions.filter(isAnchor)
+    : (["top"] as InsertAnchor[])
+  const fonts = Array.isArray(batch.fonts)
+    ? batch.fonts.filter((item): item is string => typeof item === "string")
+    : [DEFAULT_FONT_ID]
+  const hooks = Array.isArray(batch.hooks)
+    ? batch.hooks.filter((item): item is string => typeof item === "string")
+    : []
+
+  const source = parseSource(input.source)
+  const styleRef = parseStyleRef(input.styleRef)
+  const tracks = parseTracks(input.tracks)
+  const customPresets = parseCustomPresets(input.customPresets)
+  return clampComposition({
+    version: COMPOSITION_VERSION,
+    source,
+    brand: {
+      fontId: typeof brand.fontId === "string" ? brand.fontId : DEFAULT_FONT_ID,
+      primary:
+        typeof brand.primary === "string" ? brand.primary : DEFAULT_BRAND_PRIMARY,
+      logo: typeof brand.logo === "string" ? brand.logo : DEFAULT_BRAND_LOGO,
+    },
+    inserts,
+    batch: {
+      hooks,
+      fonts: fonts.length ? fonts : [DEFAULT_FONT_ID],
+      positions: positions.length ? positions : ["top"],
+      baseName: typeof batch.baseName === "string" ? batch.baseName : "",
+    },
+    output: parseOutput(input.output, source),
+    captionPreset: parseCaptionPreset(input.captionPreset),
+    captionStyle,
+    ...(styleRef ? { styleRef } : {}),
+    ...(tracks ? { tracks } : {}),
+    ...(customPresets ? { customPresets } : {}),
+    ...(input.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
+  })
+}
+
+function serializeInsert(insert: CompositionInsert): CompositionInsert {
+  const kind = insertKind(insert)
+  const base: CompositionInsert = {
+    id: insert.id,
+    type: insert.type,
+    start: insert.start,
+    duration: insert.duration,
+    ...(insert.text !== undefined ? { text: insert.text } : {}),
+    anchor: insert.anchor,
+    animIn: insert.animIn,
+    animOut: insert.animOut,
+    ...(insert.style ? { style: insert.style } : {}),
+    ...(insert.styleRef ? { styleRef: insert.styleRef } : {}),
+    ...(insert.transform ? { transform: insert.transform } : {}),
+  }
+  if (kind === "chip") {
+    return {
+      ...base,
+      ...(typeof insert.x === "number" ? { x: insert.x } : {}),
+      ...(typeof insert.y === "number" ? { y: insert.y } : {}),
+      ...(typeof insert.scale === "number" ? { scale: insert.scale } : {}),
+      ...(typeof insert.fontSize === "number" ? { fontSize: insert.fontSize } : {}),
+      ...(insert.fillColor ? { fillColor: insert.fillColor } : {}),
+      ...(insert.accentColor ? { accentColor: insert.accentColor } : {}),
+      ...(typeof insert.maxWidthPct === "number" ? { maxWidthPct: insert.maxWidthPct } : {}),
+    }
+  }
+  if (kind === "text") {
+    return {
+      ...base,
+      kind: "text",
+      x: insert.x ?? DEFAULT_TEXT_X,
+      y: insert.y ?? DEFAULT_TEXT_Y,
+      fontSize: insert.fontSize ?? DEFAULT_TEXT_FONT_SIZE,
+      preset: insert.preset ?? DEFAULT_TEXT_PRESET,
+      maxWidthPct: insert.maxWidthPct ?? DEFAULT_MAX_WIDTH_PCT,
+      textAlign: insert.textAlign ?? "center",
+      ...(asStoredString(insert.fontFamily) ? { fontFamily: insert.fontFamily } : {}),
+      ...(typeof insert.rotation === "number" && Number.isFinite(insert.rotation)
+        ? { rotation: insert.rotation }
+        : {}),
+    }
+  }
+  if (kind === "caption") {
+    return {
+      id: insert.id,
+      type: insert.type,
+      kind: "caption",
+      start: insert.start,
+      duration: insert.duration,
+      text: insert.text ?? "",
+      anchor: insert.anchor,
+      animIn: "none",
+      animOut: "none",
+      words: insert.words ?? [],
+      ...(insert.styleRef ? { styleRef: insert.styleRef } : {}),
+      ...(insert.transform ? { transform: insert.transform } : {}),
+    }
+  }
+  return {
+    ...base,
+    kind: "sticker",
+    x: insert.x ?? DEFAULT_STICKER_X,
+    y: insert.y ?? DEFAULT_STICKER_Y,
+    scale: insert.scale ?? DEFAULT_STICKER_SCALE,
+    sourceKind: insert.sourceKind ?? (insert.libraryId ? "library" : "upload"),
+    ...(asStoredString(insert.libraryId) ? { libraryId: insert.libraryId } : {}),
+    ...(asStoredString(insert.fileId) ? { fileId: insert.fileId } : {}),
+    ...(insert.label ? { label: insert.label } : {}),
+  }
+}
+
+export function serializeComposition(composition: Composition): string {
+  const remoteUrl =
+    composition.source.remoteUrl &&
+    !composition.source.remoteUrl.startsWith("blob:")
+      ? composition.source.remoteUrl
+      : undefined
+  const payload: Composition = {
+    version: COMPOSITION_VERSION,
+    source: {
+      duration: composition.source.duration,
+      fps: composition.source.fps,
+      width: composition.source.width,
+      height: composition.source.height,
+      fileName: composition.source.fileName,
+      ...(composition.source.fileId ? { fileId: composition.source.fileId } : {}),
+      ...(remoteUrl ? { remoteUrl } : {}),
+      ...(asStoredString(composition.source.canonicalUrl)
+        ? { canonicalUrl: composition.source.canonicalUrl }
+        : {}),
+      ...(asStoredString(composition.source.provider)
+        ? { provider: composition.source.provider }
+        : {}),
+      ...(asStoredString(composition.source.author) ? { author: composition.source.author } : {}),
+      ...(asStoredString(composition.source.title) ? { title: composition.source.title } : {}),
+      ...(asStoredString(composition.source.codec) ? { codec: composition.source.codec } : {}),
+      ...(typeof composition.source.watermarked === "boolean"
+        ? { watermarked: composition.source.watermarked }
+        : {}),
+      ...(composition.source.transform &&
+      !isIdentitySourceTransform(composition.source.transform)
+        ? { transform: serializeSourceTransform(composition.source.transform) }
+        : {}),
+    },
+    brand: { ...composition.brand },
+    inserts: composition.inserts.map(serializeInsert),
+    batch: {
+      hooks: [...composition.batch.hooks],
+      fonts: [...composition.batch.fonts],
+      positions: [...composition.batch.positions],
+      baseName: composition.batch.baseName,
+    },
+    output: { ...composition.output },
+    captionPreset: composition.captionPreset ?? DEFAULT_CAPTION_PRESET,
+    captionStyle: composition.captionStyle,
+    ...(composition.styleRef ? { styleRef: composition.styleRef } : {}),
+    ...(composition.tracks ? { tracks: composition.tracks } : {}),
+    ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),
+    ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
+  }
+  return JSON.stringify(payload)
+}
+
+export function createDefaultComposition(): Composition {
+  return {
+    version: COMPOSITION_VERSION,
+    source: {
+      duration: 0,
+      fps: DEFAULT_FPS,
+      width: DEFAULT_WIDTH,
+      height: DEFAULT_HEIGHT,
+      fileName: "",
+    },
+    brand: { fontId: DEFAULT_FONT_ID, primary: DEFAULT_BRAND_PRIMARY, logo: DEFAULT_BRAND_LOGO },
+    inserts: [],
+    batch: {
+      hooks: [
+        "Você não vai acreditar no preço",
+        "Corre que acaba hoje",
+      ],
+      fonts: [DEFAULT_FONT_ID],
+      positions: ["top", "center"],
+      baseName: "campanha-shopee",
+    },
+    output: defaultOutput(),
+    captionPreset: DEFAULT_CAPTION_PRESET,
+    captionStyle: DEFAULT_CAPTION_STYLE,
+    tracks: { cta: { styleRef: DEFAULT_CTA_STYLE_REF } },
+  }
+}
+
+export function resolveTimelineDuration(sourceDuration: number): number {
+  return sourceDuration > 0 ? sourceDuration : PLACEHOLDER_DURATION
+}

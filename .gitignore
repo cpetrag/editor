@@ -1,0 +1,36 @@
+# v0 sandbox internal files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
+
+# Environment variables
+.env
+.env*.local
+
+# Brainstorm visual companion
+.superpowers/
+
+# Common ignores
+node_modules
+.next/
+.DS_Store
+.pnpm-store/
+.npm-cache/
+.cache/
+logs/
+
+# Generated PNG thumbnails
+data/stickers/.thumbs/
+
+# Render output (Remotion CLI / server)
+out/
+tmp/
+
+# Downloads de import (MP4s locais, crescem sem TTL)
+data/import-downloads/
+
+# TypeScript incremental
+*.tsbuildinfo

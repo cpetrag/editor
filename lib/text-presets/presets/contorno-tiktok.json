@@ -1,0 +1,17 @@
+{
+  "schema": "textPreset@1",
+  "id": "contorno-tiktok",
+  "name": "Contorno TikTok",
+  "group": "impacto",
+  "font": { "family": "Inter", "weight": 800 },
+  "size": { "ratio": 0.0667, "minRatio": 0.0444 },
+  "transform": "none",
+  "tracking": -0.02,
+  "lineHeight": 1.05,
+  "align": "center",
+  "maxWidthPct": 0.84,
+  "color": "#FFFFFF",
+  "stroke": { "color": "#000000", "widthRatio": 0.0056 },
+  "animIn": { "kind": "fade-up", "durationMs": 180 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

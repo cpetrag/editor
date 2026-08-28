@@ -1,0 +1,24 @@
+{
+  "schema": "textPreset@1",
+  "id": "maquina",
+  "name": "Máquina",
+  "group": "apoio",
+  "font": { "family": "Courier Prime", "weight": 700 },
+  "size": { "ratio": 0.0444, "minRatio": 0.0333 },
+  "transform": "uppercase",
+  "tracking": 0.04,
+  "lineHeight": 1.2,
+  "align": "left",
+  "maxWidthPct": 0.8,
+  "color": "#F4F1EA",
+  "box": {
+    "mode": "block",
+    "color": "#111111",
+    "opacity": 0.88,
+    "radiusRatio": 0.006,
+    "padXRatio": 0.0185,
+    "padYRatio": 0.0111
+  },
+  "animIn": { "kind": "typewriter", "durationMs": 0, "charStaggerMs": 40 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

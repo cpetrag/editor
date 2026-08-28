@@ -1,0 +1,24 @@
+{
+  "schema": "textPreset@1",
+  "id": "pilula-preta",
+  "name": "Pílula preta",
+  "group": "destaque",
+  "font": { "family": "Inter", "weight": 700 },
+  "size": { "ratio": 0.0519, "minRatio": 0.037 },
+  "transform": "none",
+  "tracking": 0,
+  "lineHeight": 1.1,
+  "align": "center",
+  "maxWidthPct": 0.8,
+  "color": "#FFFFFF",
+  "box": {
+    "mode": "pill",
+    "color": "#000000",
+    "opacity": 0.82,
+    "radiusRatio": 0.5,
+    "padXRatio": 0.0333,
+    "padYRatio": 0.0148
+  },
+  "animIn": { "kind": "slide-up", "durationMs": 200 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

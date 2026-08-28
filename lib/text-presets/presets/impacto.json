@@ -1,0 +1,18 @@
+{
+  "schema": "textPreset@1",
+  "id": "impacto",
+  "name": "Impacto",
+  "group": "impacto",
+  "font": { "family": "Anton", "weight": 400 },
+  "size": { "ratio": 0.0889, "minRatio": 0.0556 },
+  "transform": "uppercase",
+  "tracking": 0.02,
+  "lineHeight": 0.95,
+  "align": "center",
+  "maxWidthPct": 0.86,
+  "color": "#FFFFFF",
+  "stroke": { "color": "#000000", "widthRatio": 0.0074 },
+  "shadows": [{ "xRatio": 0.0037, "yRatio": 0.0056, "blurRatio": 0, "color": "#000000" }],
+  "animIn": { "kind": "pop", "durationMs": 140 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

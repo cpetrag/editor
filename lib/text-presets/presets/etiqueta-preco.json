@@ -1,0 +1,25 @@
+{
+  "schema": "textPreset@1",
+  "id": "etiqueta-preco",
+  "name": "Etiqueta de preço",
+  "group": "destaque",
+  "font": { "family": "Archivo Black", "weight": 400 },
+  "size": { "ratio": 0.0741, "minRatio": 0.0481 },
+  "transform": "uppercase",
+  "tracking": 0,
+  "lineHeight": 1,
+  "align": "center",
+  "maxWidthPct": 0.78,
+  "color": "#FFFFFF",
+  "box": {
+    "mode": "block",
+    "color": "#EE4D2D",
+    "opacity": 1,
+    "radiusRatio": 0.008,
+    "padXRatio": 0.0222,
+    "padYRatio": 0.0111
+  },
+  "rotate": -4,
+  "animIn": { "kind": "stamp", "durationMs": 180 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

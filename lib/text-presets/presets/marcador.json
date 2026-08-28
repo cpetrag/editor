@@ -1,0 +1,24 @@
+{
+  "schema": "textPreset@1",
+  "id": "marcador",
+  "name": "Marcador",
+  "group": "destaque",
+  "font": { "family": "Inter", "weight": 800 },
+  "size": { "ratio": 0.0556, "minRatio": 0.037 },
+  "transform": "none",
+  "tracking": -0.01,
+  "lineHeight": 1.15,
+  "align": "center",
+  "maxWidthPct": 0.82,
+  "color": "#111111",
+  "box": {
+    "mode": "highlight-line",
+    "color": "#FFE500",
+    "opacity": 1,
+    "radiusRatio": 0.004,
+    "padXRatio": 0.0111,
+    "padYRatio": 0.0037
+  },
+  "animIn": { "kind": "wipe-left", "durationMs": 260 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

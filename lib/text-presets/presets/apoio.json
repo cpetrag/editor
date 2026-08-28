@@ -1,0 +1,17 @@
+{
+  "schema": "textPreset@1",
+  "id": "apoio",
+  "name": "Apoio",
+  "group": "apoio",
+  "font": { "family": "Inter", "weight": 500 },
+  "size": { "ratio": 0.0407, "minRatio": 0.0296 },
+  "transform": "none",
+  "tracking": 0,
+  "lineHeight": 1.25,
+  "align": "center",
+  "maxWidthPct": 0.78,
+  "color": "#FFFFFF",
+  "shadows": [{ "xRatio": 0, "yRatio": 0.0019, "blurRatio": 0.0074, "color": "rgba(0,0,0,0.45)" }],
+  "animIn": { "kind": "fade", "durationMs": 160 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}

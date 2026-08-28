@@ -1,0 +1,24 @@
+{
+  "schema": "textPreset@1",
+  "id": "bloco",
+  "name": "Bloco",
+  "group": "impacto",
+  "font": { "family": "Inter", "weight": 900 },
+  "size": { "ratio": 0.0704, "minRatio": 0.0444 },
+  "transform": "uppercase",
+  "tracking": -0.03,
+  "lineHeight": 1.02,
+  "align": "center",
+  "maxWidthPct": 0.86,
+  "color": "#111111",
+  "box": {
+    "mode": "block",
+    "color": "#FFFFFF",
+    "opacity": 1,
+    "radiusRatio": 0,
+    "padXRatio": 0.0185,
+    "padYRatio": 0.0074
+  },
+  "animIn": { "kind": "scale-x", "durationMs": 220 },
+  "animOut": { "kind": "fade", "durationMs": 160 }
+}
