@@ -1,6 +1,7 @@
 import { generateObject } from "ai"
 import { openai } from "@ai-sdk/openai"
 
+import { describeOpenAiError, extractAudioForWhisper, type WhisperAudio } from "./ai-audio.ts"
 import { IA_SYSTEM_PROMPT } from "./ai-prompt.ts"
 import {
   openaiGenerateSchema,
@@ -27,25 +28,54 @@ function transcribeModel(): string {
   return String(process.env.OPENAI_TRANSCRIBE_MODEL ?? "whisper-1").trim() || "whisper-1"
 }
 
-export async function transcribeMedia(
+async function prepareWhisperAudio(
   bytes: Uint8Array,
   mime: string,
   filename: string,
-): Promise<string> {
+): Promise<WhisperAudio> {
+  try {
+    return await extractAudioForWhisper(bytes)
+  } catch (error) {
+    console.warn(
+      "[editor] ffmpeg não extraiu o áudio; enviando o arquivo original",
+      error instanceof Error ? error.message : error,
+    )
+    return { bytes, mime: mime || "application/octet-stream", filename }
+  }
+}
+
+async function requestTranscription(
+  media: { bytes: Uint8Array; mime: string; filename: string },
+  extraFields: Record<string, string> = {},
+): Promise<unknown> {
   const key = getOpenAiApiKey()
   if (!key) throw new Error("missing-key")
+  const audio = await prepareWhisperAudio(media.bytes, media.mime, media.filename)
   const body = new FormData()
   body.set("model", transcribeModel())
-  body.set("file", new Blob([bytes], { type: mime || "application/octet-stream" }), filename)
+  body.set("file", new Blob([audio.bytes], { type: audio.mime }), audio.filename)
+  for (const [field, value] of Object.entries(extraFields)) body.set(field, value)
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}` },
     body,
   })
   if (!response.ok) {
+    console.error(
+      "[editor] Whisper recusou a transcrição",
+      describeOpenAiError(response.status, await response.text()),
+    )
     throw new Error("transcript-failed")
   }
-  const json = (await response.json()) as { text?: string }
+  return response.json()
+}
+
+export async function transcribeMedia(
+  bytes: Uint8Array,
+  mime: string,
+  filename: string,
+): Promise<string> {
+  const json = (await requestTranscription({ bytes, mime, filename })) as { text?: string }
   return String(json.text ?? "").trim()
 }
 
@@ -54,23 +84,14 @@ export async function transcribeCaptionWords(
   mime: string,
   filename: string,
 ): Promise<WhisperCaptionPayload> {
-  const key = getOpenAiApiKey()
-  if (!key) throw new Error("missing-key")
-  const body = new FormData()
-  body.set("model", transcribeModel())
-  body.set("file", new Blob([bytes], { type: mime || "application/octet-stream" }), filename)
-  body.set("response_format", WHISPER_CAPTION_REQUEST.responseFormat)
-  body.set("timestamp_granularities[]", WHISPER_CAPTION_REQUEST.timestampGranularity)
-  body.set("language", "pt")
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}` },
-    body,
-  })
-  if (!response.ok) {
-    throw new Error("transcript-failed")
-  }
-  return (await response.json()) as WhisperCaptionPayload
+  return (await requestTranscription(
+    { bytes, mime, filename },
+    {
+      response_format: WHISPER_CAPTION_REQUEST.responseFormat,
+      "timestamp_granularities[]": WHISPER_CAPTION_REQUEST.timestampGranularity,
+      language: "pt",
+    },
+  )) as WhisperCaptionPayload
 }
 
 function toGenerateModel(object: {

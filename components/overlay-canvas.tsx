@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 
 import { SelectionOverlay, type ResizeCorner, type ResizeEdge } from "@/components/selection-overlay"
 import { ElementFloatingBar } from "@/components/element-floating-bar"
@@ -11,7 +12,7 @@ import { nudgeTextPercents } from "@/lib/canvas/coords"
 import { isDuplicateInsertKey, snapRotationDegrees } from "@/lib/canvas/keys"
 import { percentsFromCenter, playToClient } from "@/lib/compose/layout"
 import { drawPlayInserts } from "@/lib/compose/draw-play"
-import { ensureComposeFontsReady, fontIdsForRender } from "@/lib/compose/fonts"
+import { ensureComposeFontsReady, fontIdsUsedInComposition } from "@/lib/compose/fonts"
 import { approxBox, hitTestOverlays, resizePatchForTrack, scaleFactorFromDrag } from "@/lib/compose/hit-test"
 import { canHandlePreviewNudge } from "@/lib/compose/keyboard-scope"
 import {
@@ -25,6 +26,13 @@ import {
 } from "@/lib/compose/layout"
 import { canvasTextMeasure, layoutInsertText, type TextLayout } from "@/lib/compose/layout-text"
 import {
+  fallbackTextLayout,
+  inlineEditorCss,
+  inlineEditorPlacement,
+  paintedDisplayInsert,
+  paintedTextStyleFor,
+} from "@/lib/compose/inline-editor-style"
+import {
   angleDegFromCenter,
   localPoint,
   maxWidthPctFromEdgeDrag,
@@ -36,7 +44,6 @@ import {
   applyTextBackground,
   applyTextPreset,
   applyTextShadow,
-  autofitFontSize,
   getTextPreset,
   isTextPresetId,
   nudgeTextRadius,
@@ -55,7 +62,6 @@ import {
   DEFAULT_CAPTION_STYLE,
   DEFAULT_FPS,
   DEFAULT_MAX_WIDTH_PCT,
-  FONT_SIZE_MIN,
   insertKind,
   isChipInsert,
   type CaptionPreset,
@@ -86,6 +92,14 @@ import {
 import type { WatermarkPaint } from "@/lib/watermark"
 
 const FRAME = { width: 1080, height: 1920 }
+
+let editorMeasureContext: CanvasRenderingContext2D | null = null
+
+/** Contexto 2D fora da tela só para medir texto; criado uma vez e reaproveitado. */
+function getEditorMeasureContext(): CanvasRenderingContext2D | null {
+  editorMeasureContext ??= document.createElement("canvas").getContext("2d")
+  return editorMeasureContext
+}
 
 type DragState =
   | { mode: "move"; id: string }
@@ -222,8 +236,10 @@ export function OverlayCanvas({
   onDuplicateInsert,
   editingTextId = null,
   onEditingTextId,
+  onCancelTextEdit,
   onSamplePlayColor,
   onOpenAdvanced,
+  floatingBarContainer = null,
 }: {
   inserts: CompositionInsert[]
   time: number
@@ -255,9 +271,14 @@ export function OverlayCanvas({
   onCreateTextAt?: (x: number, y: number) => void
   onDuplicateInsert?: (id: string) => void
   editingTextId?: string | null
+  /** `id` abre o editor inline; `null` confirma a edição em andamento. */
   onEditingTextId?: (id: string | null) => void
+  /** Esc no editor inline: volta ao texto original sem deixar entrada no desfazer. */
+  onCancelTextEdit?: () => void
   onSamplePlayColor?: (playX: number, playY: number) => string | null
   onOpenAdvanced?: (id: string) => void
+  /** Onde as barras de estilo aparecem; sem ele, ficam por cima do vídeo. */
+  floatingBarContainer?: HTMLElement | null
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -383,10 +404,15 @@ export function OverlayCanvas({
     let cancelled = false
     void (async () => {
       await ensureComposeFontsReady([
-        ...fontIdsForRender({
+        ...fontIdsUsedInComposition({
           brand: { fontId },
           inserts,
           captionStyle,
+          styleRef: project?.styleRef,
+          tracks,
+          customPresets: customPresets
+            ? Object.fromEntries(customPresets.map((preset) => [preset.id, preset]))
+            : undefined,
         }),
         ...(watermark?.text ? ["geist"] : []),
       ])
@@ -530,6 +556,66 @@ export function OverlayCanvas({
     ? getCanvasDisplayMetrics(hostRect)
     : null
   const hostBox: RectLike | null = hostRect
+
+  const editingInsert = editingTextId
+    ? (inserts.find((insert) => insert.id === editingTextId) ?? null)
+    : null
+
+  // Só no Enter/Esc: num blur por clique em outro campo, o foco já tem novo dono.
+  function restoreStageFocusAfterEditor() {
+    if (document.activeElement instanceof HTMLElement && document.activeElement.dataset.textInlineEditor !== undefined) {
+      hostRef.current?.focus({ preventScroll: true })
+    }
+  }
+  const editorView = (() => {
+    if (!editingInsert || !metrics || !hostBox) return null
+    const kind = insertKind(editingInsert)
+    if (kind !== "text" && kind !== "caption") return null
+    const laid = layoutOverlayInsert(
+      editingInsert,
+      captionStyle,
+      captionPreset,
+      tracks,
+      project ?? {},
+      videoDuration,
+    )
+    const track =
+      videoDuration > 0 ? trackStyleForInsert(editingInsert, tracks, videoDuration) : null
+    const painted = paintedTextStyleFor(editingInsert, {
+      captionStyle,
+      captionPreset,
+      track,
+      project: project ?? {},
+    })
+    const display = paintedDisplayInsert({
+      insert: editingInsert,
+      laidOut: laid,
+      painted,
+      brandFontId: fontId,
+    })
+    const measureContext = getEditorMeasureContext()
+    const displayLayer = resolveLayerStyle(display, fontId)
+    const measured = measureContext
+      ? layoutInsertText(
+          display,
+          fontId,
+          FRAME,
+          canvasTextMeasure(measureContext, displayLayer.fontWeight, displayLayer.fontFamily),
+        )
+      : null
+    // Texto vazio não gera layout no canvas; sem fallback o editor desmontaria ao apagar tudo.
+    const layout = measured ?? fallbackTextLayout(display, fontId)
+    return {
+      css: inlineEditorCss({
+        laidOut: display,
+        layout,
+        painted,
+        brandFontId: fontId,
+        scale: metrics.displayScale,
+      }),
+      placement: inlineEditorPlacement(layout, metrics, hostBox),
+    }
+  })()
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
@@ -794,7 +880,7 @@ export function OverlayCanvas({
   }, [captionPreset, captionStyle, chipBoxes, onPatchCaptionStyle, onPatchInsert, onPatchSourceTransform, project, selectedInsert, selection, sourceHeight, sourceTransform, sourceWidth, tracks, videoDuration])
 
   function beginMove(id: string) {
-    hostRef.current?.focus()
+    hostRef.current?.focus({ preventScroll: true })
     onBeginInsertGesture?.()
     dragRef.current = { mode: "move", id }
     onSelect?.({ kind: "insert", id })
@@ -919,7 +1005,7 @@ export function OverlayCanvas({
     const pointer = pointerInPlay(clientX, clientY, display)
     if (!pointer) return
     flushWheelGesture()
-    host.focus()
+    host.focus({ preventScroll: true })
     if (capture) {
       try {
         capture.target.setPointerCapture(capture.pointerId)
@@ -1001,7 +1087,7 @@ export function OverlayCanvas({
       setSamplingColor(false)
       return
     }
-    hostRef.current?.focus()
+    hostRef.current?.focus({ preventScroll: true })
     if (!hit) {
       onEditingTextId?.(null)
       onSelect?.({ kind: "source" })
@@ -1027,7 +1113,8 @@ export function OverlayCanvas({
     event.preventDefault()
     if (hit) {
       const insert = inserts.find((item) => item.id === hit.id)
-      if (insert && insertKind(insert) === "text") {
+      const kind = insert ? insertKind(insert) : null
+      if (kind === "text" || kind === "caption") {
         onSelect?.({ kind: "insert", id: hit.id })
         onEditingTextId?.(hit.id)
       }
@@ -1090,6 +1177,11 @@ export function OverlayCanvas({
     }
   }, [])
 
+  function placeFloatingBar(bar: React.ReactNode) {
+    if (!bar || !floatingBarContainer) return bar
+    return createPortal(bar, floatingBarContainer)
+  }
+
   const framingCursor = liveFraming ? "cursor-grabbing" : isSourceSelected(selection) ? "cursor-grab" : ""
   const snapX = liveFraming != null && Math.abs(liveFraming.x) < 0.6
   const snapY = liveFraming != null && Math.abs(liveFraming.y) < 0.6
@@ -1125,8 +1217,9 @@ export function OverlayCanvas({
           style={{ top: playToClient(0, moveGuides.y, metrics).y - hostBox.top }}
         />
       ) : null}
-      {selectedVisible && insertKind(selectedVisible) === "text" && !editingTextId ? (
+      {placeFloatingBar(selectedVisible && insertKind(selectedVisible) === "text" && !editingTextId ? (
         <TextFloatingBar
+          docked={floatingBarContainer !== null}
           presetId={selectedVisible.preset}
           color={
             (selectedVisible.style as { color?: string } | undefined)?.color ??
@@ -1165,9 +1258,10 @@ export function OverlayCanvas({
           onSample={() => setSamplingColor((value) => !value)}
           onAdvanced={() => onOpenAdvanced?.(selectedVisible.id)}
         />
-      ) : null}
-      {selectedVisible && isChipInsert(selectedVisible) ? (
+      ) : null)}
+      {placeFloatingBar(selectedVisible && isChipInsert(selectedVisible) ? (
         <ElementFloatingBar
+          docked={floatingBarContainer !== null}
           text={
             typeof selectedVisible.text === "string"
               ? selectedVisible.text
@@ -1195,35 +1289,27 @@ export function OverlayCanvas({
               : undefined
           }
         />
-      ) : null}
+      ) : null)}
       <div
         className="absolute inset-0"
         onPointerDown={onStagePointerDown}
         onDoubleClick={onStageDoubleClick}
       >
-        {editingTextId &&
-        selectedInsert &&
-        insertKind(selectedInsert) === "text" &&
-        selectedBox &&
-        metrics &&
-        hostBox ? (
+        {editingInsert && editorView ? (
           <TextInlineEditor
-            insert={selectedInsert}
-            box={selectedBox}
-            metrics={metrics}
-            host={hostBox}
-            onChange={(text) => {
-              const fitted = autofitFontSize({
-                text,
-                fontSize: selectedInsert.fontSize ?? FONT_SIZE_MIN,
-                maxWidth: PLAY_W * ((selectedInsert.maxWidthPct ?? DEFAULT_MAX_WIDTH_PCT) / 100),
-                minFontSize: FONT_SIZE_MIN,
-                measure: (value, size) => value.length * size * 0.55,
-              })
-              onPatchInsert?.(selectedInsert.id, { text, fontSize: fitted.fontSize })
+            key={editingInsert.id}
+            initialText={editingInsert.text ?? ""}
+            css={editorView.css}
+            placement={editorView.placement}
+            onChange={(text) => onPatchInsert?.(editingInsert.id, { text })}
+            onCommit={() => {
+              restoreStageFocusAfterEditor()
+              onEditingTextId?.(null)
             }}
-            onCommit={() => onEditingTextId?.(null)}
-            onCancel={() => onEditingTextId?.(null)}
+            onCancel={() => {
+              restoreStageFocusAfterEditor()
+              onCancelTextEdit?.()
+            }}
           />
         ) : null}
         {!editingTextId && isSourceSelected(selection) && metrics && hostBox ? (
@@ -1267,7 +1353,7 @@ export function OverlayCanvas({
             onEdgePointerDown={() => {}}
             onRotatePointerDown={() => {}}
           />
-        ) : selectedBox && metrics && hostBox && selectedVisible ? (
+        ) : !editingInsert && selectedBox && metrics && hostBox && selectedVisible ? (
           <SelectionOverlay
             box={selectedBox}
             metrics={metrics}
@@ -1297,7 +1383,7 @@ export function OverlayCanvas({
               insertKind(selectedVisible) === "text" || insertKind(selectedVisible) === "caption"
             }
           />
-        ) : selectedBox && metrics && hostBox && selectedInsert ? (
+        ) : !editingInsert && selectedBox && metrics && hostBox && selectedInsert ? (
           <SelectionOverlay ghost box={selectedBox} metrics={metrics} host={hostBox} />
         ) : null}
       </div>

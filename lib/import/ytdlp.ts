@@ -2,6 +2,12 @@ import { spawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
+import { parseAllowedImportUrl } from "./allowlist.ts"
+
+/** Chrome 140 — TikTok recusa o UA padrão do yt-dlp com "Unexpected response from webpage request". */
+export const TIKTOK_CHROME_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
 export function ytdlpBin(): string {
   return String(process.env.YTDLP_PATH || "").trim() || "yt-dlp"
 }
@@ -75,6 +81,10 @@ export function buildYtDlpArgs({
     "before_dl:%(title)s",
     "--no-progress",
   ]
+  const parsed = parseAllowedImportUrl(url)
+  if (parsed.ok && parsed.platform === "tiktok") {
+    args.push("--user-agent", TIKTOK_CHROME_USER_AGENT)
+  }
   if (proxy) args.push("--proxy", proxy)
   args.push("--", url)
   return args

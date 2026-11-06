@@ -7,6 +7,7 @@ import {
   DEFAULT_VIDEO_BITRATE,
   FONT_SIZE_MAX,
   MIN_DURATION,
+  clampComposition,
   clampInsert,
   insertKind,
   mergeCaptionStylePatch,
@@ -961,6 +962,75 @@ test("serializeComposition omits watermarkEnabled unless true", () => {
     watermarkEnabled?: boolean
   }
   assert.equal(off.watermarkEnabled, undefined)
+})
+
+test("corte do vídeo sobrevive ao salvar/carregar e é descartado quando inválido", () => {
+  const trimmed = parseComposition({
+    ...sampleComposition(),
+    source: { ...sampleComposition().source, trim: { start: 2, end: 9.5 } },
+  })
+  assert.deepEqual(trimmed.source.trim, { start: 2, end: 9.5 })
+  const again = parseComposition(JSON.parse(serializeComposition(trimmed)))
+  assert.deepEqual(again.source.trim, { start: 2, end: 9.5 })
+
+  const whole = parseComposition({
+    ...sampleComposition(),
+    source: { ...sampleComposition().source, trim: { start: 0, end: 20.27 } },
+  })
+  assert.equal(whole.source.trim, undefined)
+  assert.equal(
+    (JSON.parse(serializeComposition(whole)) as { source: { trim?: unknown } }).source.trim,
+    undefined,
+  )
+
+  const junk = parseComposition({
+    ...sampleComposition(),
+    source: { ...sampleComposition().source, trim: { start: "a", end: 3 } },
+  })
+  assert.equal(junk.source.trim, undefined)
+})
+
+test("clampComposition reajusta o corte quando a duração do vídeo diminui", () => {
+  const composition = sampleComposition({
+    source: { ...sampleComposition().source, duration: 8, trim: { start: 2, end: 15 } },
+  })
+  const clamped = clampComposition(composition)
+  assert.deepEqual(clamped.source.trim, { start: 2, end: 8 })
+  const kept = sampleComposition({
+    source: { ...sampleComposition().source, trim: { start: 1, end: 5 } },
+  })
+  assert.equal(clampComposition(kept).source, kept.source)
+})
+
+test("divisões com zoom por trecho sobrevivem ao salvar/carregar", () => {
+  const split = parseComposition({
+    ...sampleComposition(),
+    source: {
+      ...sampleComposition().source,
+      transform: { scale: 1.2, x: 0, y: 0, space: "offset" },
+      cuts: [{ time: 8, transform: { scale: 2, x: 0, y: 0, space: "offset" } }, { time: 3 }],
+    },
+  })
+  assert.deepEqual(split.source.cuts, [{ time: 3 }, { time: 8, transform: { scale: 2, x: 0, y: 0 } }])
+  const again = parseComposition(JSON.parse(serializeComposition(split)))
+  assert.deepEqual(again.source.cuts, split.source.cuts)
+  assert.deepEqual(again.source.transform, split.source.transform)
+
+  const plain = JSON.parse(serializeComposition(sampleComposition())) as {
+    source: { cuts?: unknown }
+  }
+  assert.equal(plain.source.cuts, undefined)
+})
+
+test("clampComposition descarta divisões além da duração e preserva a source válida", () => {
+  const shrunk = sampleComposition({
+    source: { ...sampleComposition().source, duration: 8, cuts: [{ time: 3 }, { time: 12 }] },
+  })
+  assert.deepEqual(clampComposition(shrunk).source.cuts, [{ time: 3 }])
+  const kept = sampleComposition({
+    source: { ...sampleComposition().source, cuts: [{ time: 3 }] },
+  })
+  assert.equal(clampComposition(kept).source, kept.source)
 })
 
 test("createDefaultComposition has no watermarkEnabled", () => {

@@ -39,6 +39,36 @@ test("aceita shopee video share", () => {
   )
 })
 
+test("aceita mp4 do catálogo no Mac Mini", () => {
+  const parsed = parseAllowedImportUrl(
+    "https://shopeevideos.macmini-capture.cc/media/gdjj0g5l/video.mp4?download=1",
+  )
+  assert.equal(parsed.ok, true)
+  if (!parsed.ok) return
+  assert.equal(parsed.platform, "macmini-catalog")
+  assert.equal(
+    parsed.href,
+    "https://shopeevideos.macmini-capture.cc/media/gdjj0g5l/video.mp4",
+  )
+})
+
+test("rejeita a home do catálogo e host parecido", () => {
+  assert.equal(parseAllowedImportUrl("https://shopeevideos.macmini-capture.cc/").ok, false)
+  assert.equal(
+    parseAllowedImportUrl("https://shopeevideos.macmini-capture.cc/data.json").ok,
+    false,
+  )
+  assert.equal(
+    parseAllowedImportUrl("https://shopeevideos.macmini-capture.cc.evil.com/media/gdjj0g5l/video.mp4")
+      .ok,
+    false,
+  )
+  assert.equal(
+    parseAllowedImportUrl("http://shopeevideos.macmini-capture.cc/media/gdjj0g5l/video.mp4").ok,
+    false,
+  )
+})
+
 test("rejeita shopee produto e outros hosts", () => {
   assert.equal(parseAllowedImportUrl("https://shopee.com.br/product/1/2").ok, false)
   assert.equal(parseAllowedImportUrl("https://www.shopee.com.br/foo").ok, false)

@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises"
 
 import type { RenderProps } from "../remotion/types.ts"
 import { copyExportToCapcut } from "../lib/export/capcut-copy.ts"
+import { userMessageFromRenderError } from "./bundle-cache.ts"
 import { hasEnoughDisk } from "./disk.ts"
 import { dockerWarning } from "./docker.ts"
 import {
@@ -304,9 +305,7 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       job.status = "error"
       job.error = controller.signal.aborted
         ? "render cancelado"
-        : error instanceof Error
-          ? error.message
-          : "falha no render"
+        : userMessageFromRenderError(error)
       if (!controller.signal.aborted) {
         console.error(`render ${job.id} falhou:`, error)
       }

@@ -15,6 +15,11 @@ import {
   Crop,
   LayoutGrid,
   Target,
+  Scissors,
+  X,
+  ZoomIn,
+  ZoomOut,
+  Keyboard,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -25,22 +30,51 @@ import { formatTime, type Insert } from "@/lib/inserts"
 import { DEFAULT_CAPTION_STYLE, FONT_SIZE_MAX, FONT_SIZE_MIN, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { rgbToHex } from "@/lib/canvas/eyedrop"
-import { retentionZones, stackLanes } from "@/lib/insert-ops"
 import { OverlayCanvas } from "@/components/overlay-canvas"
+import { SourceZoomSlider } from "@/components/source-zoom-slider"
 import { PreviewPlayer, type PreviewPlayerHandle } from "@/components/preview-player"
-import { TimelineClipBar } from "@/components/timeline-clip"
+import { EditorTimeline } from "@/components/editor-timeline"
+import { ShortcutHelpDialog } from "@/components/shortcut-help-dialog"
 import {
   clientXToTime,
+  formatTimecode,
   moveInsertTiming,
+  stepFrameIndex,
   trimInsertIn,
   trimInsertOut,
   type TimelineHandle,
 } from "@/lib/timeline-clip"
-import { canHandlePreviewNudge, cycleOverlayMode, type OverlayModeId } from "@/lib/compose/keyboard-scope"
+import { TIMELINE_ZOOM_MAX, TIMELINE_ZOOM_MIN, clampTimelineZoom } from "@/lib/timeline-layout"
+import { cycleIndex, editorShortcutAction, JKL_SEEK_SECONDS } from "@/lib/editor-shortcuts"
+import {
+  canHandlePreviewNudge,
+  cycleOverlayMode,
+  FRAME_STEP_HINT,
+  frameStepKeyAction,
+  SPLIT_HINT,
+  TRIM_HINT,
+  timelineKeyAction,
+  type OverlayModeId,
+} from "@/lib/compose/keyboard-scope"
 import { secondsFromFrame, toRenderInsert, type RenderProps } from "@/remotion/types"
 import { insertIdOf, type PreviewSelection } from "@/lib/preview-selection"
-import type { SourceTransform } from "@/lib/source-transform"
+import { sourceZoomPercent, type SourceTransform } from "@/lib/source-transform"
+import {
+  canSplitSourceAt,
+  listSourceSegments,
+  segmentIndexAt,
+  sourceTransformAt,
+  type SourceCut,
+} from "@/lib/source-segments"
+import {
+  clampSourceTrim,
+  markTrimIn,
+  markTrimOut,
+  resolveTrimWindow,
+  type SourceTrim,
+} from "@/lib/source-trim"
 import type { WatermarkPaint } from "@/lib/watermark"
+import { scrollIntoPanelViewport } from "@/lib/scroll-panel"
 
 function isPlayableBackgroundUrl(url: string): boolean {
   const value = url.trim()
@@ -58,6 +92,12 @@ interface PreviewPanelProps {
   sourceWidth: number
   sourceHeight: number
   sourceTransform?: SourceTransform
+  sourceCuts?: SourceCut[]
+  onSplitSource?: (time: number) => void
+  onRemoveSourceCut?: (index: number) => void
+  trim?: SourceTrim
+  /** `gesture` durante o arraste das alças; `discrete` para botões e atalhos. */
+  onChangeTrim?: (trim: SourceTrim | null, mode: "discrete" | "gesture") => void
   logoSrc?: string
   fontId?: string
   stickerBlobUrls?: Record<string, string>
@@ -71,15 +111,19 @@ interface PreviewPanelProps {
   onSelect?: (selection: PreviewSelection) => void
   onPatchInsert?: (id: string, patch: Partial<Insert>) => void
   onPatchCaptionStyle?: (patch: Partial<CaptionStyle>) => void
-  onPatchSourceTransform?: (transform: SourceTransform) => void
-  onResetSourceTransform?: () => void
+  /** `time` indica o trecho editado (o do playhead). */
+  onPatchSourceTransform?: (transform: SourceTransform, time: number) => void
+  onResetSourceTransform?: (time: number) => void
   onRemoveInsert?: (id: string) => void
   onCreateTextAt?: (x: number, y: number) => void
   onDuplicateInsert?: (id: string) => void
   editingTextId?: string | null
   onEditingTextId?: (id: string | null) => void
+  onCancelTextEdit?: () => void
   onBeginInsertGesture?: () => void
   onEndInsertGesture?: () => void
+  /** Desfazer/Refazer, estado do salvamento e Exportar, à direita da barra superior. */
+  headerActions?: React.ReactNode
   onMediaInfo: (info: {
     duration: number
     width: number
@@ -107,6 +151,11 @@ export const PreviewPanel = memo(
       sourceWidth,
       sourceHeight,
       sourceTransform,
+      sourceCuts,
+      onSplitSource,
+      onRemoveSourceCut,
+      trim,
+      onChangeTrim,
       logoSrc = "",
       fontId = "geist",
       stickerBlobUrls = {},
@@ -127,8 +176,10 @@ export const PreviewPanel = memo(
       onDuplicateInsert,
       editingTextId = null,
       onEditingTextId,
+      onCancelTextEdit,
       onBeginInsertGesture,
       onEndInsertGesture,
+      headerActions,
       onMediaInfo,
     },
     ref,
@@ -138,6 +189,9 @@ export const PreviewPanel = memo(
   const [overlay, setOverlay] = useState<OverlayModeId>("none")
   const [sourceFramingActive, setSourceFramingActive] = useState(false)
   const [showRetention, setShowRetention] = useState(true)
+  const [timelineZoom, setTimelineZoom] = useState(TIMELINE_ZOOM_MIN)
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
+  const [floatingBarHost, setFloatingBarHost] = useState<HTMLDivElement | null>(null)
   const [videoDuration, setVideoDuration] = useState<number | null>(null)
   const [videoReady, setVideoReady] = useState(false)
   const [videoError, setVideoError] = useState(false)
@@ -154,6 +208,7 @@ export const PreviewPanel = memo(
     originX: number
     dragging: boolean
   } | null>(null)
+  const trimDragRef = useRef<{ edge: "in" | "out"; dragging: boolean } | null>(null)
   const playableUrl = isPlayableBackgroundUrl(backgroundUrl)
   insertsRef.current = inserts
   videoReadyRef.current = videoReady
@@ -164,6 +219,43 @@ export const PreviewPanel = memo(
       : videoDuration && videoDuration > 0
         ? resolveTimelineDuration(videoDuration)
         : 0
+  const activeTrim = timelineDuration > 0 ? clampSourceTrim(trim, timelineDuration) : null
+  const trimWindow = resolveTrimWindow({ duration: totalDuration, trim: activeTrim ?? undefined })
+  const trimWindowRef = useRef(trimWindow)
+  trimWindowRef.current = trimWindow
+  const totalDurationRef = useRef(totalDuration)
+  totalDurationRef.current = totalDuration
+  const currentTimeRef = useRef(0)
+  const framing = useMemo(
+    () => ({ transform: sourceTransform, cuts: sourceCuts }),
+    [sourceCuts, sourceTransform],
+  )
+  const segments = useMemo(
+    () => listSourceSegments(framing, totalDuration),
+    [framing, totalDuration],
+  )
+  const activeSegmentIndex = segmentIndexAt(sourceCuts, currentTime)
+  // Zoom, arraste e reset no preview agem sobre o trecho sob o playhead.
+  const activeSourceTransform = sourceTransformAt(framing, currentTime)
+  const canSplitHere =
+    Boolean(onSplitSource) &&
+    timelineDuration > 0 &&
+    canSplitSourceAt(framing, currentTime, timelineDuration)
+  const patchActiveSourceTransform = useMemo(
+    () =>
+      onPatchSourceTransform
+        ? (transform: SourceTransform) =>
+            onPatchSourceTransform(transform, currentTimeRef.current)
+        : undefined,
+    [onPatchSourceTransform],
+  )
+  const resetActiveSourceTransform = useMemo(
+    () =>
+      onResetSourceTransform
+        ? () => onResetSourceTransform(currentTimeRef.current)
+        : undefined,
+    [onResetSourceTransform],
+  )
   const selectedInsertId = insertIdOf(selection)
   const selectedInsert = inserts.find((insert) => insert.id === selectedInsertId) ?? null
   const selectedText =
@@ -192,6 +284,7 @@ export const PreviewPanel = memo(
         width: sourceWidth || 1080,
         height: sourceHeight || 1920,
         ...(sourceTransform ? { transform: sourceTransform } : {}),
+        ...(sourceCuts ? { cuts: sourceCuts } : {}),
       },
       fps: renderFps,
       width: 1080,
@@ -214,6 +307,7 @@ export const PreviewPanel = memo(
       inserts,
       logoSrc,
       playableUrl,
+      sourceCuts,
       sourceHeight,
       sourceTransform,
       sourceWidth,
@@ -237,7 +331,19 @@ export const PreviewPanel = memo(
   }, [currentTime, onPlayheadChange])
 
   const onPlayerFrame = useCallback((frame: number) => {
-    setCurrentTime(secondsFromFrame(frame, renderFps))
+    const time = secondsFromFrame(frame, renderFps)
+    const span = trimWindowRef.current
+    const player = playerRef.current
+    // O Player toca o arquivo inteiro; a saída do corte para a reprodução aqui.
+    if (player?.isPlaying() && span.end < totalDurationRef.current && time >= span.end) {
+      player.pause()
+      player.seekToFrame(Math.round(span.end * renderFps))
+      currentTimeRef.current = span.end
+      setCurrentTime(span.end)
+      return
+    }
+    currentTimeRef.current = time
+    setCurrentTime(time)
   }, [])
 
   const onPlayerPlayingChange = useCallback((nextPlaying: boolean) => {
@@ -246,6 +352,7 @@ export const PreviewPanel = memo(
 
   function seekTo(next: number) {
     const clamped = Math.min(totalDuration, Math.max(0, next))
+    currentTimeRef.current = clamped
     setCurrentTime(clamped)
     playerRef.current?.seekToFrame(Math.round(clamped * renderFps))
     const video = videoRef.current
@@ -260,12 +367,10 @@ export const PreviewPanel = memo(
     seekTo,
   }))
 
-  function seekFromEvent(e: React.MouseEvent<HTMLDivElement>) {
-    if (dragRef.current?.dragging) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const ratio = (e.clientX - rect.left) / rect.width
-    seekTo(ratio * totalDuration)
-  }
+  const pauseForScrub = useCallback(() => {
+    const player = playerRef.current
+    if (player?.isPlaying()) player.pause()
+  }, [])
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
@@ -313,6 +418,109 @@ export const PreviewPanel = memo(
     }
   }, [onEndInsertGesture, onPatchInsert, totalDuration])
 
+  const markTrim = useCallback(
+    (edge: "in" | "out") => {
+      if (!onChangeTrim || !(timelineDuration > 0)) return
+      const time = currentTimeRef.current
+      const next =
+        edge === "in"
+          ? markTrimIn(activeTrim, time, timelineDuration)
+          : markTrimOut(activeTrim, time, timelineDuration)
+      onChangeTrim(next, "discrete")
+    },
+    [activeTrim, onChangeTrim, timelineDuration],
+  )
+
+  const stepFrames = useCallback(
+    (frames: number) => {
+      if (!(totalDuration > 0)) return
+      const player = playerRef.current
+      if (player?.isPlaying()) player.pause()
+      const frame = stepFrameIndex(currentTimeRef.current, frames, renderFps, totalDuration)
+      const time = frame / renderFps
+      currentTimeRef.current = time
+      setCurrentTime(time)
+      player?.seekToFrame(frame)
+      const video = videoRef.current
+      if (video && videoReadyRef.current) video.currentTime = time
+    },
+    [totalDuration],
+  )
+
+  useEffect(() => {
+    if (exporting || !playableUrl || !(totalDuration > 0)) return
+    function onKeyDown(event: KeyboardEvent) {
+      const frames = frameStepKeyAction(event, selection)
+      if (frames === null) return
+      event.preventDefault()
+      stepFrames(frames)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [exporting, playableUrl, selection, stepFrames, totalDuration])
+
+  const splitAtPlayhead = useCallback(() => {
+    if (!onSplitSource || !(timelineDuration > 0)) return
+    const time = currentTimeRef.current
+    if (!canSplitSourceAt(framing, time, timelineDuration)) return
+    onSplitSource(time)
+  }, [framing, onSplitSource, timelineDuration])
+
+  useEffect(() => {
+    if (exporting || !playableUrl || !(timelineDuration > 0)) return
+    if (!onChangeTrim && !onSplitSource) return
+    function onKeyDown(event: KeyboardEvent) {
+      const action = timelineKeyAction(event)
+      if (!action) return
+      if (action === "split") {
+        if (!onSplitSource) return
+        event.preventDefault()
+        splitAtPlayhead()
+        return
+      }
+      if (!onChangeTrim) return
+      event.preventDefault()
+      markTrim(action)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [exporting, markTrim, onChangeTrim, onSplitSource, playableUrl, splitAtPlayhead, timelineDuration])
+
+  useEffect(() => {
+    function onMove(event: PointerEvent) {
+      const drag = trimDragRef.current
+      const track = trackRef.current
+      if (!drag || !track || !onChangeTrim || !(timelineDuration > 0)) return
+      drag.dragging = true
+      const time = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
+      const span = trimWindowRef.current
+      const next =
+        drag.edge === "in"
+          ? clampSourceTrim({ start: time, end: span.end }, timelineDuration)
+          : clampSourceTrim({ start: span.start, end: time }, timelineDuration)
+      onChangeTrim(next, "gesture")
+      const shown = drag.edge === "in" ? (next?.start ?? 0) : (next?.end ?? timelineDuration)
+      currentTimeRef.current = shown
+      setCurrentTime(shown)
+      playerRef.current?.seekToFrame(Math.round(shown * renderFps))
+    }
+
+    function onUp() {
+      if (!trimDragRef.current) return
+      trimDragRef.current = null
+      onEndInsertGesture?.()
+    }
+
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
+    return () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+    }
+  }, [onChangeTrim, onEndInsertGesture, timelineDuration, totalDuration])
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!canHandlePreviewNudge(event, selection)) return
@@ -334,37 +542,128 @@ export const PreviewPanel = memo(
         player.pause()
         return
       }
-      if (currentTime >= totalDuration - 0.05) {
-        seekTo(0)
+      if (currentTime < trimWindow.start || currentTime >= trimWindow.end - 0.05) {
+        seekTo(trimWindow.start)
       }
       player.play()
       return
     }
-    setCurrentTime((t) => (t >= totalDuration ? 0 : t))
+    setCurrentTime((t) => (t >= trimWindow.end ? trimWindow.start : t))
     setPlaying((p) => !p)
   }
 
   function reset() {
     setPlaying(false)
-    seekTo(0)
+    seekTo(trimWindow.start)
     playerRef.current?.pause()
     const video = videoRef.current
     if (video) {
       video.pause()
-      video.currentTime = 0
+      video.currentTime = trimWindow.start
     }
   }
 
-  const progress = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0
-  const insertLanes = useMemo(() => stackLanes(inserts), [inserts])
-  const laneCount = useMemo(() => {
-    let maxLane = 0
-    for (const lane of insertLanes.values()) {
-      if (lane > maxLane) maxLane = lane
+  /** Leva o playhead até o insert quando ele não aparece no instante atual. */
+  function revealInsert(insert: Insert) {
+    const time = currentTimeRef.current
+    if (time >= insert.start && time < insert.start + insert.duration) return
+    seekTo(insert.start)
+  }
+
+  function handleShortcut(event: KeyboardEvent) {
+    const action = editorShortcutAction(event)
+    if (!action) return
+    if (action === "help") {
+      event.preventDefault()
+      setShortcutHelpOpen((open) => !open)
+      return
     }
-    return Math.max(1, maxLane + 1)
-  }, [insertLanes])
-  const timelineHeight = Math.max(36, 8 + laneCount * 14)
+    if (exporting || shortcutHelpOpen) return
+    switch (action) {
+      case "toggle-play":
+        if (!playableUrl) return
+        event.preventDefault()
+        void togglePlay()
+        return
+      case "seek-start":
+      case "seek-end":
+        if (!(totalDuration > 0)) return
+        event.preventDefault()
+        pauseForScrub()
+        seekTo(action === "seek-start" ? trimWindow.start : trimWindow.end)
+        return
+      case "seek-back":
+      case "seek-forward":
+        if (!(totalDuration > 0)) return
+        event.preventDefault()
+        seekTo(currentTimeRef.current + (action === "seek-back" ? -JKL_SEEK_SECONDS : JKL_SEEK_SECONDS))
+        return
+      case "deselect":
+        if (!selection || !onSelect) return
+        event.preventDefault()
+        onSelect(null)
+        return
+      case "edit-text": {
+        if (!selectedInsert || !onEditingTextId) return
+        const kind = insertKind(selectedInsert)
+        if (kind !== "text" && kind !== "caption") return
+        event.preventDefault()
+        revealInsert(selectedInsert)
+        onEditingTextId(selectedInsert.id)
+        return
+      }
+      case "next-insert":
+      case "previous-insert": {
+        if (!onSelect || inserts.length === 0) return
+        event.preventDefault()
+        const ordered = [...inserts].sort((a, b) => a.start - b.start)
+        const index = ordered.findIndex((insert) => insert.id === selectedInsertId)
+        const next = ordered[cycleIndex(index, ordered.length, action === "next-insert" ? 1 : -1)]
+        if (!next) return
+        onSelect({ kind: "insert", id: next.id })
+        revealInsert(next)
+        return
+      }
+    }
+  }
+  const shortcutHandlerRef = useRef(handleShortcut)
+  shortcutHandlerRef.current = handleShortcut
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => shortcutHandlerRef.current(event)
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  const onTimelineClipPointerDown = useCallback(
+    (event: React.PointerEvent, insert: Insert, handle: TimelineHandle) => {
+      if (event.button !== 0 || exporting) return
+      event.preventDefault()
+      event.stopPropagation()
+      const track = trackRef.current
+      if (!track) return
+      const time = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
+      onSelect?.({ kind: "insert", id: insert.id })
+      onBeginInsertGesture?.()
+      dragRef.current = {
+        id: insert.id,
+        mode: handle,
+        grabOffset: time - insert.start,
+        base: { start: insert.start, duration: insert.duration },
+        originX: event.clientX,
+        dragging: false,
+      }
+    },
+    [exporting, onBeginInsertGesture, onSelect, totalDuration],
+  )
+
+  const onTimelineTrimPointerDown = useCallback(
+    (_event: React.PointerEvent, edge: "in" | "out") => {
+      onBeginInsertGesture?.()
+      trimDragRef.current = { edge, dragging: false }
+    },
+    [onBeginInsertGesture],
+  )
 
   const overlayOptions: { id: OverlayModeId; label: string; icon: typeof Crop }[] = [
     { id: "none", label: "Limpo", icon: MonitorPlay },
@@ -375,12 +674,12 @@ export const PreviewPanel = memo(
   return (
     <section className="flex h-full min-h-0 flex-col bg-muted/30">
       {/* Top bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-6 py-3">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <MonitorPlay className="size-4" />
-          <span className="font-medium text-foreground">Pré-visualização</span>
+          <span className="hidden font-medium text-foreground md:inline">Pré-visualização</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Overlay switch */}
           <div
             role="radiogroup"
@@ -420,17 +719,27 @@ export const PreviewPanel = memo(
               )
             })}
           </div>
-          <div className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
+          <div className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground 2xl:flex">
             <Smartphone className="size-3.5" />
             9:16
           </div>
           <ThemeToggle />
+          {headerActions ? (
+            <>
+              <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+              {headerActions}
+            </>
+          ) : null}
         </div>
       </div>
 
       {/* Stage */}
-      <div className="grid min-h-0 flex-1 place-items-center p-6">
-        <div className="flex h-full max-h-[80vh] items-stretch gap-3">
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-hidden px-4 pb-3 pt-2">
+        {/* Faixa reservada para a barra de estilo: fica fora do vídeo e não empurra o palco. */}
+        <div ref={setFloatingBarHost} data-floating-bar-host className="relative z-30 h-15 w-full shrink-0" />
+        <div className="flex min-h-0 w-full flex-1 items-stretch justify-center gap-3">
+          {/* Coluna sempre reservada: sem ela o palco centralizado anda ao selecionar um texto. */}
+          <div className="flex w-6 shrink-0 items-center justify-center">
           {selectedText ? (
             <label className="flex flex-col items-center justify-center gap-2 text-[0.65rem] text-muted-foreground">
               <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">Tamanho</span>
@@ -453,7 +762,8 @@ export const PreviewPanel = memo(
               </span>
             </label>
           ) : null}
-        <div className="relative aspect-[9/16] h-full max-h-[80vh] w-auto overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50">
+          </div>
+        <div className="relative aspect-[9/16] h-full max-h-full w-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50">
           {/* subtle grid so empty space doesn't look broken */}
           <div
             className="absolute inset-0 opacity-[0.06]"
@@ -528,7 +838,8 @@ export const PreviewPanel = memo(
                 <>
                   <p className="max-w-[16rem] text-pretty text-sm leading-relaxed text-zinc-400">
                     Importe um arquivo ou baixe um vídeo pelo link (YouTube,
-                    TikTok, Instagram, Pinterest, X ou Shopee Video).
+                    TikTok, Instagram, Pinterest, X, Shopee Video ou o catálogo
+                    do Mac Mini).
                   </p>
                   <p className="text-xs text-zinc-600">Nenhum vídeo de fundo definido</p>
                 </>
@@ -548,7 +859,7 @@ export const PreviewPanel = memo(
             selection={selection}
             sourceWidth={sourceWidth}
             sourceHeight={sourceHeight}
-            sourceTransform={sourceTransform}
+            sourceTransform={activeSourceTransform}
             watermark={watermark}
             // Preview player freezes inserts while paused; this canvas redraws on inserts/time.
             paintVisual
@@ -559,23 +870,23 @@ export const PreviewPanel = memo(
             onSelect={onSelect}
             onPatchInsert={onPatchInsert}
             onPatchCaptionStyle={onPatchCaptionStyle}
-            onPatchSourceTransform={onPatchSourceTransform}
+            onPatchSourceTransform={patchActiveSourceTransform}
             onSourceFramingActive={setSourceFramingActive}
-            onResetSourceTransform={onResetSourceTransform}
+            onResetSourceTransform={resetActiveSourceTransform}
             onBeginInsertGesture={onBeginInsertGesture}
             onEndInsertGesture={onEndInsertGesture}
             onCreateTextAt={onCreateTextAt}
             onDuplicateInsert={onDuplicateInsert}
             editingTextId={editingTextId}
             onEditingTextId={onEditingTextId}
+            onCancelTextEdit={onCancelTextEdit}
             onSamplePlayColor={samplePlayColor}
+            floatingBarContainer={floatingBarHost}
             onOpenAdvanced={() => {
               const id = selectedText?.id
               if (!id) return
-              document.querySelector(`[data-insert-id="${id}"]`)?.scrollIntoView({
-                block: "nearest",
-                behavior: "smooth",
-              })
+              const card = document.querySelector(`[data-insert-card][data-insert-id="${CSS.escape(id)}"]`)
+              if (card instanceof HTMLElement) scrollIntoPanelViewport(card)
             }}
           />
 
@@ -585,15 +896,30 @@ export const PreviewPanel = memo(
 
           {/* Time HUD */}
           <div className="absolute bottom-3 left-3 z-20 rounded-md bg-black/60 px-2 py-1 font-mono text-xs tabular-nums text-zinc-300 backdrop-blur-sm">
-            {formatTime(currentTime)} / {formatTime(totalDuration)}
+            {formatTimecode(currentTime, renderFps)} / {formatTime(totalDuration)}
           </div>
         </div>
+          {playableUrl && !videoError && sourceWidth > 0 && sourceHeight > 0 && patchActiveSourceTransform ? (
+            <SourceZoomSlider
+              sourceTransform={activeSourceTransform}
+              sourceWidth={sourceWidth}
+              sourceHeight={sourceHeight}
+              segmentLabel={
+                segments.length > 1
+                  ? `Trecho ${activeSegmentIndex + 1}/${segments.length}`
+                  : undefined
+              }
+              onPatchSourceTransform={patchActiveSourceTransform}
+              onBeginGesture={onBeginInsertGesture}
+              onEndGesture={onEndInsertGesture}
+            />
+          ) : null}
         </div>
       </div>
 
       {/* Controls bar */}
-      <div className="border-t border-border bg-card px-6 py-4">
-        <div className="flex items-center gap-4">
+      <div className="shrink-0 border-t border-border bg-card px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <div className="flex items-center gap-1">
             <Button
               variant="secondary"
@@ -601,6 +927,8 @@ export const PreviewPanel = memo(
               onClick={togglePlay}
               disabled={exporting || !playableUrl}
               aria-label={playing ? "Pausar" : "Reproduzir"}
+              aria-keyshortcuts="K Space"
+              title={`${playing ? "Pausar" : "Reproduzir"} (K ou Espaço)`}
             >
               {playing ? <Pause /> : <Play />}
             </Button>
@@ -609,152 +937,174 @@ export const PreviewPanel = memo(
               size="icon"
               onClick={reset}
               aria-label="Reiniciar"
+              aria-keyshortcuts="Home"
+              title="Voltar ao início (Home)"
             >
               <RotateCcw />
             </Button>
             {showTimeline ? (
-            <Button
-              variant={showRetention ? "secondary" : "ghost"}
-              size="icon"
-              onClick={() => setShowRetention((s) => !s)}
-              aria-label="Mostrar marcadores de retenção"
-              aria-pressed={showRetention}
-            >
-              <Target />
-            </Button>
+              <Button
+                variant={showRetention ? "secondary" : "ghost"}
+                size="icon"
+                onClick={() => setShowRetention((s) => !s)}
+                aria-label="Mostrar marcadores de retenção"
+                aria-pressed={showRetention}
+                title="Marcadores de retenção"
+              >
+                <Target />
+              </Button>
             ) : null}
           </div>
 
-          {/* Timeline */}
-          {showTimeline && totalDuration > 0 ? (
-          <div className="flex flex-1 items-center gap-3">
-            <span className="w-10 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
-              {formatTime(currentTime)}
-            </span>
+          <span
+            className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
+            title={FRAME_STEP_HINT}
+          >
+            <span className="text-foreground">{formatTimecode(currentTime, renderFps)}</span>
+            {" / "}
+            {formatTime(totalDuration)}
+          </span>
 
-            <div className="flex-1">
-              {/* Retention zone labels */}
-              {showRetention && (
-                <div className="relative mb-1 h-4">
-                  {retentionZones(totalDuration).map((zone) => {
-                    const left = (zone.from / totalDuration) * 100
-                    const width = ((zone.to - zone.from) / totalDuration) * 100
-                    return (
-                      <span
-                        key={zone.id}
-                        className="absolute top-0 flex h-full items-center justify-center rounded-sm text-[0.6rem] font-semibold uppercase tracking-wide"
-                        style={{
-                          left: `${left}%`,
-                          width: `${width}%`,
-                          color: zone.color,
-                          backgroundColor: `color-mix(in oklch, ${zone.color} 16%, transparent)`,
-                        }}
-                        title={`${zone.label}: ${formatTime(zone.from)}–${formatTime(zone.to)}`}
-                      >
-                        <span className="truncate px-1">{zone.label}</span>
-                      </span>
-                    )
-                  })}
-                </div>
-              )}
-
-              <div
-                ref={trackRef}
-                className="group/timeline relative cursor-pointer select-none"
-                style={{ height: timelineHeight }}
-                onClick={seekFromEvent}
-                role="slider"
-                aria-label="Linha do tempo"
-                aria-valuemin={0}
-                aria-valuemax={Math.round(totalDuration)}
-                aria-valuenow={Math.round(currentTime)}
-                tabIndex={0}
+          {showTimeline && totalDuration > 0 && onChangeTrim ? (
+            <div
+              className="flex shrink-0 items-center gap-1"
+              role="group"
+              aria-label="Corte do vídeo"
+            >
+              <Button
+                variant={activeTrim && activeTrim.start > 0 ? "secondary" : "outline"}
+                size="xs"
+                disabled={exporting || !playableUrl}
+                onClick={() => markTrim("in")}
+                aria-keyshortcuts="I"
+                title={`Marcar a entrada (I) · ${TRIM_HINT}`}
               >
-                {/* retention zone bands (behind the track) */}
-                {showRetention &&
-                  retentionZones(totalDuration).map((zone) => {
-                    const left = (zone.from / totalDuration) * 100
-                    const width = ((zone.to - zone.from) / totalDuration) * 100
-                    return (
-                      <div
-                        key={zone.id}
-                        className="absolute inset-y-0 rounded-md"
-                        style={{
-                          left: `${left}%`,
-                          width: `${width}%`,
-                          backgroundColor: `color-mix(in oklch, ${zone.color} 10%, transparent)`,
-                          borderLeft: `1px dashed color-mix(in oklch, ${zone.color} 45%, transparent)`,
-                        }}
-                        aria-hidden
-                      />
-                    )
-                  })}
-
-                {/* track */}
-                <div className="absolute inset-x-0 bottom-1 h-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-brand/70"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-
-                {/* insert markers */}
-                {inserts.map((insert) => {
-                  const left = (insert.start / totalDuration) * 100
-                  const width = (insert.duration / totalDuration) * 100
-                  const lane = insertLanes.get(insert.id) ?? 0
-                  return (
-                    <TimelineClipBar
-                      key={insert.id}
-                      insert={insert}
-                      leftPct={left}
-                      widthPct={width}
-                      top={2 + lane * 14}
-                      selected={insertIdOf(selection) === insert.id}
-                      disabled={exporting}
-                      onPointerDown={(event, handle) => {
-                        if (event.button !== 0 || exporting) return
-                        event.preventDefault()
-                        event.stopPropagation()
-                        const track = trackRef.current
-                        if (!track) return
-                        const time = clientXToTime(
-                          event.clientX,
-                          track.getBoundingClientRect(),
-                          totalDuration,
-                        )
-                        onSelect?.({ kind: "insert", id: insert.id })
-                        onBeginInsertGesture?.()
-                        dragRef.current = {
-                          id: insert.id,
-                          mode: handle,
-                          grabOffset: time - insert.start,
-                          base: { start: insert.start, duration: insert.duration },
-                          originX: event.clientX,
-                          dragging: false,
-                        }
-                      }}
-                    />
-                  )
-                })}
-
-                {/* playhead */}
-                <div
-                  className="pointer-events-none absolute inset-y-0 z-20 w-px bg-brand"
-                  style={{ left: `${progress}%` }}
-                >
-                  <span className="absolute -top-0.5 left-1/2 size-2.5 -translate-x-1/2 rounded-full border-2 border-background bg-brand shadow" />
-                </div>
-              </div>
+                <span aria-hidden className="font-mono font-bold">[</span>
+                Entrada
+              </Button>
+              <Button
+                variant={activeTrim && activeTrim.end < timelineDuration ? "secondary" : "outline"}
+                size="xs"
+                disabled={exporting || !playableUrl}
+                onClick={() => markTrim("out")}
+                aria-keyshortcuts="O"
+                title={`Marcar a saída (O) · ${TRIM_HINT}`}
+              >
+                Saída
+                <span aria-hidden className="font-mono font-bold">]</span>
+              </Button>
+              {activeTrim ? (
+                <>
+                  <span className="px-1 font-mono text-[0.7rem] tabular-nums text-muted-foreground">
+                    {formatTime(trimWindow.duration)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={exporting}
+                    onClick={() => onChangeTrim(null, "discrete")}
+                    aria-label="Remover corte"
+                    title="Remover corte"
+                  >
+                    <X />
+                  </Button>
+                </>
+              ) : null}
             </div>
-
-            <span className="w-10 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-              {formatTime(totalDuration)}
-            </span>
-          </div>
           ) : null}
+
+          {showTimeline && totalDuration > 0 && onSplitSource ? (
+            <Button
+              variant="outline"
+              size="xs"
+              className="shrink-0"
+              disabled={exporting || !playableUrl || !canSplitHere}
+              onClick={splitAtPlayhead}
+              aria-keyshortcuts="S"
+              title={`Dividir (S) · ${SPLIT_HINT}`}
+            >
+              <Scissors />
+              Dividir
+            </Button>
+          ) : null}
+
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {showTimeline && totalDuration > 0 ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setTimelineZoom((zoom) => Math.max(TIMELINE_ZOOM_MIN, zoom / 1.5))}
+                  disabled={timelineZoom <= TIMELINE_ZOOM_MIN}
+                  aria-label="Diminuir zoom da linha do tempo"
+                  title="Diminuir zoom (Ctrl + rolar)"
+                >
+                  <ZoomOut />
+                </Button>
+                <button
+                  type="button"
+                  className="w-10 rounded px-1 text-center font-mono text-[0.7rem] tabular-nums text-muted-foreground hover:text-foreground"
+                  onClick={() => setTimelineZoom(TIMELINE_ZOOM_MIN)}
+                  title="Zoom da linha do tempo · clique para ver tudo"
+                  aria-label="Ver a linha do tempo inteira"
+                >
+                  {timelineZoom.toFixed(1)}×
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setTimelineZoom((zoom) => clampTimelineZoom(zoom * 1.5))}
+                  disabled={timelineZoom >= TIMELINE_ZOOM_MAX}
+                  aria-label="Aumentar zoom da linha do tempo"
+                  title="Aumentar zoom (Ctrl + rolar)"
+                >
+                  <ZoomIn />
+                </Button>
+              </>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setShortcutHelpOpen(true)}
+              aria-label="Atalhos de teclado"
+              aria-keyshortcuts="?"
+              title="Atalhos de teclado (?)"
+            >
+              <Keyboard />
+            </Button>
+          </div>
         </div>
+
+        {showTimeline && totalDuration > 0 ? (
+          <div className="mt-2">
+            <EditorTimeline
+              totalDuration={totalDuration}
+              currentTime={currentTime}
+              playing={playing}
+              inserts={inserts}
+              selectedInsertId={typeof selectedInsertId === "string" ? selectedInsertId : null}
+              exporting={exporting}
+              showRetention={showRetention}
+              segments={segments}
+              activeSegmentIndex={activeSegmentIndex}
+              sourceCuts={sourceCuts}
+              onRemoveSourceCut={onRemoveSourceCut}
+              trimWindow={trimWindow}
+              hasTrim={Boolean(activeTrim)}
+              canDragTrim={Boolean(onChangeTrim)}
+              contentRef={trackRef}
+              zoom={timelineZoom}
+              onZoomChange={setTimelineZoom}
+              onSeek={seekTo}
+              onScrubStart={pauseForScrub}
+              onTrimPointerDown={onTimelineTrimPointerDown}
+              onClipPointerDown={onTimelineClipPointerDown}
+            />
+          </div>
+        ) : null}
       </div>
+
+      <ShortcutHelpDialog open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
     </section>
   )
 }),

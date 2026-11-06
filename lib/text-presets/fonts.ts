@@ -36,7 +36,7 @@ async function loadTextPresetFonts(): Promise<void> {
         }),
       )
     } catch {
-      // FontFace pode falhar em JSDOM; o caller ainda espera document.fonts.ready.
+      // FontFace pode falhar em JSDOM; o caller segue com document.fonts.load.
     }
   }
   try {
@@ -44,7 +44,6 @@ async function loadTextPresetFonts(): Promise<void> {
   } catch {
     // preview continua com fallback se um arquivo faltar
   }
-  if (document.fonts.ready) await document.fonts.ready
   for (const spec of TEXT_PRESET_FONT_FILES) {
     try {
       await document.fonts.load(`${spec.weight} 56px "${spec.family}"`)

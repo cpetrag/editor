@@ -13,6 +13,7 @@ import type { SourceImport } from "@/lib/commit-source"
 import { hasPlayableSource } from "@/lib/commit-source"
 import type { CompositionSource } from "@/lib/composition"
 import type { RecentSource } from "@/lib/recent-sources"
+import { hasAnySegmentTransform } from "@/lib/source-segments"
 import {
   WATERMARK_FONT_PX_MAX,
   WATERMARK_FONT_PX_MIN,
@@ -443,7 +444,7 @@ export function BackgroundSourceCard({
                 variant="outline"
                 size="xs"
                 className="h-auto whitespace-normal text-left leading-tight"
-                disabled={source.transform === undefined}
+                disabled={!hasAnySegmentTransform(source)}
                 onClick={onResetTransform}
               >
                 Resetar enquadramento
@@ -494,7 +495,7 @@ export function BackgroundSourceCard({
             spellCheck={false}
             autoFocus={!playable}
             className="flex-1"
-            placeholder="Cole o link do TikTok, Reels ou Shorts…"
+            placeholder="Cole o link do TikTok, Reels, Shorts ou do catálogo…"
             value={busy ? fieldValue : draftUrl}
             disabled={busy}
             aria-invalid={importState.status === "error" || undefined}

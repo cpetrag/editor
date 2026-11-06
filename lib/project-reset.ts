@@ -1,3 +1,4 @@
+import { nonCaptionInserts } from "./caption-panel.ts"
 import {
   createDefaultComposition,
   insertKind,
@@ -17,6 +18,13 @@ export function clearInsertsArt(composition: Composition): Composition {
     captionStyle: { ...fresh.captionStyle },
     tracks: fresh.tracks,
     styleRef: undefined,
+  }
+}
+
+export function clearCaptionInsertsArt(composition: Composition): Composition {
+  return {
+    ...composition,
+    inserts: nonCaptionInserts(composition.inserts),
   }
 }
 

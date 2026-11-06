@@ -5,6 +5,7 @@ import { slug } from "../inserts"
 import { CanvasTaintError, drawFrame, preloadBrandLogo, preloadStickerImages, resolveExportSize } from "./compositor"
 import type { WatermarkPaint } from "../watermark.ts"
 import { ensureComposeFontsReady, fontIdsUsedInComposition } from "../compose/fonts"
+import { resolveTrimWindow, trimProgress } from "../source-trim.ts"
 import {
   blobTypeFromMime,
   outputFps,
@@ -95,7 +96,7 @@ async function recordWithMediaRecorder(
   format: ExportFormat,
 ): Promise<ExportResult> {
   const { video, composition, fontFamily, signal, onProgress } = options
-  const duration = composition.source.duration
+  const trimWindow = resolveTrimWindow(composition.source)
   const fps = outputFps(composition.output.fps)
   const finishHiddenWatch = watchTabHidden(signal)
   const canvasStream = canvas.captureStream(fps)
@@ -127,7 +128,7 @@ async function recordWithMediaRecorder(
     }
   })
 
-  await seekVideo(video, 0, signal)
+  await seekVideo(video, trimWindow.start, signal)
   const previousMuted = video.muted
   const previousVolume = video.volume
   video.muted = false
@@ -173,9 +174,9 @@ async function recordWithMediaRecorder(
         }
         onProgress({
           currentTime: video.currentTime,
-          ratio: Math.min(1, video.currentTime / Math.max(duration, 0.001)),
+          ratio: trimProgress(video.currentTime, trimWindow),
         })
-        if (video.ended || video.currentTime >= duration - 0.05) {
+        if (video.ended || video.currentTime >= trimWindow.end - 0.05) {
           cleanup()
           video.pause()
           if (recorder.state !== "inactive") recorder.stop()
@@ -219,7 +220,7 @@ async function encodeWithWebCodecs(
   }
 
   const { video, composition, fontFamily, signal, onProgress } = options
-  const duration = composition.source.duration
+  const trimWindow = resolveTrimWindow(composition.source)
   const fps = outputFps(composition.output.fps)
   const finishHiddenWatch = watchTabHidden(signal)
   const frameDuration = 1 / fps
@@ -255,19 +256,20 @@ async function encodeWithWebCodecs(
   if (!ctx) throw new Error("Canvas 2D indisponível")
 
   let frameIndex = 0
-  for (let time = 0; time < duration; time += frameDuration) {
+  for (let offset = 0; offset < trimWindow.duration; offset += frameDuration) {
     throwIfAborted(signal)
     if (encoderError) throw encoderError
+    const time = trimWindow.start + offset
     await seekVideo(video, time, signal)
     drawFrame(ctx, video, composition, time, fontFamily, options.stickerBlobUrls, undefined, options.watermark)
     const frame = new VideoFrame(canvas, {
-      timestamp: Math.round(time * 1_000_000),
+      timestamp: Math.round(offset * 1_000_000),
       duration: Math.round(frameDuration * 1_000_000),
     })
     encoder.encode(frame, { keyFrame: frameIndex % Math.round(fps) === 0 })
     frame.close()
     frameIndex += 1
-    onProgress({ currentTime: time, ratio: Math.min(1, time / duration) })
+    onProgress({ currentTime: time, ratio: trimProgress(time, trimWindow) })
     while (encoder.encodeQueueSize > 4) {
       await new Promise((resolve) => setTimeout(resolve, 8))
     }

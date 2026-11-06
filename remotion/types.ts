@@ -10,6 +10,7 @@ import {
   type Composition,
   type CompositionInsert,
 } from "../lib/composition.ts"
+import { resolveTrimWindow } from "../lib/source-trim.ts"
 import {
   normalizeWatermarkPrefs,
   watermarkPaintInput,
@@ -29,9 +30,15 @@ export type RenderProps = {
   video: {
     src: string
     durationInSeconds: number
+    /** Segundos do arquivo pulados no início; o frame 0 do render mostra este instante. */
+    trimStartInSeconds?: number
+    /** Duração do arquivo inteiro: as zonas de trilha (gancho/prova/CTA) usam ela, como no preview. */
+    sourceDurationInSeconds?: number
     width?: number
     height?: number
     transform?: Composition["source"]["transform"]
+    /** Trechos com zoom próprio, em segundos do arquivo original. */
+    cuts?: Composition["source"]["cuts"]
   }
   audio?: { src: string; volume: number }
   fps: number
@@ -51,6 +58,16 @@ export type RenderProps = {
 export function secondsFromFrame(frame: number, fps: number): number {
   if (!(fps > 0)) return 0
   return frame / fps
+}
+
+export function trimStartOf(props: Pick<RenderProps, "video">): number {
+  const value = props.video.trimStartInSeconds
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+/** Instante do arquivo original exibido no frame atual do render. */
+export function sourceTimeFromFrame(frame: number, props: Pick<RenderProps, "video" | "fps">): number {
+  return secondsFromFrame(frame, props.fps) + trimStartOf(props)
 }
 
 export function calculateShortMetadata(props: RenderProps): {
@@ -119,14 +136,22 @@ export function toRenderProps(input: {
     composition.watermarkEnabled,
     normalizeWatermarkPrefs(input.watermarkPrefs ?? {}),
   )
+  const trimWindow = resolveTrimWindow(composition.source)
   return {
     video: {
       src: videoSrc,
-      durationInSeconds: composition.source.duration,
+      durationInSeconds: trimWindow.duration,
+      ...(trimWindow.start > 0 ? { trimStartInSeconds: trimWindow.start } : {}),
+      ...(trimWindow.duration !== composition.source.duration
+        ? { sourceDurationInSeconds: composition.source.duration }
+        : {}),
       width: composition.source.width,
       height: composition.source.height,
       ...(composition.source.transform
         ? { transform: composition.source.transform }
+        : {}),
+      ...(composition.source.cuts && composition.source.cuts.length > 0
+        ? { cuts: composition.source.cuts }
         : {}),
     },
     ...(input.audio ? { audio: input.audio } : {}),

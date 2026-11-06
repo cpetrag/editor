@@ -3,6 +3,7 @@ import {
   runGeneratePipeline,
 } from "@/lib/ai-generate"
 import { getOpenAiApiKey, completeInserts, generateTransparentPng, transcribeMedia } from "@/lib/ai-openai"
+import { AI_FAILURE_STATUS } from "@/lib/ai-schema"
 
 export const runtime = "nodejs"
 export const maxDuration = 90
@@ -50,12 +51,15 @@ export async function POST(req: Request): Promise<Response> {
       },
     )
     if (result.inserts.length === 0) {
-      return Response.json({ error: "Não foi possível montar a estrutura." }, { status: 502 })
+      return Response.json(
+        { error: "Não foi possível montar a estrutura." },
+        { status: AI_FAILURE_STATUS },
+      )
     }
     return Response.json(result)
   } catch (error) {
     console.error("[editor] falha em /api/ai/generate", error instanceof Error ? error.message : error)
-    const status = error instanceof Error && error.message === "missing-key" ? 503 : 502
+    const status = error instanceof Error && error.message === "missing-key" ? 503 : AI_FAILURE_STATUS
     return Response.json({ error: errorMessage(error) }, { status })
   }
 }

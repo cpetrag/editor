@@ -14,7 +14,7 @@ export class AiRequestError extends Error {
   }
 }
 
-async function readError(response: Response): Promise<string> {
+async function readError(response: Response, fallback: string): Promise<string> {
   try {
     const json = (await response.json()) as { error?: string }
     if (json.error) return json.error
@@ -22,7 +22,7 @@ async function readError(response: Response): Promise<string> {
     /* ignore */
   }
   if (response.status === 503) return "IA não configurada no servidor."
-  return "Falha ao gerar estrutura"
+  return fallback
 }
 
 export async function requestGenerate(input: {
@@ -41,7 +41,10 @@ export async function requestGenerate(input: {
     signal: AbortSignal.timeout(FETCH_MS),
   })
   if (!response.ok) {
-    throw new AiRequestError(await readError(response), response.status)
+    throw new AiRequestError(
+      await readError(response, "Falha ao gerar estrutura"),
+      response.status,
+    )
   }
   return (await response.json()) as GeneratePipelineResult
 }
@@ -63,7 +66,12 @@ export async function requestCaptions(input: {
     body,
     signal: AbortSignal.timeout(FETCH_MS),
   })
-  if (!response.ok) throw new AiRequestError(await readError(response), response.status)
+  if (!response.ok) {
+    throw new AiRequestError(
+      await readError(response, "Não foi possível transcrever o áudio."),
+      response.status,
+    )
+  }
   return (await response.json()) as { lines: CaptionLine[]; warnings: string[] }
 }
 
@@ -75,7 +83,10 @@ export async function requestHooks(prompt: string): Promise<string[]> {
     signal: AbortSignal.timeout(FETCH_MS),
   })
   if (!response.ok) {
-    throw new AiRequestError(await readError(response), response.status)
+    throw new AiRequestError(
+      await readError(response, "Não foi possível sugerir ganchos."),
+      response.status,
+    )
   }
   const json = (await response.json()) as { hooks?: string[] }
   return Array.isArray(json.hooks) ? json.hooks : []

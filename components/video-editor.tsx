@@ -7,6 +7,8 @@ import { PreviewPanel, type PreviewHandle } from "@/components/preview-panel"
 import { EditorNav, type EditorTab } from "@/components/editor-nav"
 import { LibraryPanel } from "@/components/library-panel"
 import { BatchPanel } from "@/components/batch-panel"
+import { EditorHeaderActions, type SaveStatus } from "@/components/editor-header-actions"
+import { ExportMenu, type ExportMenuActions } from "@/components/export-menu"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -24,7 +26,6 @@ import {
   type CaptionStyle,
   type Composition,
   type CompositionSource,
-  type OutputQualityId,
 } from "@/lib/composition"
 import { toCliRenderProps, toRenderProps } from "@/remotion/types"
 import {
@@ -58,6 +59,7 @@ import {
   saveCompositionJson,
 } from "@/lib/project-store"
 import {
+  clearCaptionInsertsArt,
   clearInsertsArt,
   newProjectComposition,
   projectFileIds,
@@ -112,6 +114,8 @@ import {
   sourceKind,
 } from "@/lib/source-url"
 import { isEditableTarget } from "@/lib/is-editable-target"
+import { checklistItemsFromComposition, collectExportWarnings } from "@/lib/export-checklist"
+import { committedInlineText, DEFAULT_INLINE_TEXT } from "@/lib/compose/inline-editor-style"
 import { assembleInserts, type GeneratePipelineResult } from "@/lib/ai-generate"
 import { pngFileFromBase64 } from "@/lib/ai-client"
 import {
@@ -154,9 +158,17 @@ import { insertIdOf, isSourceSelected, type PreviewSelection } from "@/lib/previ
 import {
   clampSourceTransform,
   DEFAULT_SOURCE_TRANSFORM,
-  isIdentitySourceTransform,
   type SourceTransform,
 } from "@/lib/source-transform"
+import {
+  applySegmentedFraming,
+  clearSegmentTransforms,
+  removeSourceCut,
+  setSegmentTransformAt,
+  splitSourceAt,
+  type SegmentedFraming,
+} from "@/lib/source-segments"
+import { clampSourceTrim, type SourceTrim } from "@/lib/source-trim"
 
 function presetCatalogOf(library: UserPreset[], composition: Composition) {
   return mergePresetCatalog(library, composition.customPresets)
@@ -226,6 +238,8 @@ function historyPresent(composition: Composition): HistorySnapshot {
     tracks: composition.tracks,
     styleRef: composition.styleRef,
     sourceTransform: composition.source.transform,
+    ...(composition.source.cuts ? { sourceCuts: composition.source.cuts } : {}),
+    ...(composition.source.trim ? { sourceTrim: composition.source.trim } : {}),
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
   }
 }
@@ -321,6 +335,20 @@ export function VideoEditor() {
   const [batchPreview, setBatchPreview] = useState<Variation | null>(null)
   const historyRef = useRef(emptyHistory())
   const gestureRef = useRef(emptyGesture())
+  const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false })
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved")
+  const syncHistoryFlags = useCallback(() => {
+    const next = { canUndo: canUndo(historyRef.current), canRedo: canRedo(historyRef.current) }
+    setHistoryFlags((current) =>
+      current.canUndo === next.canUndo && current.canRedo === next.canRedo ? current : next,
+    )
+  }, [])
+  /**
+   * Edição inline aberta: o gesture começou ao abrir e só fecha ao confirmar/cancelar.
+   * `created` = o insert nasceu nesta edição (o baseline do gesture ainda não o tem).
+   */
+  const textEditRef = useRef<{ id: string; created: boolean } | null>(null)
+  const finishTextEditRef = useRef<(outcome: "commit" | "cancel") => void>(() => {})
   const compositionRef = useRef(composition)
   compositionRef.current = composition
   const objectUrlRef = useRef<string | null>(null)
@@ -499,11 +527,23 @@ export function VideoEditor() {
 
   useEffect(() => {
     if (!hydrated) return
+    setSaveStatus("saving")
     const timer = window.setTimeout(() => {
-      saveCompositionJson(composition)
+      try {
+        saveCompositionJson(composition)
+        setSaveStatus("saved")
+      } catch (error) {
+        console.error("[editor] não foi possível salvar o projeto no navegador", error)
+        setSaveStatus("error")
+      }
     }, 300)
     return () => window.clearTimeout(timer)
   }, [composition, hydrated])
+
+  // Quase toda mudança de histórico vem com um render (nova composição); fechar um gesto não.
+  useEffect(() => {
+    syncHistoryFlags()
+  })
 
   useEffect(() => {
     if (importState.status !== "downloading") {
@@ -750,14 +790,7 @@ export function VideoEditor() {
     void importFromUrl(url)
   }, [importFromUrl, previousSource])
 
-  const beginInsertHistory = useCallback(() => {
-    gestureRef.current = beginInsertGesture(
-      historyPresent(compositionRef.current),
-      gestureRef.current,
-    )
-  }, [])
-
-  const endInsertHistory = useCallback(() => {
+  const closeOpenGesture = useCallback(() => {
     const closed = endInsertGesture(
       historyRef.current,
       gestureRef.current,
@@ -765,19 +798,42 @@ export function VideoEditor() {
     )
     historyRef.current = closed.history
     gestureRef.current = closed.gesture
+    syncHistoryFlags()
+  }, [syncHistoryFlags])
+
+  const beginInsertHistory = useCallback(() => {
+    // Um arraste/slider novo fecha a edição inline antes; senão os dois virariam um só desfazer.
+    if (textEditRef.current) finishTextEditRef.current("commit")
+    gestureRef.current = beginInsertGesture(
+      historyPresent(compositionRef.current),
+      gestureRef.current,
+    )
   }, [])
 
+  const endInsertHistory = useCallback(() => {
+    if (textEditRef.current) return
+    closeOpenGesture()
+  }, [closeOpenGesture])
+
   const applyHistoryPresent = useCallback((snapshot: HistorySnapshot) => {
-    const { transform: _ignored, ...sourceRest } = compositionRef.current.source
+    const {
+      transform: _ignored,
+      trim: _ignoredTrim,
+      cuts: _ignoredCuts,
+      ...sourceRest
+    } = compositionRef.current.source
     const next = clampComposition({
       ...compositionRef.current,
       inserts: snapshot.inserts,
       captionStyle: snapshot.captionStyle,
       tracks: snapshot.tracks,
       styleRef: snapshot.styleRef,
-      source: snapshot.sourceTransform
-        ? { ...sourceRest, transform: snapshot.sourceTransform }
-        : sourceRest,
+      source: {
+        ...sourceRest,
+        ...(snapshot.sourceTransform ? { transform: snapshot.sourceTransform } : {}),
+        ...(snapshot.sourceCuts ? { cuts: snapshot.sourceCuts } : {}),
+        ...(snapshot.sourceTrim ? { trim: snapshot.sourceTrim } : {}),
+      },
       watermarkEnabled: snapshot.watermarkEnabled === true ? true : undefined,
     })
     compositionRef.current = next
@@ -848,33 +904,83 @@ export function VideoEditor() {
     saveWatermarkPrefs(next)
   }, [])
 
-  const patchSourceTransform = useCallback(
-    (transform: SourceTransform, mode: "discrete" | "gesture") => {
-      applyComposition((prev) => {
-        const next = clampSourceTransform(transform, prev.source.width, prev.source.height)
-        const { transform: _drop, ...rest } = prev.source
-        return {
-          ...prev,
-          source: isIdentitySourceTransform(next) ? rest : { ...rest, transform: next },
-        }
-      }, mode)
+  const applySourceFraming = useCallback(
+    (
+      reframe: (source: Composition["source"]) => SegmentedFraming,
+      mode: "discrete" | "gesture",
+    ) => {
+      applyComposition(
+        (prev) => ({ ...prev, source: applySegmentedFraming(prev.source, reframe(prev.source)) }),
+        mode,
+      )
     },
     [applyComposition],
   )
 
+  /** `time` escolhe o trecho editado; sem divisões, vale para o vídeo inteiro. */
+  const patchSourceTransform = useCallback(
+    (transform: SourceTransform, mode: "discrete" | "gesture", time = playheadRef.current) => {
+      applySourceFraming((source) => {
+        const next = clampSourceTransform(transform, source.width, source.height)
+        return setSegmentTransformAt(source, time, next)
+      }, mode)
+    },
+    [applySourceFraming],
+  )
+
   const handlePatchSourceTransform = useCallback(
-    (transform: SourceTransform) => {
+    (transform: SourceTransform, time?: number) => {
       patchSourceTransform(
         transform,
         gestureRef.current.active ? "gesture" : "discrete",
+        time,
       )
     },
     [patchSourceTransform],
   )
 
-  const handleResetSourceTransform = useCallback(() => {
-    patchSourceTransform(DEFAULT_SOURCE_TRANSFORM, "discrete")
-  }, [patchSourceTransform])
+  const handleResetSourceTransform = useCallback(
+    (time?: number) => {
+      patchSourceTransform(DEFAULT_SOURCE_TRANSFORM, "discrete", time)
+    },
+    [patchSourceTransform],
+  )
+
+  const handleResetAllSourceTransforms = useCallback(() => {
+    applySourceFraming(clearSegmentTransforms, "discrete")
+  }, [applySourceFraming])
+
+  const handleSplitSource = useCallback(
+    (time: number) => {
+      const source = compositionRef.current.source
+      // Sem checar antes, uma divisão recusada viraria um passo vazio no desfazer.
+      const cuts = splitSourceAt(source, time, source.duration)
+      if (!cuts) return
+      applySourceFraming((current) => ({ transform: current.transform, cuts }), "discrete")
+    },
+    [applySourceFraming],
+  )
+
+  const handleRemoveSourceCut = useCallback(
+    (index: number) => {
+      applySourceFraming(
+        (source) => ({ transform: source.transform, cuts: removeSourceCut(source.cuts, index) }),
+        "discrete",
+      )
+    },
+    [applySourceFraming],
+  )
+
+  const handleChangeTrim = useCallback(
+    (trim: SourceTrim | null, mode: "discrete" | "gesture") => {
+      applyComposition((prev) => {
+        const next = clampSourceTrim(trim, prev.source.duration)
+        const { trim: _drop, ...rest } = prev.source
+        return { ...prev, source: next ? { ...rest, trim: next } : rest }
+      }, mode)
+    },
+    [applyComposition],
+  )
 
   const handlePlayheadChange = useCallback((time: number) => {
     playheadRef.current = time
@@ -955,31 +1061,20 @@ export function VideoEditor() {
   }, [activeTab])
 
   const addTextInsert = useCallback(() => {
+    finishTextEditRef.current("commit")
     const created = createInsert("texto-livre")
     created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
     applyInserts((inserts) => [...inserts, created], "discrete")
     setSelection({ kind: "insert", id: created.id })
-    setEditingTextId(null)
-  }, [applyInserts])
-
-  const addTextInsertAt = useCallback((x: number, y: number) => {
-    const created = createInsert("texto-livre")
-    created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
-    created.x = x
-    created.y = y
-    created.text = ""
-    applyInserts((inserts) => [...inserts, created], "discrete")
-    setSelection({ kind: "insert", id: created.id })
-    setEditingTextId(created.id)
   }, [applyInserts])
 
   const duplicateSelectedInsert = useCallback((id: string) => {
+    finishTextEditRef.current("commit")
     const current = compositionRef.current.inserts.find((insert) => insert.id === id)
     if (!current || insertKind(current) === "caption") return
     const copy = duplicateInsert(current)
     applyInserts((inserts) => [...inserts, copy], "discrete")
     setSelection({ kind: "insert", id: copy.id })
-    setEditingTextId(null)
   }, [applyInserts])
 
   const canAddSticker = useCallback(
@@ -1114,12 +1209,103 @@ export function VideoEditor() {
 
   const removeInsert = useCallback(
     (id: string) => {
+      if (textEditRef.current?.id === id) textEditRef.current = null
       applyInserts((prev) => prev.filter((insert) => insert.id !== id), "discrete")
       setSelection((current) => (insertIdOf(current) === id ? null : current))
       setEditingTextId((current) => (current === id ? null : current))
       setUndoToast("Insert apagado")
     },
     [applyInserts],
+  )
+
+  const finishTextEdit = useCallback(
+    (outcome: "commit" | "cancel") => {
+      const session = textEditRef.current
+      setEditingTextId(null)
+      if (!session) return
+      textEditRef.current = null
+      const baseline = gestureRef.current.baseline
+      const current = compositionRef.current.inserts.find((item) => item.id === session.id)
+      const original = baseline?.inserts.find((item) => item.id === session.id)
+      const originalText = session.created ? DEFAULT_INLINE_TEXT : (original?.text ?? "")
+      const finalText = outcome === "cancel" ? originalText : (current?.text ?? "")
+      const empty = committedInlineText(finalText) === null
+      if (outcome === "commit" && !empty) {
+        closeOpenGesture()
+        return
+      }
+      if (session.created) {
+        if (empty) {
+          // Criado e apagado na mesma edição: volta ao baseline, que nem tinha o insert.
+          if (baseline) applyHistoryPresent(baseline)
+          gestureRef.current = emptyGesture()
+          setSelection((selected) => (insertIdOf(selected) === session.id ? null : selected))
+          return
+        }
+        // Esc num texto recém-criado mantém o insert com o texto padrão (um passo de desfazer).
+        applyInserts(
+          (inserts) =>
+            inserts.map((insert) => (insert.id === session.id ? { ...insert, text: DEFAULT_INLINE_TEXT } : insert)),
+          "gesture",
+        )
+        closeOpenGesture()
+        setSelection({ kind: "insert", id: session.id })
+        return
+      }
+      // Cancelar (ou apagar tudo) volta ao estado de antes da edição sem deixar entrada no desfazer.
+      if (baseline) applyHistoryPresent(baseline)
+      gestureRef.current = emptyGesture()
+      if (empty && current) removeInsert(session.id)
+      else setSelection({ kind: "insert", id: session.id })
+    },
+    [applyHistoryPresent, applyInserts, closeOpenGesture, removeInsert],
+  )
+  finishTextEditRef.current = finishTextEdit
+
+  const startTextEdit = useCallback(
+    (id: string) => {
+      if (textEditRef.current?.id === id) return
+      if (textEditRef.current) finishTextEdit("commit")
+      const insert = compositionRef.current.inserts.find((item) => item.id === id)
+      if (!insert) return
+      const kind = insertKind(insert)
+      if (kind !== "text" && kind !== "caption") return
+      closeOpenGesture()
+      gestureRef.current = beginInsertGesture(historyPresent(compositionRef.current))
+      textEditRef.current = { id, created: false }
+      setSelection({ kind: "insert", id })
+      setEditingTextId(id)
+    },
+    [closeOpenGesture, finishTextEdit],
+  )
+
+  const handleEditingTextId = useCallback(
+    (id: string | null) => {
+      if (id) startTextEdit(id)
+      else finishTextEdit("commit")
+    },
+    [finishTextEdit, startTextEdit],
+  )
+
+  const cancelTextEdit = useCallback(() => finishTextEdit("cancel"), [finishTextEdit])
+
+  const addTextInsertAt = useCallback(
+    (x: number, y: number) => {
+      finishTextEdit("commit")
+      const created = createInsert("texto-livre")
+      created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+      created.x = x
+      created.y = y
+      created.text = DEFAULT_INLINE_TEXT
+      // O gesture abre antes de criar: confirmar vira um só desfazer (criar + digitar).
+      closeOpenGesture()
+      gestureRef.current = beginInsertGesture(historyPresent(compositionRef.current))
+      applyInserts((inserts) => [...inserts, created], "gesture")
+      textEditRef.current = { id: created.id, created: true }
+      setSelection({ kind: "insert", id: created.id })
+      setEditingTextId(created.id)
+    },
+    [applyInserts, closeOpenGesture, finishTextEdit],
   )
 
   const startNewProject = useCallback(() => {
@@ -1140,6 +1326,8 @@ export function VideoEditor() {
     saveCompositionJson(next)
     historyRef.current = emptyHistory()
     gestureRef.current = emptyGesture()
+    textEditRef.current = null
+    setEditingTextId(null)
     setSelection(null)
     setBackgroundUrl("")
     setDraftUrl("")
@@ -1162,16 +1350,45 @@ export function VideoEditor() {
   }, [previousSource, revokeObjectUrl])
 
   const clearInserts = useCallback(() => {
+    finishTextEditRef.current("commit")
     const prev = compositionRef.current
     applyComposition(() => clearInsertsArt(prev), "discrete")
     setSelection(null)
     setUndoToast("Inserts apagados")
   }, [applyComposition])
 
+  const clearCaptions = useCallback(() => {
+    finishTextEditRef.current("commit")
+    const prev = compositionRef.current
+    applyComposition(() => clearCaptionInsertsArt(prev), "discrete")
+    setSelection((current) => {
+      const id = insertIdOf(current)
+      if (!id) return current
+      const selected = prev.inserts.find((item) => item.id === id)
+      return selected && insertKind(selected) === "caption" ? null : current
+    })
+    setEditingTextId((current) => {
+      if (!current) return current
+      const editing = prev.inserts.find((item) => item.id === current)
+      return editing && insertKind(editing) === "caption" ? null : current
+    })
+    setUndoToast("Legendas apagadas")
+  }, [applyComposition])
+
   const undoLast = useCallback(() => {
+    if (textEditRef.current) finishTextEditRef.current("commit")
     if (!canUndo(historyRef.current)) return
     const present = historyPresent(compositionRef.current)
     const result = undo(historyRef.current, present)
+    historyRef.current = result.history
+    applyHistoryPresent(result.present)
+  }, [applyHistoryPresent])
+
+  const redoLast = useCallback(() => {
+    if (textEditRef.current) finishTextEditRef.current("commit")
+    if (!canRedo(historyRef.current)) return
+    const present = historyPresent(compositionRef.current)
+    const result = redo(historyRef.current, present)
     historyRef.current = result.history
     applyHistoryPresent(result.present)
   }, [applyHistoryPresent])
@@ -1184,12 +1401,14 @@ export function VideoEditor() {
   }, [])
 
   const toggleInsert = useCallback((id: string) => {
-    setSelection((current) => {
-      const next = insertIdOf(current) === id ? null : { kind: "insert" as const, id }
-      if (next) seekPlayheadToInsert(next.id)
-      return next
-    })
-  }, [seekPlayheadToInsert])
+    // O seek atualiza o estado do PreviewPanel; dentro do updater de setSelection seria setState durante render.
+    if (insertIdOf(selection) === id) {
+      setSelection(null)
+      return
+    }
+    setSelection({ kind: "insert", id })
+    seekPlayheadToInsert(id)
+  }, [seekPlayheadToInsert, selection])
 
   const selectInsert = useCallback(
     (id: string | null) => {
@@ -1207,11 +1426,13 @@ export function VideoEditor() {
   const handlePreviewSelect = useCallback(
     (next: PreviewSelection) => {
       if (next?.kind === "insert") {
+        if (textEditRef.current && textEditRef.current.id !== next.id) {
+          finishTextEditRef.current("commit")
+        }
         selectInsert(next.id)
-        setEditingTextId((current) => (current === next.id ? current : null))
         return
       }
-      setEditingTextId(null)
+      finishTextEditRef.current("commit")
       setSelection(next)
     },
     [selectInsert],
@@ -1884,8 +2105,134 @@ export function VideoEditor() {
       ? "Seu navegador exporta em WebM. Para MP4, use Chrome ou Edge."
       : null
 
+  const exportWarnings = useMemo(
+    () =>
+      collectExportWarnings(
+        checklistItemsFromComposition({
+          inserts: composition.inserts,
+          source: { duration: composition.source.duration },
+          captionStyle: composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
+          captionPreset: composition.captionPreset,
+          tracks: composition.tracks,
+          styleRef: composition.styleRef,
+          brand: { fontId: composition.brand.fontId, logo: composition.brand.logo },
+        }),
+      ),
+    [
+      composition.brand.fontId,
+      composition.brand.logo,
+      composition.captionPreset,
+      composition.captionStyle,
+      composition.inserts,
+      composition.source.duration,
+      composition.styleRef,
+      composition.tracks,
+    ],
+  )
+
+  const exportActionsRef = useRef<ExportMenuActions>(null!)
+  exportActionsRef.current = {
+    onExport: () => {
+      void handleExport()
+    },
+    onInterruptMacRender: () => {
+      void handleInterruptMacRender()
+    },
+    onRetryFinalExport: () => {
+      setLiveMessage("")
+      finalExportTask.retry()
+    },
+    onRecoverLastExport: () => {
+      setLiveMessage("")
+      finalExportTask.recoverLast()
+    },
+    onSaveToCapcutChange: (next) => {
+      setSaveToCapcut(next)
+      saveExportPrefs({ saveToCapcut: next })
+    },
+    onExportFileNameChange: setExportFileName,
+    onExportModeChange: setExportMode,
+    onOutputQualityChange: (quality) => {
+      setComposition((prev) => ({
+        ...prev,
+        output: outputFromQuality(quality, prev.source),
+      }))
+    },
+    onSelectInsert: (id) => {
+      if (insertIdOf(selection) !== id) toggleInsert(id)
+    },
+  }
+
+  const hasSourceForExport = hasPlayableSource(composition.source)
+  const finalExportError = exportMode === "final" ? finalExport.error : null
+  const canRecoverLastExport = exportMode === "final" && !exporting && hasLastExportJob
+  const emptyComposition = composition.inserts.length === 0
+  const headerActions = useMemo(
+    () => (
+      <EditorHeaderActions
+        canUndo={historyFlags.canUndo}
+        canRedo={historyFlags.canRedo}
+        onUndo={undoLast}
+        onRedo={redoLast}
+        saveStatus={saveStatus}
+        exportMenu={
+          <ExportMenu
+            actionsRef={exportActionsRef}
+            hasSource={hasSourceForExport}
+            canExport={canExport}
+            exportDisabledReason={exportDisabledReason}
+            exporting={exporting}
+            exportProgress={exportProgress}
+            exportStatus={exportStatus}
+            macRenderBusy={macRenderBusy}
+            finalExportError={finalExportError}
+            canRetryFinalExport={finalExport.canRetry}
+            canRecoverLastExport={canRecoverLastExport}
+            saveToCapcut={saveToCapcut}
+            exportFileName={exportFileName}
+            exportMode={exportMode}
+            exportSpec={exportSpec}
+            emptyComposition={emptyComposition}
+            outputQuality={outputQuality}
+            sourceWidth={composition.source.width}
+            sourceHeight={composition.source.height}
+            webmWarning={webmWarning}
+            warnings={exportWarnings}
+          />
+        }
+      />
+    ),
+    [
+      canExport,
+      canRecoverLastExport,
+      composition.source.height,
+      composition.source.width,
+      emptyComposition,
+      exportDisabledReason,
+      exportFileName,
+      exportMode,
+      exportProgress,
+      exportSpec,
+      exportStatus,
+      exportWarnings,
+      exporting,
+      finalExport.canRetry,
+      finalExportError,
+      hasSourceForExport,
+      historyFlags.canRedo,
+      historyFlags.canUndo,
+      macRenderBusy,
+      outputQuality,
+      redoLast,
+      saveStatus,
+      saveToCapcut,
+      undoLast,
+      webmWarning,
+    ],
+  )
+
   return (
-    <main className="relative flex h-screen flex-col overflow-hidden lg:flex-row">
+    <main className="relative flex h-screen flex-col overflow-clip lg:flex-row">
       {finalNamePrompt !== null ? (
         <div
           className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -1984,7 +2331,7 @@ export function VideoEditor() {
       ) : null}
       <EditorNav active={activeTab} onChange={setActiveTab} />
 
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-hidden lg:grid-cols-[minmax(340px,30%)_1fr] lg:grid-rows-1">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-clip lg:grid-cols-[minmax(340px,30%)_1fr] lg:grid-rows-1">
         {activeTab === "editor" ? (
           <ControlPanel
             source={composition.source}
@@ -1998,30 +2345,12 @@ export function VideoEditor() {
             inserts={composition.inserts}
             videoDuration={composition.source.duration}
             missingFile={missingFile}
-            canExport={canExport}
-            exportDisabledReason={exportDisabledReason}
             exporting={exporting}
-            macRenderBusy={macRenderBusy}
-            onInterruptMacRender={() => {
-              void handleInterruptMacRender()
-            }}
             exportProgress={exportProgress}
             exportStatus={exportStatus}
             renderReplies={renderReplies}
             liveMessage={live}
-            finalExportError={exportMode === "final" ? finalExport.error : null}
-            canRetryFinalExport={finalExport.canRetry}
-            onRetryFinalExport={() => {
-              setLiveMessage("")
-              finalExportTask.retry()
-            }}
-            canRecoverLastExport={
-              exportMode === "final" && !exporting && hasLastExportJob
-            }
-            onRecoverLastExport={() => {
-              setLiveMessage("")
-              finalExportTask.recoverLast()
-            }}
+            finalExportError={finalExportError}
             undoToast={undoToast}
             onUndoToast={undoLast}
             selectedId={selectedInsertId}
@@ -2056,6 +2385,7 @@ export function VideoEditor() {
             }}
             onNewProject={startNewProject}
             onClearInserts={clearInserts}
+            onClearCaptions={clearCaptions}
             onAddText={addTextInsert}
             onAddElement={addElement}
             onApplyTemplate={applyTemplate}
@@ -2084,34 +2414,11 @@ export function VideoEditor() {
             presetLibrary={presetLibrary}
             canGenerateCaptions={Boolean(composition.source.fileId) && !missingFile}
             onGenerateCaptions={applyCaptions}
-            onExport={() => {
-              void handleExport()
-            }}
-            saveToCapcut={saveToCapcut}
-            onSaveToCapcutChange={(next) => {
-              setSaveToCapcut(next)
-              saveExportPrefs({ saveToCapcut: next })
-            }}
-            exportFileName={exportFileName}
-            onExportFileNameChange={setExportFileName}
-            exportMode={exportMode}
-            onExportModeChange={setExportMode}
-            exportSpec={exportSpec}
-            outputQuality={outputQuality}
-            sourceWidth={composition.source.width}
-            sourceHeight={composition.source.height}
-            onOutputQualityChange={(quality: OutputQualityId) => {
-              setComposition((prev) => ({
-                ...prev,
-                output: outputFromQuality(quality, prev.source),
-              }))
-            }}
-            webmWarning={webmWarning}
             onBeginInsertGesture={beginInsertHistory}
             onEndInsertGesture={endInsertHistory}
             sourceSelected={isSourceSelected(selection)}
             onSelectSource={() => setSelection({ kind: "source" })}
-            onResetTransform={handleResetSourceTransform}
+            onResetTransform={handleResetAllSourceTransforms}
             watermarkEnabled={composition.watermarkEnabled === true}
             watermarkPrefs={watermarkPrefs}
             onWatermarkEnabledChange={handleWatermarkEnabled}
@@ -2174,6 +2481,11 @@ export function VideoEditor() {
           sourceWidth={composition.source.width}
           sourceHeight={composition.source.height}
           sourceTransform={composition.source.transform}
+          sourceCuts={composition.source.cuts}
+          onSplitSource={handleSplitSource}
+          onRemoveSourceCut={handleRemoveSourceCut}
+          trim={composition.source.trim}
+          onChangeTrim={handleChangeTrim}
           fontFamily={previewFontFamily}
           fontId={composition.brand.fontId}
           stickerBlobUrls={stickerBlobUrls}
@@ -2198,9 +2510,11 @@ export function VideoEditor() {
           onCreateTextAt={addTextInsertAt}
           onDuplicateInsert={duplicateSelectedInsert}
           editingTextId={editingTextId}
-          onEditingTextId={setEditingTextId}
+          onEditingTextId={handleEditingTextId}
+          onCancelTextEdit={cancelTextEdit}
           onBeginInsertGesture={beginInsertHistory}
           onEndInsertGesture={endInsertHistory}
+          headerActions={headerActions}
         />
       </div>
     </main>

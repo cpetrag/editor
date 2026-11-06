@@ -75,7 +75,7 @@ function paintInserts(
     props.captionStyle,
     {
       fps: props.fps,
-      videoDuration: props.video.durationInSeconds,
+      videoDuration: props.video.sourceDurationInSeconds ?? props.video.durationInSeconds,
       project: props.styleRef ? { styleRef: props.styleRef } : {},
       tracks: props.tracks,
       customPresets: props.customPresets ? Object.values(props.customPresets) : undefined,

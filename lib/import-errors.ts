@@ -42,7 +42,7 @@ export const IMPORT_ERROR_COPY: Record<ImportErrorCode, ImportErrorCopy> = {
   UNSUPPORTED: {
     title: "Link não suportado",
     message:
-      "Aceitamos YouTube, TikTok, Instagram, Facebook, Pinterest, X e Shopee Video. Para outros, baixe o arquivo e use “Escolher arquivo”.",
+      "Aceitamos YouTube, TikTok, Instagram, Facebook, Pinterest, X, Shopee Video e o catálogo do Mac Mini. Para outros, baixe o arquivo e use “Escolher arquivo”.",
     retry: false,
   },
   NOT_A_VIDEO: {
@@ -89,8 +89,9 @@ const RULES: Array<{ code: ImportErrorCode; pattern: RegExp }> = [
   { code: "RATE_LIMITED", pattern: /\b429\b|too many requests|rate.?limit/i },
   { code: "TIMEOUT", pattern: /\btimeout\b|timed out/i },
   { code: "NOT_FOUND", pattern: /\bunavailable\b|\b404\b|not found|removed/i },
+  { code: "TOO_LARGE", pattern: /grande demais|too large/i },
   { code: "UNSUPPORTED", pattern: /unsupported url|host não permitido/i },
-  { code: "NOT_A_VIDEO", pattern: /not a video|no video|unsupported file/i },
+  { code: "NOT_A_VIDEO", pattern: /not a video|no video|unsupported file|não é um vídeo|não é vídeo/i },
   { code: "NETWORK", pattern: /failed to establish|econnreset|enotfound|network|connection/i },
 ]
 

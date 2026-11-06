@@ -39,7 +39,10 @@ export function TextFloatingBar({
   onFont,
   onSample,
   onAdvanced,
+  docked = false,
 }: {
+  /** Na faixa acima do palco, em vez de por cima do vídeo. */
+  docked?: boolean
   presetId?: string
   color: string
   align: OverlayTextAlign
@@ -61,7 +64,12 @@ export function TextFloatingBar({
 }) {
   return (
     <div
-      className="pointer-events-auto absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md"
+      role="toolbar"
+      aria-label="Estilo do texto"
+      className={cn(
+        "pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md",
+        docked ? "top-1/2 max-w-full -translate-y-1/2" : "bottom-3",
+      )}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="flex max-w-[9.5rem] gap-0.5 overflow-x-auto">

@@ -3,7 +3,11 @@ import { factoryPresetFontIds, getPresetStyle } from "../style/presets.ts"
 import type { InsertStyle, StyleRef } from "../style/types.ts"
 import { getTextPreset, isTextPresetId } from "../text-presets/catalog.ts"
 import { fontIdFromFamily } from "../text-presets/to-insert-style.ts"
-import { ensureTextPresetFontsReady } from "../text-presets/fonts.ts"
+import { ensureTextPresetFontsReady, TEXT_PRESET_FONT_FILES } from "../text-presets/fonts.ts"
+
+const HOSTED_TEXT_PRESET_FONT_IDS = new Set<string>(
+  TEXT_PRESET_FONT_FILES.map((spec) => spec.id),
+)
 
 const FAMILIES: Record<string, string> = {
   geist: "Geist, sans-serif",
@@ -102,8 +106,10 @@ export async function ensureComposeFontsReady(
   fontIds: string | readonly string[],
 ): Promise<void> {
   if (typeof document === "undefined" || !document.fonts?.load) return
-  await ensureTextPresetFontsReady()
   const ids = uniqueFontIds(fontIds)
+  if (ids.some((id) => HOSTED_TEXT_PRESET_FONT_IDS.has(id))) {
+    await ensureTextPresetFontsReady()
+  }
   const loads: Promise<FontFace[]>[] = []
   for (const id of ids) {
     const family = canvasFontFamily(id)
@@ -115,7 +121,6 @@ export async function ensureComposeFontsReady(
   }
   try {
     await Promise.all(loads)
-    if (document.fonts.ready) await document.fonts.ready
   } catch (error) {
     console.error("[editor] falha ao carregar fonte de overlay", error)
   }

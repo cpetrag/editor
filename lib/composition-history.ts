@@ -1,5 +1,7 @@
 import type { CaptionStyle, CompositionInsert, StyleRef, TrackId, TrackStyle } from "./composition.ts"
 import type { SourceTransform } from "./source-transform.ts"
+import type { SourceTrim } from "./source-trim.ts"
+import type { SourceCut } from "./source-segments.ts"
 
 export const HISTORY_LIMIT = 50
 
@@ -9,6 +11,8 @@ export interface HistorySnapshot {
   tracks?: Partial<Record<TrackId, TrackStyle>>
   styleRef?: StyleRef
   sourceTransform?: SourceTransform
+  sourceCuts?: SourceCut[]
+  sourceTrim?: SourceTrim
   watermarkEnabled?: boolean
 }
 

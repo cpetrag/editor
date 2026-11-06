@@ -17,7 +17,10 @@ export function ElementFloatingBar({
   onSecondary,
   onNudgeScale,
   onNudgeMaxWidth,
+  docked = false,
 }: {
+  /** Na faixa acima do palco, em vez de por cima do vídeo. */
+  docked?: boolean
   text: string
   hasText: boolean
   multiline?: boolean
@@ -34,7 +37,8 @@ export function ElementFloatingBar({
   return (
     <div
       className={cn(
-        "pointer-events-auto absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md",
+        "pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md",
+        docked ? (multiline ? "top-0" : "top-1/2 -translate-y-1/2") : "bottom-3",
         multiline ? "max-w-[min(92%,22rem)] flex-col rounded-2xl items-stretch" : "rounded-full",
       )}
       onPointerDown={(event) => event.stopPropagation()}

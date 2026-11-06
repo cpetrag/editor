@@ -4,6 +4,9 @@ import type { InsertAnchor, InsertType } from "./composition.ts"
 
 export const WHISPER_MAX_BYTES = 25 * 1024 * 1024
 
+/** Cloudflare Tunnel replaces 502/504 bodies with "error code: 502", hiding our JSON message. */
+export const AI_FAILURE_STATUS = 500
+
 export const IMAGE_ALPHA_SUFFIX =
   "Isolated cutout on a fully transparent background (alpha channel). PNG. No floor, no studio, no drop shadow, no 3D box, no extra scene. Subject centered. Do not fill the canvas with a solid color."
 

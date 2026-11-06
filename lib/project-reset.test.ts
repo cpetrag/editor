@@ -2,14 +2,17 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  CAPTION_INSERT_TYPE,
   COMPOSITION_VERSION,
   DEFAULT_CAPTION_STYLE,
   STICKER_INSERT_TYPE,
   TEXT_INSERT_TYPE,
   createDefaultComposition,
+  insertKind,
   type Composition,
 } from "./composition.ts"
 import {
+  clearCaptionInsertsArt,
   clearInsertsArt,
   newProjectComposition,
   projectFileIds,
@@ -95,6 +98,46 @@ test("clearInsertsArt keeps the video transform", () => {
   const next = clearInsertsArt(withTransform)
   assert.deepEqual(next.source.transform, { scale: 1.8, x: 42, y: 55 })
   assert.equal(next.inserts.length, 0)
+})
+
+test("clearCaptionInsertsArt drops only automatic captions", () => {
+  const withCaptions: Composition = {
+    ...sample(),
+    inserts: [
+      ...sample().inserts,
+      {
+        id: "c1",
+        type: CAPTION_INSERT_TYPE,
+        kind: "caption",
+        start: 0,
+        duration: 1.5,
+        anchor: "bottom",
+        animIn: "none",
+        animOut: "none",
+        text: "fala um",
+        words: [],
+      },
+      {
+        id: "c2",
+        type: CAPTION_INSERT_TYPE,
+        kind: "caption",
+        start: 2,
+        duration: 1.2,
+        anchor: "bottom",
+        animIn: "none",
+        animOut: "none",
+        text: "fala dois",
+        words: [],
+      },
+    ],
+  }
+  const next = clearCaptionInsertsArt(withCaptions)
+  assert.deepEqual(next.inserts.map((item) => item.id), ["t1", "p1", "p2"])
+  assert.equal(next.inserts.every((item) => insertKind(item) !== "caption"), true)
+  assert.equal(next.source.fileId, "vid-1")
+  assert.equal(next.captionPreset, "limpo")
+  assert.equal(next.captionStyle.rotation, 15)
+  assert.equal(next.styleRef?.presetId, "hormozi")
 })
 
 test("projectFileIds unique video + stickers + extras", () => {

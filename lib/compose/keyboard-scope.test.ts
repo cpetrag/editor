@@ -7,7 +7,43 @@ import {
   cycleOverlayMode,
   isInsideRovingGroup,
   shouldIgnoreGlobalKey,
+  frameStepKeyAction,
+  timelineKeyAction,
 } from "./keyboard-scope.ts"
+
+test("frameStepKeyAction anda 1 quadro, 10 com Shift, e aceita , .", () => {
+  const base = { defaultPrevented: false, target: null }
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowRight" }, null), 1)
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowLeft" }, null), -1)
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowRight", shiftKey: true }, null), 10)
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowLeft", shiftKey: true }, null), -10)
+  assert.equal(frameStepKeyAction({ ...base, key: "," }, null), -1)
+  assert.equal(frameStepKeyAction({ ...base, key: "." }, { kind: "source" }), 1)
+})
+
+test("frameStepKeyAction ignora ↑ ↓, modificadores e eventos já tratados", () => {
+  const base = { defaultPrevented: false, target: null }
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowUp" }, null), null)
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowRight", ctrlKey: true }, null), null)
+  assert.equal(frameStepKeyAction({ ...base, key: "ArrowRight", altKey: true }, null), null)
+  assert.equal(
+    frameStepKeyAction({ ...base, key: "ArrowRight", defaultPrevented: true }, null),
+    null,
+  )
+})
+
+test("timelineKeyAction mapeia I/O/S e ignora modificadores e repetição", () => {
+  const base = { defaultPrevented: false, target: null }
+  assert.equal(timelineKeyAction({ ...base, key: "i" }), "in")
+  assert.equal(timelineKeyAction({ ...base, key: "O" }), "out")
+  assert.equal(timelineKeyAction({ ...base, key: "s" }), "split")
+  assert.equal(timelineKeyAction({ ...base, key: "x" }), null)
+  assert.equal(timelineKeyAction({ ...base, key: "i", ctrlKey: true }), null)
+  assert.equal(timelineKeyAction({ ...base, key: "s", ctrlKey: true }), null)
+  assert.equal(timelineKeyAction({ ...base, key: "o", metaKey: true }), null)
+  assert.equal(timelineKeyAction({ ...base, key: "i", repeat: true }), null)
+  assert.equal(timelineKeyAction({ ...base, key: "i", defaultPrevented: true }), null)
+})
 
 test("shouldIgnoreGlobalKey skips prevented events", () => {
   assert.equal(shouldIgnoreGlobalKey({ defaultPrevented: true, target: null }), true)

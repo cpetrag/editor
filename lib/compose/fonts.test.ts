@@ -1,7 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { canvasFontFamily, fontIdsForRender, fontIdsUsedInComposition } from "./fonts.ts"
+import {
+  canvasFontFamily,
+  ensureComposeFontsReady,
+  fontIdsForRender,
+  fontIdsUsedInComposition,
+} from "./fonts.ts"
 import { factoryPresetFontIds } from "../style/presets.ts"
 import { COMPOSITION_VERSION, DEFAULT_CAPTION_STYLE, type Composition } from "../composition.ts"
 
@@ -142,6 +147,56 @@ test("fontIdsForRender inclui as fontes dos 16 presets mesmo sem inserts", () =>
   assert.ok(factory.includes("inter"))
   for (const id of factory) {
     assert.ok(ids.includes(id), id)
+  }
+})
+
+test("legendas padrão só pedem geist, não o catálogo de presets", () => {
+  const ids = fontIdsUsedInComposition(
+    composition({
+      inserts: [
+        {
+          id: "cap",
+          type: "legenda",
+          kind: "caption",
+          start: 0,
+          duration: 2,
+          text: "oi",
+          anchor: "bottom",
+          animIn: "none",
+          animOut: "none",
+        },
+      ],
+    }),
+  )
+  assert.deepEqual(ids, ["geist"])
+  assert.ok(!ids.includes("titan"))
+  assert.ok(!ids.includes("montserrat"))
+})
+
+test("ensureComposeFontsReady não espera document.fonts.ready global", async () => {
+  const loaded: string[] = []
+  const previous = { document: globalThis.document }
+  ;(globalThis as { document?: unknown }).document = {
+    fonts: {
+      load: async (spec: string) => {
+        loaded.push(spec)
+        return []
+      },
+      get ready() {
+        throw new Error("document.fonts.ready não deve ser aguardado")
+      },
+    },
+  }
+  try {
+    await ensureComposeFontsReady(["geist"])
+    assert.ok(loaded.some((spec) => spec.includes("Geist")))
+    assert.ok(!loaded.some((spec) => spec.includes("Titan")))
+  } finally {
+    if (previous.document) {
+      ;(globalThis as { document?: unknown }).document = previous.document
+    } else {
+      delete (globalThis as { document?: unknown }).document
+    }
   }
 })
 

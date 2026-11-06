@@ -9,11 +9,46 @@ import {
   nudgeSourceTransform,
   panSourceTransform,
   parseSourceTransform,
+  parseZoomPercent,
   scaleSourceTransform,
   scaleSourceTransformAt,
   snapFramingToCenter,
   sourceTransformOrDefault,
+  sourceZoomPercent,
+  zoomSourceTransformTo,
 } from "./source-transform.ts"
+
+test("sourceZoomPercent mostra 100% sem transform e arredonda", () => {
+  assert.equal(sourceZoomPercent(undefined), 100)
+  assert.equal(sourceZoomPercent({ scale: 1.162, x: 0, y: 0 }), 116)
+  assert.equal(sourceZoomPercent({ scale: 4, x: 0, y: 0 }), 400)
+})
+
+test("parseZoomPercent aceita inteiros 100–400 e recusa lixo", () => {
+  assert.equal(parseZoomPercent("103"), 103)
+  assert.equal(parseZoomPercent(" 150% "), 150)
+  assert.equal(parseZoomPercent("102.6"), 103)
+  assert.equal(parseZoomPercent("50"), 100)
+  assert.equal(parseZoomPercent("999"), 400)
+  assert.equal(parseZoomPercent(""), null)
+  assert.equal(parseZoomPercent("abc"), null)
+})
+
+test("zoomSourceTransformTo aplica o percentual exato a partir do centro", () => {
+  const zoomed = zoomSourceTransformTo(undefined, 103, 1080, 1920)
+  assert.equal(zoomed.scale, 1.03)
+  assert.equal(zoomed.x, 0)
+  assert.equal(zoomed.y, 0)
+})
+
+test("zoomSourceTransformTo mantém o vídeo cobrindo o quadro ao reduzir", () => {
+  const panned = clampSourceTransform({ scale: 2, x: 40, y: 0 }, 1920, 1080)
+  const reduced = zoomSourceTransformTo(panned, 100, 1920, 1080)
+  assert.equal(reduced.scale, 1)
+  const rect = getVideoRect(reduced, 1920, 1080)
+  assert.ok(rect.dx <= 0.001)
+  assert.ok(rect.dx + rect.dw >= 1080 - 0.001)
+})
 
 test("parseSourceTransform omits identity in offset space and legacy anchor 50/50", () => {
   assert.equal(parseSourceTransform(undefined), undefined)

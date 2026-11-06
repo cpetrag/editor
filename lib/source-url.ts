@@ -53,7 +53,10 @@ export function classifyImportUrl(
 ): { ok: true } | { ok: false; code: ImportErrorCode } {
   const parsed = parseAllowedImportUrl(raw)
   if (!parsed.ok) {
-    return { ok: false, code: parsed.error.startsWith("URL") ? "UNSUPPORTED" : "UNSUPPORTED" }
+    if (/não é um vídeo|not a video/i.test(parsed.error)) {
+      return { ok: false, code: "NOT_A_VIDEO" }
+    }
+    return { ok: false, code: "UNSUPPORTED" }
   }
   try {
     const url = new URL(parsed.href)
@@ -84,6 +87,7 @@ export function classifyImportUrl(
       return { ok: false, code: "NOT_A_VIDEO" }
     }
     if (host.endsWith("shp.ee") || host === "sv.shopee.com.br") return { ok: true }
+    if (host === "shopeevideos.macmini-capture.cc") return { ok: true }
   } catch {
     return { ok: false, code: "UNSUPPORTED" }
   }
@@ -152,6 +156,8 @@ export function providerLabel(provider: string | undefined): string | null {
       return "X"
     case "shopee-video":
       return "Shopee Video"
+    case "macmini-catalog":
+      return "Catálogo"
     default:
       return provider ? provider : null
   }

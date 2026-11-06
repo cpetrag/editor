@@ -7,10 +7,29 @@ import {
   hitTimelineHandle,
   moveInsertTiming,
   trimInsertIn,
+  formatTimecode,
+  stepFrameIndex,
   trimInsertOut,
 } from "./timeline-clip.ts"
 
 const insert = { start: 2, duration: 4 }
+
+test("stepFrameIndex parte do quadro mais próximo e fica dentro do vídeo", () => {
+  assert.equal(stepFrameIndex(1, 1, 30, 10), 31)
+  assert.equal(stepFrameIndex(1, -10, 30, 10), 20)
+  // 4,4s veio de um clique na timeline (décimos): quadro 132, não 131 ou 133.
+  assert.equal(stepFrameIndex(4.4, 1, 30, 10), 133)
+  assert.equal(stepFrameIndex(0, -1, 30, 10), 0)
+  assert.equal(stepFrameIndex(10, 5, 30, 10), 299)
+  assert.equal(stepFrameIndex(5, 1, 0, 10), 0)
+})
+
+test("formatTimecode mostra minuto, segundo e quadro", () => {
+  assert.equal(formatTimecode(0, 30), "0:00:00")
+  assert.equal(formatTimecode(4.4, 30), "0:04:12")
+  assert.equal(formatTimecode(65 + 29 / 30, 30), "1:05:29")
+  assert.equal(formatTimecode(-3, 30), "0:00:00")
+})
 
 test("clientXToTime maps the track edges to 0 and the video duration", () => {
   const rect = { left: 100, width: 200 }

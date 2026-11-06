@@ -496,3 +496,36 @@ test("boot apaga arquivo órfão deixado no tmp", async () => {
     await rm(tmpDir, { recursive: true, force: true })
   }
 })
+
+test("bundle webpack ausente no Mac vira mensagem em português no status", async () => {
+  const server = await startServer({
+    engine: {
+      async bundle() {
+        return { serveUrl: "http://bundle.local", version: "bundle-v1" }
+      },
+      async render() {
+        throw new Error(
+          "Tried to serve the Webpack bundle on a HTTP server, but the file /var/folders/x/index.html does not exist. Is this a valid path to a Webpack bundle?",
+        )
+      },
+    },
+  })
+  try {
+    const started = await fetch(`${server.url}/render`, { method: "POST" })
+    assert.equal(started.status, 202)
+    const { jobId } = (await started.json()) as { jobId: string }
+    const status = await waitUntil(
+      () =>
+        fetch(`${server.url}/status/${jobId}`).then((res) => res.json()) as Promise<{
+          stage: string
+          error?: string
+        }>,
+      (body) => body.stage === "error",
+    )
+    assert.equal(status.stage, "error")
+    assert.match(status.error ?? "", /cache de render/i)
+    assert.doesNotMatch(status.error ?? "", /Webpack/)
+  } finally {
+    await server.closeAll()
+  }
+})

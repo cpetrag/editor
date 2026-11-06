@@ -57,6 +57,7 @@ import { layoutCaptionInsertForPlay } from "@/lib/compose/caption-layout"
 import { trackStyleForInsert } from "@/lib/style-preset"
 import { TEXT_OVERFLOW_TOOLTIP, canvasTextMeasure, layoutInsertText } from "@/lib/compose/layout-text"
 import { resolveLayerStyle } from "@/lib/compose/resolve-style"
+import { scrollIntoPanelViewport } from "@/lib/scroll-panel"
 
 interface InsertCardProps {
   insert: Insert
@@ -240,9 +241,7 @@ export function InsertCard({
   const range = `${formatTime(insert.start)}–${formatTime(insert.start + insert.duration)}`
 
   useEffect(() => {
-    if (selected) {
-      rootRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" })
-    }
+    if (selected) scrollIntoPanelViewport(rootRef.current)
   }, [selected])
 
   useEffect(() => {
@@ -361,6 +360,23 @@ export function InsertCard({
         <p className="px-3 pb-1 text-[0.7rem] text-destructive">
           Este insert passa do fim do vídeo.
         </p>
+      ) : null}
+
+      {kind === "text" && !insert.text?.trim() ? (
+        <div className="flex items-center justify-between gap-2 px-3 pb-2" role="status">
+          <p className="flex items-center gap-1.5 text-[0.7rem] text-amber-500">
+            <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+            Texto vazio — não aparece no vídeo.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => onRemove(insert.id)}
+          >
+            Remover
+          </Button>
+        </div>
       ) : null}
 
       {missingLogo ? (

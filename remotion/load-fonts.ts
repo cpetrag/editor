@@ -15,9 +15,9 @@ import { loadFont as loadPoppins } from "@remotion/google-fonts/Poppins"
 import { loadFont as loadSpaceGrotesk } from "@remotion/google-fonts/SpaceGrotesk"
 import { loadFont as loadTitanOne } from "@remotion/google-fonts/TitanOne"
 
-import { fontIdsForRender } from "../lib/compose/fonts.ts"
+import { fontIdsUsedInComposition } from "../lib/compose/fonts.ts"
 import { WEIGHTS_BY_FONT, parseFontId, type FontId, type FontWeight } from "../lib/compose/insert-style.ts"
-import { ensureTextPresetFontsReady } from "../lib/text-presets/fonts.ts"
+import { ensureTextPresetFontsReady, TEXT_PRESET_FONT_FILES } from "../lib/text-presets/fonts.ts"
 import type { RenderProps } from "./types.ts"
 
 type FontLoader = (
@@ -66,12 +66,13 @@ function weightStrings(fontId: FontId): string[] {
 
 function usedFontIds(props: RenderProps): FontId[] {
   const ids = [
-    ...fontIdsForRender({
+    ...fontIdsUsedInComposition({
       brand: { fontId: props.brand.fontId },
       inserts: props.inserts,
       captionStyle: props.captionStyle,
       styleRef: props.styleRef,
       tracks: props.tracks,
+      customPresets: props.customPresets,
     }),
     ...(props.watermark?.text ? ["geist"] : []),
   ]
@@ -110,8 +111,11 @@ export async function waitForRenderFonts(props: RenderProps): Promise<void> {
   const cached = waitFontsByKey.get(key)
   if (cached) return cached
   const pending = (async () => {
-    await ensureTextPresetFontsReady()
-    await Promise.all(usedFontIds(props).map((fontId) => startFont(fontId).waitUntilDone()))
+    const ids = usedFontIds(props)
+    if (ids.some((id) => TEXT_PRESET_FONT_FILES.some((spec) => spec.id === id))) {
+      await ensureTextPresetFontsReady()
+    }
+    await Promise.all(ids.map((fontId) => startFont(fontId).waitUntilDone()))
   })()
   waitFontsByKey.set(key, pending)
   return pending

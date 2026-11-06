@@ -38,6 +38,16 @@ test("classifyImportUrl aceita shortlink e vídeo", () => {
   assert.equal(classifyImportUrl("https://www.tiktok.com/@x/video/123").ok, true)
 })
 
+test("classifyImportUrl aceita o mp4 do catálogo e recusa a home", () => {
+  assert.equal(
+    classifyImportUrl("https://shopeevideos.macmini-capture.cc/media/gdjj0g5l/video.mp4").ok,
+    true,
+  )
+  const home = classifyImportUrl("https://shopeevideos.macmini-capture.cc/")
+  assert.equal(home.ok, false)
+  if (!home.ok) assert.equal(home.code, "NOT_A_VIDEO")
+})
+
 test("classifyImportUrl recusa host de fora", () => {
   const result = classifyImportUrl("https://vimeo.com/123")
   assert.equal(result.ok, false)

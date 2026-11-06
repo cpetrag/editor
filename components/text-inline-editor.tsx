@@ -1,43 +1,63 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 
-import {
-  PLAY_W,
-  playBoxToCss,
-  type CanvasDisplayMetrics,
-  type RectLike,
-} from "@/lib/compose/layout"
-import { getTextPreset, isTextPresetId, renderTextPreset } from "@/lib/text-presets"
-import { DEFAULT_TEXT_PRESET_ID } from "@/lib/text-presets"
-import type { CompositionInsert } from "@/lib/composition"
+import type { InlineEditorCss, InlineEditorPlacement } from "@/lib/compose/inline-editor-style"
 
+const BLOCK_TAGS = new Set(["DIV", "P"])
+
+/**
+ * `innerText` aplicaria o `text-transform` do estilo (ex.: maiúsculas) e
+ * salvaria o texto transformado; aqui lemos o conteúdo cru do DOM.
+ */
+function readEditableText(root: HTMLElement): string {
+  let text = ""
+  const walk = (node: Node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        text += child.nodeValue ?? ""
+      } else if (child instanceof HTMLBRElement) {
+        text += "\n"
+      } else if (child instanceof HTMLElement) {
+        if (BLOCK_TAGS.has(child.tagName) && text && !text.endsWith("\n")) text += "\n"
+        walk(child)
+      }
+    }
+  }
+  walk(root)
+  // Chrome mantém um <br> final só para a última linha vazia ficar visível.
+  return root.lastChild instanceof HTMLBRElement && text.endsWith("\n") ? text.slice(0, -1) : text
+}
+
+/**
+ * Editor não controlado: o React nunca escreve dentro do div depois do mount.
+ * Re-renderizar `children` a cada tecla reescreveria o nó de texto e jogaria o
+ * cursor para o início.
+ */
 export function TextInlineEditor({
-  insert,
-  box,
-  metrics,
-  host,
+  initialText,
+  css,
+  placement,
   onChange,
   onCommit,
   onCancel,
 }: {
-  insert: CompositionInsert
-  box: { cx: number; cy: number; w: number; h: number }
-  metrics: CanvasDisplayMetrics
-  host: RectLike
+  initialText: string
+  css: InlineEditorCss
+  placement: InlineEditorPlacement
   onChange: (text: string) => void
-  onCommit: () => void
-  onCancel: () => void
+  onCommit: (text: string) => void
+  onCancel: (originalText: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const presetId = isTextPresetId(insert.preset) ? insert.preset : DEFAULT_TEXT_PRESET_ID
-  const painted = renderTextPreset(getTextPreset(presetId), insert.text ?? "", PLAY_W)
-  const css = playBoxToCss(box, metrics, host)
+  const originalRef = useRef(initialText)
+  const finishedRef = useRef(false)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    el.focus()
+    el.textContent = originalRef.current
+    el.focus({ preventScroll: true })
     const selection = window.getSelection()
     const range = document.createRange()
     range.selectNodeContents(el)
@@ -45,48 +65,72 @@ export function TextInlineEditor({
     selection?.addRange(range)
   }, [])
 
+  function finish(kind: "commit" | "cancel") {
+    if (finishedRef.current) return
+    finishedRef.current = true
+    if (kind === "cancel") {
+      onCancel(originalRef.current)
+      return
+    }
+    onCommit(ref.current ? readEditableText(ref.current) : originalRef.current)
+  }
+
   return (
     <div
       ref={ref}
       role="textbox"
       aria-label="Editar texto"
-      contentEditable
+      aria-multiline
+      contentEditable="plaintext-only"
       suppressContentEditableWarning
+      spellCheck={false}
       tabIndex={0}
       data-text-inline-editor
-      className="absolute z-30 outline-none"
+      className="absolute z-30 cursor-text outline-1 outline-offset-2 outline-sky-400/80 outline-dashed selection:bg-sky-400/35 selection:text-(--inline-editor-color)"
       style={{
-        left: css.left,
-        top: css.top,
-        minWidth: css.width,
-        minHeight: css.height,
-        fontFamily: painted.style.fontFamily,
-        fontWeight: painted.style.fontWeight,
-        fontSize: insert.fontSize ?? painted.style.fontSize,
-        color: painted.style.color,
-        letterSpacing: painted.style.letterSpacing,
-        lineHeight: painted.style.lineHeight,
-        textTransform: painted.style.textTransform,
-        textAlign: insert.textAlign ?? painted.style.textAlign,
+        ["--inline-editor-color" as string]: css.color,
+        left: placement.centerX,
+        top: placement.centerY,
+        transform: `translate(-50%, -50%)${placement.rotation ? ` rotate(${placement.rotation}deg)` : ""}`,
+        transformOrigin: "center",
+        boxSizing: "content-box",
+        width: "max-content",
+        minWidth: "1ch",
+        maxWidth: css.maxWidth,
         whiteSpace: "pre-wrap",
-        caretColor: "#38bdf8",
+        overflowWrap: "break-word",
+        fontFamily: css.fontFamily,
+        fontWeight: css.fontWeight,
+        fontSize: css.fontSize,
+        lineHeight: css.lineHeight,
+        letterSpacing: css.letterSpacing,
+        textTransform: css.textTransform,
+        textAlign: css.textAlign,
+        color: css.color,
+        caretColor: css.caretColor,
+        padding: css.padding,
+        borderRadius: css.borderRadius,
+        backgroundColor: css.backgroundColor,
+        WebkitTextStroke: css.WebkitTextStroke,
+        paintOrder: css.paintOrder,
+        textShadow: css.textShadow,
       }}
-      onInput={(event) => onChange(event.currentTarget.innerText)}
+      onInput={(event) => onChange(readEditableText(event.currentTarget))}
       onKeyDown={(event) => {
         event.stopPropagation()
         if (event.key === "Escape") {
           event.preventDefault()
-          onCancel()
+          finish("cancel")
+          return
         }
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
           event.preventDefault()
-          onCommit()
+          finish("commit")
         }
       }}
+      onBlur={() => finish("commit")}
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
-    >
-      {insert.text}
-    </div>
+    />
   )
 }

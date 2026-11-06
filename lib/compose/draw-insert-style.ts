@@ -232,20 +232,16 @@ export function paintStyledTextPlan(
   ctx.restore()
 }
 
-export function drawResolvedInsertText(
-  ctx: CanvasRenderingContext2D,
+/** Insert com fonte, tamanho, posição e caixa do estilo resolvido — base do layout pintado. */
+export function resolvedTextInsertForPlay(
   insert: CompositionInsert,
   painted: InsertStyle,
-  time: number,
-  frame: { width: number; height: number },
   brandFontId: string,
-  fps: number,
-  skipEnter = false,
-): void {
+): CompositionInsert {
   const fontId = parseFontId(painted.text.fontFamily) ?? parseFontId(brandFontId) ?? "geist"
   const fontWeight = clampFontWeight(fontId, painted.text.fontWeight as FontWeight)
   const upper = painted.text.textTransform === "uppercase"
-  const display: CompositionInsert = {
+  return {
     ...insert,
     text: upper ? (insert.text ?? "").toLocaleUpperCase("pt-BR") : insert.text,
     x: painted.text.x,
@@ -266,6 +262,19 @@ export function drawResolvedInsertText(
       rotation: painted.text.rotation,
     },
   }
+}
+
+export function drawResolvedInsertText(
+  ctx: CanvasRenderingContext2D,
+  insert: CompositionInsert,
+  painted: InsertStyle,
+  time: number,
+  frame: { width: number; height: number },
+  brandFontId: string,
+  fps: number,
+  skipEnter = false,
+): void {
+  const display = resolvedTextInsertForPlay(insert, painted, brandFontId)
   const layer = resolveLayerStyle(display, brandFontId)
   const layout = layoutInsertText(
     display,

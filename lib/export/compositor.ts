@@ -4,6 +4,7 @@ import { drawPlayInserts } from "../compose/draw-play"
 import { PLAY_H } from "../compose/layout"
 import { stickerMediaSrc } from "../compose/sticker-src"
 import { coverDrawRect, overlayDrawScale } from "./cover"
+import { sourceTransformAt } from "../source-segments.ts"
 import type { WatermarkPaint } from "../watermark.ts"
 
 export class CanvasTaintError extends Error {
@@ -141,7 +142,7 @@ export function drawFrame(
 ): void {
   const { width, height } = ctx.canvas
   try {
-    drawVideoCover(ctx, video, width, height, composition.source.transform)
+    drawVideoCover(ctx, video, width, height, sourceTransformAt(composition.source, time))
   } catch (error) {
     if (error instanceof DOMException && error.name === "SecurityError") {
       throw new CanvasTaintError()

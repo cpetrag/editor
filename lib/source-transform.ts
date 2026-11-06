@@ -204,6 +204,30 @@ export function scaleSourceTransform(
   )
 }
 
+export const SOURCE_ZOOM_PERCENT_MIN = Math.round(SOURCE_SCALE_MIN * 100)
+export const SOURCE_ZOOM_PERCENT_MAX = Math.round(SOURCE_SCALE_MAX * 100)
+
+export function sourceZoomPercent(transform: SourceTransform | undefined): number {
+  return Math.round(sourceTransformOrDefault(transform).scale * 100)
+}
+
+export function parseZoomPercent(raw: string): number | null {
+  const value = Number.parseFloat(raw.replace("%", "").trim())
+  if (!Number.isFinite(value)) return null
+  return Math.round(clamp(value, SOURCE_ZOOM_PERCENT_MIN, SOURCE_ZOOM_PERCENT_MAX))
+}
+
+export function zoomSourceTransformTo(
+  current: SourceTransform | undefined,
+  percent: number,
+  sourceWidth: number,
+  sourceHeight: number,
+): SourceTransform {
+  const base = sourceTransformOrDefault(current)
+  const target = clamp(percent, SOURCE_ZOOM_PERCENT_MIN, SOURCE_ZOOM_PERCENT_MAX) / 100
+  return scaleSourceTransform(base, target / base.scale, sourceWidth, sourceHeight)
+}
+
 export function nudgeSourceTransform(
   current: SourceTransform,
   key: string,

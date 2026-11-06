@@ -1,3 +1,5 @@
+import { MACMINI_CATALOG_HOST, macminiCatalogVideo } from "./macmini-url.ts"
+
 export type ImportPlatform =
   | "youtube"
   | "tiktok"
@@ -6,6 +8,7 @@ export type ImportPlatform =
   | "pinterest"
   | "x"
   | "shopee-video"
+  | "macmini-catalog"
 
 export type ParsedImportUrl =
   | { ok: true; platform: ImportPlatform; href: string; host: string }
@@ -36,7 +39,13 @@ export function parseAllowedImportUrl(raw: unknown): ParsedImportUrl {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { ok: false, error: "URL inválida" }
   }
-  const host = parsed.hostname.replace(/\.$/, "")
+  const host = parsed.hostname.replace(/\.$/, "").toLowerCase()
+  if (host === MACMINI_CATALOG_HOST) {
+    if (parsed.protocol !== "https:") return { ok: false, error: "URL inválida" }
+    const video = macminiCatalogVideo(parsed.href)
+    if (!video) return { ok: false, error: "não é um vídeo" }
+    return { ok: true, platform: "macmini-catalog", href: video.href, host }
+  }
   for (const [pattern, platform] of HOST_PLATFORM) {
     if (pattern.test(host)) {
       return { ok: true, platform, href: parsed.href, host }
@@ -45,6 +54,6 @@ export function parseAllowedImportUrl(raw: unknown): ParsedImportUrl {
   return {
     ok: false,
     error:
-      "host não permitido (só YouTube, TikTok, Instagram, Facebook, Pinterest, X, Shopee Video)",
+      "host não permitido (só YouTube, TikTok, Instagram, Facebook, Pinterest, X, Shopee Video e o catálogo do Mac Mini)",
   }
 }

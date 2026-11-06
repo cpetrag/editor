@@ -22,6 +22,13 @@ import {
   serializeSourceTransform,
   type SourceTransform,
 } from "./source-transform.ts"
+import { clampSourceTrim, parseSourceTrim, type SourceTrim } from "./source-trim.ts"
+import {
+  clampSourceCuts,
+  parseSourceCuts,
+  serializeSourceCuts,
+  type SourceCut,
+} from "./source-segments.ts"
 import { parseCustomPresets } from "./style/user-presets.ts"
 import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
 import { migrateTextPresetId } from "./text-presets/migrate.ts"
@@ -187,6 +194,9 @@ export interface CompositionSource {
   codec?: string
   watermarked?: boolean
   transform?: SourceTransform
+  trim?: SourceTrim
+  /** Divisões em trechos com zoom próprio; `transform` vale para o trecho inicial. */
+  cuts?: SourceCut[]
 }
 
 export interface CompositionBrand {
@@ -544,8 +554,26 @@ export function clampComposition(composition: Composition): Composition {
   if (!(duration > 0)) return composition
   return {
     ...composition,
+    source: clampSourceCutsOf(clampSourceWithTrim(composition.source)),
     inserts: composition.inserts.map((insert) => clampInsert(insert, duration)),
   }
+}
+
+/** Mantém a identidade do objeto quando o corte já está válido (evita re-render). */
+function clampSourceWithTrim(source: CompositionSource): CompositionSource {
+  if (!source.trim) return source
+  const trim = clampSourceTrim(source.trim, source.duration)
+  if (trim && trim.start === source.trim.start && trim.end === source.trim.end) return source
+  const { trim: _drop, ...rest } = source
+  return trim ? { ...rest, trim } : rest
+}
+
+function clampSourceCutsOf(source: CompositionSource): CompositionSource {
+  if (!source.cuts) return source
+  const cuts = clampSourceCuts(source.cuts, source.duration)
+  if (cuts === source.cuts) return source
+  const { cuts: _drop, ...rest } = source
+  return cuts ? { ...rest, cuts } : rest
 }
 
 function parseCaptionWords(
@@ -835,8 +863,11 @@ function parseSource(raw: unknown): CompositionSource {
   const width = asNumber(record.width) ?? DEFAULT_WIDTH
   const height = asNumber(record.height) ?? DEFAULT_HEIGHT
   const transform = parseSourceTransform(record.transform, width, height)
+  const duration = asNumber(record.duration) ?? 0
+  const trim = parseSourceTrim(record.trim, duration)
+  const cuts = parseSourceCuts(record.cuts, duration, width, height)
   return {
-    duration: asNumber(record.duration) ?? 0,
+    duration,
     fps: asNumber(record.fps) ?? DEFAULT_FPS,
     width,
     height,
@@ -850,6 +881,8 @@ function parseSource(raw: unknown): CompositionSource {
     ...(codec ? { codec } : {}),
     ...(typeof record.watermarked === "boolean" ? { watermarked: record.watermarked } : {}),
     ...(transform ? { transform } : {}),
+    ...(trim ? { trim } : {}),
+    ...(cuts ? { cuts } : {}),
   }
 }
 
@@ -1094,6 +1127,12 @@ export function serializeComposition(composition: Composition): string {
       ...(composition.source.transform &&
       !isIdentitySourceTransform(composition.source.transform)
         ? { transform: serializeSourceTransform(composition.source.transform) }
+        : {}),
+      ...(composition.source.trim
+        ? { trim: { start: composition.source.trim.start, end: composition.source.trim.end } }
+        : {}),
+      ...(composition.source.cuts && composition.source.cuts.length > 0
+        ? { cuts: serializeSourceCuts(composition.source.cuts) }
         : {}),
     },
     brand: { ...composition.brand },

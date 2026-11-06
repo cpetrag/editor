@@ -27,6 +27,32 @@ export function clientXToTime(
   return clamp(roundTenths(ratio * totalDuration), 0, totalDuration)
 }
 
+/**
+ * Quadro alvo ao andar `frames` a partir de `time`. Parte do quadro mais próximo
+ * para que cliques fora da grade (timeline arredonda em décimos) não pulem dois quadros.
+ */
+export function stepFrameIndex(
+  time: number,
+  frames: number,
+  fps: number,
+  totalDuration: number,
+): number {
+  if (!(fps > 0) || !(totalDuration > 0)) return 0
+  const lastFrame = Math.max(0, Math.floor(totalDuration * fps) - 1)
+  return clamp(Math.round(time * fps) + frames, 0, lastFrame)
+}
+
+/** `m:ss:ff`, com o quadro dentro do segundo (base `fps`). */
+export function formatTimecode(seconds: number, fps: number): string {
+  const safeFps = fps > 0 ? Math.round(fps) : 30
+  const totalFrames = Math.max(0, Math.round(seconds * safeFps))
+  const frame = totalFrames % safeFps
+  const wholeSeconds = Math.floor(totalFrames / safeFps)
+  const minutes = Math.floor(wholeSeconds / 60)
+  const secs = wholeSeconds % 60
+  return `${minutes}:${secs.toString().padStart(2, "0")}:${frame.toString().padStart(2, "0")}`
+}
+
 function applyTiming(
   next: TimingSpan,
   videoDuration: number,

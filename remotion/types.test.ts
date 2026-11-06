@@ -13,10 +13,12 @@ import {
   defaultRenderProps,
   isRenderSafeVideoSrc,
   secondsFromFrame,
+  sourceTimeFromFrame,
   toCliRenderProps,
   toRenderProps,
 } from "./types.ts"
 import { layoutInserts } from "../lib/insert-layout.ts"
+import { sourceTransformAt } from "../lib/source-segments.ts"
 
 function sampleInsert(patch: Partial<CompositionInsert> = {}): CompositionInsert {
   return {
@@ -103,6 +105,55 @@ test("toRenderProps is a pure mapping from composition + video src", () => {
   assert.equal(insert?.start, 1.2)
   assert.equal(insert?.duration, 3.4)
   assert.equal(insert?.animIn, "pop")
+})
+
+test("toRenderProps recorta a duração e mantém o tempo do arquivo nos inserts", () => {
+  const composition = sampleComposition({
+    source: {
+      duration: 18,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      fileName: "anuncio.mp4",
+      trim: { start: 2.5, end: 10 },
+    },
+  })
+  const props = toRenderProps({ composition, videoSrc: "https://cdn.example.com/clip.mp4" })
+  assert.equal(props.video.durationInSeconds, 7.5)
+  assert.equal(props.video.trimStartInSeconds, 2.5)
+  assert.equal(props.video.sourceDurationInSeconds, 18)
+  assert.equal(props.inserts[0]?.startInSeconds, 1.2)
+  assert.equal(calculateShortMetadata(props).durationInFrames, 225)
+  assert.equal(sourceTimeFromFrame(0, props), 2.5)
+  assert.equal(sourceTimeFromFrame(30, props), 3.5)
+})
+
+test("toRenderProps sem corte não manda campos de trim", () => {
+  const props = toRenderProps({ composition: sampleComposition(), videoSrc: "" })
+  assert.equal(props.video.trimStartInSeconds, undefined)
+  assert.equal(props.video.sourceDurationInSeconds, undefined)
+  assert.equal(props.video.cuts, undefined)
+  assert.equal(sourceTimeFromFrame(30, props), 1)
+})
+
+test("toRenderProps leva as divisões e o zoom muda no frame da divisão", () => {
+  const closeUp = { scale: 2, x: 0, y: 0 }
+  const composition = sampleComposition({
+    source: {
+      duration: 18,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      fileName: "anuncio.mp4",
+      trim: { start: 2, end: 12 },
+      cuts: [{ time: 5, transform: closeUp }],
+    },
+  })
+  const props = toRenderProps({ composition, videoSrc: "https://cdn.example.com/clip.mp4" })
+  assert.deepEqual(props.video.cuts, [{ time: 5, transform: closeUp }])
+  // Com entrada em 2s, o frame 89 ainda é 4,97s do arquivo e o 90 já é 5s.
+  assert.equal(sourceTransformAt(props.video, sourceTimeFromFrame(89, props)), undefined)
+  assert.deepEqual(sourceTransformAt(props.video, sourceTimeFromFrame(90, props)), closeUp)
 })
 
 test("toRenderProps keeps caption words and does not invent blob video sources", () => {

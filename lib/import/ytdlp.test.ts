@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, describe, test } from "node:test"
 
 import {
+  TIKTOK_CHROME_USER_AGENT,
   buildYtDlpArgs,
   importProxy,
   isRetryableExtractorError,
@@ -22,6 +23,21 @@ test("args pedem melhor qualidade e merge mp4 + proxy", () => {
   assert.ok(args.includes("--proxy"))
   assert.ok(args.includes("socks5://127.0.0.1:8080"))
   assert.ok(args.includes("https://youtu.be/x"))
+  assert.equal(args.includes("--user-agent"), false)
+})
+
+test("TikTok args enviam User-Agent de Chrome para passar do desafio da página", () => {
+  const canonical = buildYtDlpArgs({
+    url: "https://www.tiktok.com/@thalitaliiima/video/7659067964246854932",
+    outTemplate: "/tmp/id.%(ext)s",
+  })
+  const short = buildYtDlpArgs({
+    url: "https://vt.tiktok.com/ZMhqK8vXY/",
+    outTemplate: "/tmp/id.%(ext)s",
+  })
+  assert.equal(canonical[canonical.indexOf("--user-agent") + 1], TIKTOK_CHROME_USER_AGENT)
+  assert.equal(short[short.indexOf("--user-agent") + 1], TIKTOK_CHROME_USER_AGENT)
+  assert.match(TIKTOK_CHROME_USER_AGENT, /Chrome\/140/)
 })
 
 describe("env defaults", () => {

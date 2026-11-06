@@ -2,6 +2,7 @@ import fs from "node:fs"
 
 import { parseAllowedImportUrl } from "@/lib/import/allowlist"
 import { tryAcquireImport, releaseImport } from "@/lib/import/queue"
+import { downloadMacminiVideo } from "@/lib/import/macmini-video"
 import { downloadShopeeVideo } from "@/lib/import/shopee-video"
 import {
   createJob,
@@ -94,7 +95,18 @@ export async function POST(req: Request): Promise<Response> {
               watermarked: true,
             }),
           )
-        : runYtDlp({ url: parsed.href, destMp4: dest }).then(({ title }) => finishOk(title))
+        : parsed.platform === "macmini-catalog"
+          ? downloadMacminiVideo({ pageUrl: parsed.href, destMp4: dest }).then((meta) =>
+              finishOk(meta.title, {
+                postId: meta.code,
+                likes: meta.likes,
+                comments: meta.comments,
+                coverUrl: meta.coverUrl,
+                canonicalUrl: meta.canonicalUrl,
+                watermarked: false,
+              }),
+            )
+          : runYtDlp({ url: parsed.href, destMp4: dest }).then(({ title }) => finishOk(title))
 
     run.catch(finishErr).finally(() => {
       releaseImport()

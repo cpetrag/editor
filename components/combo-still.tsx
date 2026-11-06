@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import { ensureComposeFontsReady, fontIdsForRender } from "@/lib/compose/fonts"
+import { ensureComposeFontsReady, fontIdsUsedInComposition } from "@/lib/compose/fonts"
 import { instantiateTemplate, type Template } from "@/lib/inserts"
 import {
   COMBO_THUMB_CYCLE_MS,
@@ -110,7 +110,7 @@ export function ComboStillPreview({
 
     void (async () => {
       await ensureComposeFontsReady(
-        fontIdsForRender({
+        fontIdsUsedInComposition({
           brand: { fontId },
           inserts,
         }),

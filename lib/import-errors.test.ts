@@ -34,6 +34,13 @@ test("falha clássica do extractor TikTok pede tentar de novo", () => {
 test("UNSUPPORTED descreve a allowlist real", () => {
   assert.match(IMPORT_ERROR_COPY.UNSUPPORTED.message, /Shopee Video/)
   assert.match(IMPORT_ERROR_COPY.UNSUPPORTED.message, /Pinterest/)
+  assert.match(IMPORT_ERROR_COPY.UNSUPPORTED.message, /catálogo do Mac Mini/)
+})
+
+test("erros do catálogo mapeiam tamanho e tipo", () => {
+  assert.equal(mapImportError("vídeo grande demais").code, "TOO_LARGE")
+  assert.equal(mapImportError("resposta não é vídeo").code, "NOT_A_VIDEO")
+  assert.equal(mapImportError("mp4 HTTP 404").code, "NOT_FOUND")
 })
 
 test("NETWORK e TIMEOUT permitem retry; PRIVATE não", () => {

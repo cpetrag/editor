@@ -1,6 +1,6 @@
 import { parseDuration } from "@/lib/ai-generate"
 import { getOpenAiApiKey, transcribeCaptionWords } from "@/lib/ai-openai"
-import { WHISPER_MAX_BYTES } from "@/lib/ai-schema"
+import { AI_FAILURE_STATUS, WHISPER_MAX_BYTES } from "@/lib/ai-schema"
 import { parseMaxWords, runCaptionsPipeline } from "@/lib/captions"
 
 export const runtime = "nodejs"
@@ -57,6 +57,6 @@ export async function POST(req: Request): Promise<Response> {
     if (error instanceof Error && error.message === "captions-empty") {
       return Response.json({ error: errorMessage(error) }, { status: 422 })
     }
-    return Response.json({ error: errorMessage(error) }, { status: 502 })
+    return Response.json({ error: errorMessage(error) }, { status: AI_FAILURE_STATUS })
   }
 }

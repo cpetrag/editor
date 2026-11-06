@@ -27,108 +27,127 @@ import './globals.css'
 const geistSans = Geist({ subsets: ['latin'], variable: '--font-geist-sans', display: 'block' })
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'block' })
 
-// Fonts offered in the library for the video inserts.
+// Insert fonts stay registered for the picker, but are not preloaded. Preloading
+// every family/weight on generate-captions made Chrome swap in fallback faces.
+// Options are inlined: Turbopack rejects object spread inside next/font calls.
 const poppins = Poppins({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800', '900'],
   variable: '--font-poppins',
-  display: 'block',
 })
 const bebasNeue = Bebas_Neue({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-bebas',
-  display: 'block',
 })
 const playfair = Playfair_Display({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800', '900'],
   variable: '--font-playfair',
-  display: 'block',
 })
 const spaceGrotesk = Space_Grotesk({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700'],
   variable: '--font-space',
-  display: 'block',
 })
 const archivoBlack = Archivo_Black({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-archivo',
-  display: 'block',
 })
 const oswald = Oswald({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700'],
   variable: '--font-oswald',
-  display: 'block',
 })
 const montserrat = Montserrat({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800', '900'],
   variable: '--font-montserrat',
-  display: 'block',
 })
 const anton = Anton({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-anton',
-  display: 'block',
 })
 const inter = Inter({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800', '900'],
   variable: '--font-inter',
-  display: 'block',
 })
 const alfaSlab = Alfa_Slab_One({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-alfa',
-  display: 'block',
 })
 const nunito = Nunito({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800', '900'],
   variable: '--font-nunito',
-  display: 'block',
 })
 const lilita = Lilita_One({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-lilita',
-  display: 'block',
 })
 const luckiest = Luckiest_Guy({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-luckiest',
-  display: 'block',
 })
 const baloo = Baloo_2({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700', '800'],
   variable: '--font-baloo',
-  display: 'block',
 })
 const titan = Titan_One({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: '400',
   variable: '--font-titan',
-  display: 'block',
 })
 const caveat = Caveat({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '500', '600', '700'],
   variable: '--font-caveat',
-  display: 'block',
 })
 const courierPrime = Courier_Prime({
   subsets: ['latin'],
+  display: 'block',
+  preload: false,
   weight: ['400', '700'],
   variable: '--font-courier',
-  display: 'block',
 })
 
 const fontVariables = [
