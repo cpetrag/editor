@@ -1,21 +1,26 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { ChevronDown, Plus, Film, Sparkles, Layers } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Plus, Film, Sparkles, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 import { AppVersionBadge } from "@/components/app-version-badge"
-import { BackgroundSourceCard } from "@/components/background-source-card"
+import { BackgroundSourceCard, WatermarkFields } from "@/components/background-source-card"
 import { InsertCard } from "@/components/insert-card"
-import { CaptionTextCard } from "@/components/caption-text-card"
-import { CaptionVisualPanel } from "@/components/caption-visual-panel"
+import { CaptionLineList } from "@/components/caption-line-list"
+import { BlockToolbar, CollapsibleBlock, PanelSwitch } from "@/components/collapsible-block"
 import { ElementPicker } from "@/components/element-picker"
+import { PanelOverflowMenu } from "@/components/panel-overflow-menu"
+import { StyleCustomizePanel } from "@/components/style-customize-panel"
+import { usePanelBlocks, usePanelTab } from "@/components/use-panel-blocks"
 import type { PresetLibraryHandlers } from "@/components/style-customize-panel"
 import { AIGenerateButton } from "@/components/ai-generate-button"
 import { GenerateCaptionsButton } from "@/components/generate-captions-button"
 import { formatTimecode } from "@/lib/parse-decimal"
 import { formatTime, type Insert, type InsertType, type Template } from "@/lib/inserts"
+import { insertKind } from "@/lib/composition"
 import type { GeneratePipelineResult } from "@/lib/ai-generate"
 import type { CaptionLine } from "@/lib/captions"
 import type { CaptionStyle, CompositionSource } from "@/lib/composition"
@@ -23,26 +28,28 @@ import type { SourceImport } from "@/lib/commit-source"
 import { hasPlayableSource } from "@/lib/commit-source"
 import type { RecentSource } from "@/lib/recent-sources"
 import { DEFAULT_WATERMARK_PREFS, type WatermarkPrefs } from "@/lib/watermark"
+import { hasAnySegmentTransform } from "@/lib/source-segments"
+import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import {
   captionStyleHost,
   countCaptionInserts,
   nonCaptionInserts,
 } from "@/lib/caption-panel"
+import { describeSelection, selectableItems, selectionKindCounts } from "@/lib/timeline-selection"
 import {
   findDuplicateGroups,
   overflowingInserts,
   sortInsertsByStart,
 } from "@/lib/insert-ops"
 import {
-  DEFAULT_COLLAPSED_SECTIONS,
+  CAPTION_STYLE_BLOCK_IDS,
+  INSERT_STYLE_BLOCK_IDS,
+  MOTION_BLOCK_IDS,
   PANEL_SECTIONS,
-  loadCollapsedSections,
-  saveCollapsedSections,
-  type CollapsedSections,
-  type PanelSectionId,
+  VIDEO_BLOCK_IDS,
+  type PanelTabId,
 } from "@/lib/panel-sections"
-import { PANEL_VIEWPORT_SELECTOR } from "@/lib/scroll-panel"
 import { cn } from "@/lib/utils"
 
 interface ControlPanelProps {
@@ -66,7 +73,12 @@ interface ControlPanelProps {
   finalExportError?: string | null
   undoToast?: string | null
   onUndoToast?: () => void
+  onDismissUndoToast?: () => void
   selectedId: string | null
+  selectedIds?: readonly string[]
+  onDuplicateSelection?: () => void
+  onDeleteSelection?: () => void
+  onClearSelection?: () => void
   brandLogo: string
   brandFontId?: string
   onDraftUrlChange: (url: string) => void
@@ -80,6 +92,8 @@ interface ControlPanelProps {
   onNewProject: () => void
   onClearInserts: () => void
   onClearCaptions: () => void
+  onRevealCaption: (id: string) => void
+  panelSelectionTick?: number
   onAddText: () => void
   onAddElement: (type: InsertType) => void
   onApplyTemplate: (template: Template) => void
@@ -137,7 +151,12 @@ export function ControlPanel({
   finalExportError = null,
   undoToast = null,
   onUndoToast,
+  onDismissUndoToast,
   selectedId,
+  selectedIds = [],
+  onDuplicateSelection,
+  onDeleteSelection,
+  onClearSelection,
   brandLogo,
   brandFontId = "geist",
   onDraftUrlChange,
@@ -151,6 +170,8 @@ export function ControlPanel({
   onNewProject,
   onClearInserts,
   onClearCaptions,
+  onRevealCaption,
+  panelSelectionTick = 0,
   onAddText,
   onAddElement,
   onApplyTemplate,
@@ -222,40 +243,27 @@ export function ControlPanel({
     [inserts, selectedId],
   )
   const hasSource = hasPlayableSource(source)
+  const insertsRef = useRef(inserts)
+  insertsRef.current = inserts
+  const [tab, setTab] = usePanelTab()
+  const [captionSub, setCaptionSub] = useState<"text" | "style" | "motion">("text")
+  const videoBlocks = usePanelBlocks("video", VIDEO_BLOCK_IDS)
+  const captionStyleBlocks = usePanelBlocks("captions-style", CAPTION_STYLE_BLOCK_IDS)
+  const captionMotionBlocks = usePanelBlocks("captions-motion", MOTION_BLOCK_IDS)
+  const insertStyleBlocks = usePanelBlocks("inserts-style", INSERT_STYLE_BLOCK_IDS)
+  const insertMotionBlocks = usePanelBlocks("inserts-motion", MOTION_BLOCK_IDS)
 
-  // Começa aberto no servidor e no 1º render; o salvo entra depois para não divergir na hidratação.
-  const [collapsed, setCollapsed] = useState<CollapsedSections>(DEFAULT_COLLAPSED_SECTIONS)
   useEffect(() => {
-    setCollapsed(loadCollapsedSections())
-  }, [])
-  const toggleSection = useCallback((id: PanelSectionId) => {
-    setCollapsed((current) => {
-      const next = { ...current, [id]: !current[id] }
-      saveCollapsedSections(next)
-      return next
-    })
-  }, [])
+    if (!selectedId) return
+    const insert = insertsRef.current.find((item) => item.id === selectedId)
+    if (!insert) return
+    setTab(insertKind(insert) === "caption" ? "captions" : "inserts")
+  }, [panelSelectionTick, selectedId, setTab])
 
-  const sectionRefs = useRef<Partial<Record<PanelSectionId, HTMLElement | null>>>({})
-  const goToSection = useCallback((id: PanelSectionId) => {
-    setCollapsed((current) => {
-      if (!current[id]) return current
-      const next = { ...current, [id]: false }
-      saveCollapsedSections(next)
-      return next
-    })
-    requestAnimationFrame(() => {
-      const element = sectionRefs.current[id]
-      const viewport = element?.closest(PANEL_VIEWPORT_SELECTOR)
-      if (!element || !(viewport instanceof HTMLElement)) return
-      const delta = element.getBoundingClientRect().top - viewport.getBoundingClientRect().top
-      viewport.scrollBy({ top: delta, behavior: "smooth" })
-    })
-  }, [])
-  const sectionCounts: Partial<Record<PanelSectionId, number>> = {
-    captions: captionCount,
-    inserts: orderedInserts.length,
-  }
+  const visibleTab: PanelTabId = hasSource ? tab : "video"
+  const selectedCaption =
+    inserts.find((insert) => insert.id === selectedId && insertKind(insert) === "caption") ?? null
+  const showSourceBlocks = hasSource && !replacingSource && importState.status === "idle"
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-r border-border bg-background">
@@ -306,248 +314,387 @@ export function ControlPanel({
         )}
       </header>
 
-      <nav
+      <div
+        role="tablist"
         aria-label="Seções do painel"
-        className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5"
+        className="flex shrink-0 border-b border-border"
       >
-        {PANEL_SECTIONS.map((section, index) => {
+        {PANEL_SECTIONS.map((section) => {
           const disabled = section.id !== "video" && !hasSource
-          const count = sectionCounts[section.id]
+          const selected = visibleTab === section.id
+          const count =
+            section.id === "captions" ? captionCount : section.id === "inserts" ? orderedInserts.length : null
+          const label = count == null ? section.label : `${section.label} (${count})`
           return (
-            <span key={section.id} className="flex items-center gap-1">
-              {index > 0 ? (
-                <span className="text-xs text-muted-foreground/50" aria-hidden>
-                  ·
-                </span>
-              ) : null}
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => goToSection(section.id)}
-                className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-              >
-                {section.label}
-                {count ? <span className="ml-1 tabular-nums opacity-70">{count}</span> : null}
-              </button>
-            </span>
+            <button
+              key={section.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              disabled={disabled}
+              className={cn(
+                "min-w-0 flex-1 border-b-2 px-2 py-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40",
+                selected
+                  ? "border-brand text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setTab(section.id)}
+            >
+              {label}
+            </button>
           )
         })}
-      </nav>
+      </div>
+
+      {visibleTab === "captions" && selectedCaption ? (
+        <SelectedCaptionBar
+          insert={selectedCaption}
+          onChange={onChangeInsert}
+          onBegin={onBeginInsertGesture}
+          onEnd={onEndInsertGesture}
+          onUseSharedStyle={() => {
+            onResetInsertStyleOverrides(selectedCaption.id)
+            if (selectedCaption.transform?.touchedByUser) onResetInsertPosition(selectedCaption.id)
+          }}
+        />
+      ) : null}
+
+      {visibleTab === "video" ? (
+        <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border px-2 py-1">
+          {showSourceBlocks ? (
+            <BlockToolbar
+              allOpen={videoBlocks.allOpen}
+              onExpandAll={videoBlocks.expandAll}
+              onCollapseAll={videoBlocks.collapseAll}
+            />
+          ) : null}
+          <PanelOverflowMenu
+            label="Ações do vídeo"
+            items={[
+              {
+                id: "clear-inserts",
+                label: "Limpar inserts",
+                disabled: inserts.length === 0,
+                destructive: true,
+                confirmTitle: "Limpar inserts?",
+                confirmBody: "Isso apaga os inserts e as legendas deste projeto.",
+                confirmLabel: "Limpar",
+                onSelect: onClearInserts,
+              },
+            ]}
+          />
+        </div>
+      ) : null}
+
+      {visibleTab === "captions" ? (
+        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+          <div role="tablist" aria-label="Partes da legenda" className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-muted p-1">
+            {(
+              [
+                ["text", "Texto"],
+                ["style", "Estilo"],
+                ["motion", "Movimento"],
+              ] as const
+            ).map(([id, label]) => {
+              const selected = captionSub === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                    selected
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setCaptionSub(id)}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <div className="flex w-[10.25rem] shrink-0 items-center justify-end gap-1">
+            <BlockToolbar
+              hidden={captionSub === "text"}
+              allOpen={
+                captionSub === "motion" ? captionMotionBlocks.allOpen : captionStyleBlocks.allOpen
+              }
+              onExpandAll={
+                captionSub === "motion" ? captionMotionBlocks.expandAll : captionStyleBlocks.expandAll
+              }
+              onCollapseAll={
+                captionSub === "motion"
+                  ? captionMotionBlocks.collapseAll
+                  : captionStyleBlocks.collapseAll
+              }
+            />
+            <span className={cn("inline-flex w-6 justify-center", captionSub === "text" && "invisible")}>
+              <PanelOverflowMenu
+                label="Ações das legendas"
+                items={[
+                  {
+                    id: "clear-captions",
+                    label: "Limpar legendas",
+                    disabled: !hasCaptions,
+                    destructive: true,
+                    confirmTitle: "Limpar legendas?",
+                    confirmBody: "As linhas de legenda saem do projeto. Os outros inserts ficam.",
+                    confirmLabel: "Limpar",
+                    onSelect: onClearCaptions,
+                  },
+                ]}
+              />
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {visibleTab === "inserts" ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
+          <Button variant="outline" size="sm" onClick={onAddText}>
+            <Plus data-icon="inline-start" />
+            Texto
+          </Button>
+          <ElementPicker
+            activeTemplateId={activeTemplateId}
+            onAddElement={onAddElement}
+            onApplyTemplate={onApplyTemplate}
+          />
+          <AIGenerateButton
+            duration={videoDuration}
+            loadMedia={loadAiMedia}
+            onGenerate={onGenerateAI}
+            onStatus={onAiStatus}
+          />
+        </div>
+      ) : null}
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 px-5 pb-5">
-          <PanelSection
-            id="video"
-            title="Vídeo"
-            collapsed={collapsed.video}
-            onToggle={toggleSection}
-            sectionRef={(element) => {
-              sectionRefs.current.video = element
-            }}
-          >
-            <BackgroundSourceCard
-              source={source}
-              missingFile={missingFile}
-              importState={importState}
-              draftUrl={draftUrl}
-              replacing={replacingSource}
-              elapsedSeconds={elapsedSeconds}
-              recent={recentSources}
-              previousSource={previousSource}
-              burnedInWarning={burnedInWarning}
-              onDraftUrlChange={onDraftUrlChange}
-              onSubmitUrl={onSubmitUrl}
-              onPickFile={onPickFile}
-              onUseRecent={onUseRecent}
-              onReplace={onReplaceSource}
-              onRestorePrevious={onRestorePrevious}
-              onRetry={onRetryImport}
-              onDownloadCopy={onDownloadCopy}
-              canClearInserts={inserts.length > 0}
-              onClearInserts={onClearInserts}
-              sourceSelected={sourceSelected}
-              onSelectSource={onSelectSource}
-              onResetTransform={onResetTransform}
-              watermarkEnabled={watermarkEnabled}
-              watermarkPrefs={watermarkPrefs}
-              onWatermarkEnabledChange={onWatermarkEnabledChange}
-              onWatermarkPrefsChange={onWatermarkPrefsChange}
+        <div className="flex flex-col gap-3 px-4 py-3">
+          {selectedIds.length >= 2 ? (
+            <SelectionSummaryCard
+              inserts={inserts}
+              selectedIds={selectedIds}
+              onDuplicate={onDuplicateSelection}
+              onDelete={onDeleteSelection}
+              onClear={onClearSelection}
             />
-          </PanelSection>
-
-          {hasSource ? (
+          ) : null}
+          {visibleTab === "video" ? (
             <>
-              <PanelSection
-                id="captions"
-                title="Legendas"
-                count={captionCount}
-                collapsed={collapsed.captions}
-                onToggle={toggleSection}
-                sectionRef={(element) => {
-                  sectionRefs.current.captions = element
-                }}
-                actions={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    disabled={!hasCaptions}
-                    onClick={onClearCaptions}
+              <BackgroundSourceCard
+                source={source}
+                missingFile={missingFile}
+                importState={importState}
+                draftUrl={draftUrl}
+                replacing={replacingSource}
+                elapsedSeconds={elapsedSeconds}
+                recent={recentSources}
+                previousSource={previousSource}
+                burnedInWarning={burnedInWarning}
+                onDraftUrlChange={onDraftUrlChange}
+                onSubmitUrl={onSubmitUrl}
+                onPickFile={onPickFile}
+                onUseRecent={onUseRecent}
+                onReplace={onReplaceSource}
+                onRestorePrevious={onRestorePrevious}
+                onRetry={onRetryImport}
+                onDownloadCopy={onDownloadCopy}
+                sourceSelected={sourceSelected}
+                onSelectSource={onSelectSource}
+              />
+              {showSourceBlocks ? (
+                <>
+                  <CollapsibleBlock
+                    title="Enquadramento e trechos"
+                    summary={framingSummary(source)}
+                    open={videoBlocks.isOpen("framing")}
+                    onToggle={() => videoBlocks.toggle("framing")}
                   >
-                    Limpar legendas
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      className="self-start"
+                      disabled={!hasAnySegmentTransform(source)}
+                      onClick={onResetTransform}
+                    >
+                      Resetar enquadramento
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Arraste o vídeo no preview. Divida ou junte trechos na timeline.
+                    </p>
+                  </CollapsibleBlock>
+                  <CollapsibleBlock
+                    title="Marca d'água"
+                    summary={watermarkSummary(watermarkEnabled, watermarkPrefs)}
+                    open={videoBlocks.isOpen("watermark")}
+                    onToggle={() => videoBlocks.toggle("watermark")}
+                    headerAside={
+                      <PanelSwitch
+                        checked={watermarkEnabled}
+                        label="Marca d'água neste vídeo"
+                        onChange={(next) => onWatermarkEnabledChange?.(next)}
+                      />
+                    }
+                  >
+                    <WatermarkFields prefs={watermarkPrefs} onPrefsChange={onWatermarkPrefsChange} />
+                  </CollapsibleBlock>
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          {visibleTab === "captions" && captionSub === "text" ? (
+            <>
+              <GenerateCaptionsButton
+                duration={videoDuration}
+                disabled={!canGenerateCaptions}
+                loadMedia={loadAiMedia}
+                onGenerate={onGenerateCaptions}
+                onStatus={onAiStatus}
+              />
+              <CaptionLineList inserts={inserts} selectedId={selectedId} onReveal={onRevealCaption} />
+            </>
+          ) : null}
+
+          {visibleTab === "captions" && captionSub === "style" ? (
+            styleHost ? (
+              <StyleCustomizePanel
+                insert={styleHost}
+                videoDuration={videoDuration}
+                tracks={tracks}
+                project={projectStyle}
+                captionStyle={captionStyle}
+                captionPreset={captionPreset}
+                tab="style"
+                context="caption"
+                captionInserts={inserts}
+                onSelectLook={onApplyCaptionLook}
+                onPatchStyle={(path, value) => onPatchInsertStyle(styleHost.id, path, value)}
+                onResetField={(path) => onResetInsertStyleField(styleHost.id, path)}
+                onResetOverrides={() => onResetInsertStyleOverrides(styleHost.id)}
+                onResetPosition={() => onResetInsertPosition(styleHost.id)}
+                onApplyPreset={onApplyStylePreset}
+                onApplyToTrack={() => onApplyStyleToTrack(styleHost.id)}
+                onBeginGesture={onBeginInsertGesture}
+                onEndGesture={onEndInsertGesture}
+                presetLibrary={presetLibrary}
+                isBlockOpen={captionStyleBlocks.isOpen}
+                onToggleBlock={captionStyleBlocks.toggle}
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                O estilo das legendas aparece depois de gerar.
+              </p>
+            )
+          ) : null}
+
+          {visibleTab === "captions" && captionSub === "motion" ? (
+            styleHost ? (
+              <StyleCustomizePanel
+                insert={styleHost}
+                videoDuration={videoDuration}
+                tracks={tracks}
+                project={projectStyle}
+                captionStyle={captionStyle}
+                captionPreset={captionPreset}
+                tab="motion"
+                context="caption"
+                onPatchStyle={(path, value) => onPatchInsertStyle(styleHost.id, path, value)}
+                onResetField={(path) => onResetInsertStyleField(styleHost.id, path)}
+                onResetOverrides={() => onResetInsertStyleOverrides(styleHost.id)}
+                onResetPosition={() => onResetInsertPosition(styleHost.id)}
+                onApplyPreset={onApplyStylePreset}
+                onApplyToTrack={() => onApplyStyleToTrack(styleHost.id)}
+                onBeginGesture={onBeginInsertGesture}
+                onEndGesture={onEndInsertGesture}
+                presetLibrary={presetLibrary}
+                isBlockOpen={captionMotionBlocks.isOpen}
+                onToggleBlock={captionMotionBlocks.toggle}
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                O movimento das legendas aparece depois de gerar.
+              </p>
+            )
+          ) : null}
+
+          {visibleTab === "inserts" ? (
+            <>
+              {overflowing.length > 0 ? (
+                <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {overflowing.length} insert
+                  {overflowing.length === 1 ? "" : "s"} passam do fim do vídeo
+                  {videoDuration > 0 ? ` (${formatTime(videoDuration)})` : ""}.
+                </p>
+              ) : null}
+
+              {duplicateGroups.map((group) => (
+                <div
+                  key={group.ids.join("-")}
+                  className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2"
+                >
+                  <p className="text-xs text-muted-foreground">
+                    {group.ids.length} inserts idênticos
+                  </p>
+                  <Button variant="outline" size="sm" onClick={() => onMergeDuplicates(group.ids)}>
+                    Mesclar
                   </Button>
-                }
-              >
-                <GenerateCaptionsButton
-                  duration={videoDuration}
-                  disabled={!canGenerateCaptions}
-                  loadMedia={loadAiMedia}
-                  onGenerate={onGenerateCaptions}
-                  onStatus={onAiStatus}
-                />
-                {hasCaptions && styleHost ? (
-                  <>
-                    <CaptionVisualPanel
-                      host={styleHost}
-                      inserts={inserts}
+                </div>
+              ))}
+
+              {orderedInserts.length === 0 ? (
+                hasCaptions ? (
+                  <p className="text-xs text-muted-foreground">Nenhum chip, texto ou PNG ainda.</p>
+                ) : (
+                  <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border px-4 py-8 text-center">
+                    <Sparkles className="mb-1 size-5 text-muted-foreground/70" />
+                    <p className="text-sm font-medium text-foreground">Nenhum insert ainda</p>
+                    <p className="text-xs text-muted-foreground">
+                      Comece pelo gancho — os 2 primeiros segundos.
+                    </p>
+                  </div>
+                )
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {orderedInserts.map((insert, index) => (
+                    <InsertCard
+                      key={insert.id}
+                      insert={insert}
+                      index={index}
                       videoDuration={videoDuration}
-                      captionStyle={captionStyle}
-                      captionPreset={captionPreset}
-                      userPresets={presetLibrary?.presets}
-                      onSelectLook={onApplyCaptionLook}
-                      tracks={tracks}
-                      projectStyle={projectStyle}
-                      onPatchStyle={(path, value) => onPatchInsertStyle(styleHost.id, path, value)}
-                      onResetField={(path) => onResetInsertStyleField(styleHost.id, path)}
-                      onResetOverrides={() => onResetInsertStyleOverrides(styleHost.id)}
-                      onResetPosition={() => onResetInsertPosition(styleHost.id)}
-                      onApplyPreset={onApplyStylePreset}
-                      onApplyToTrack={() => onApplyStyleToTrack(styleHost.id)}
-                      onBeginGesture={onBeginInsertGesture}
-                      onEndGesture={onEndInsertGesture}
-                      presetLibrary={presetLibrary}
-                    />
-                    <CaptionTextCard
-                      inserts={inserts}
-                      selectedId={selectedId}
+                      expanded={selectedIds.length < 2 && selectedId === insert.id}
+                      selected={selectedIds.length < 2 && selectedId === insert.id}
+                      overflowing={overflowingIds.has(insert.id)}
+                      missingLogo={insert.type === "logo-shopee" && !brandLogo}
+                      brandFontId={brandFontId}
+                      onToggle={() => onSelectInsert(insert.id)}
                       onChange={onChangeInsert}
+                      onRemove={onRemoveInsert}
                       onBeginInsertGesture={onBeginInsertGesture}
                       onEndInsertGesture={onEndInsertGesture}
+                      captionStyle={captionStyle}
+                      captionPreset={captionPreset}
+                      onChangeCaptionStyle={onChangeCaptionStyle}
+                      tracks={tracks}
+                      projectStyle={projectStyle}
+                      onPatchStyle={(path, value) => onPatchInsertStyle(insert.id, path, value)}
+                      onResetStyleField={(path) => onResetInsertStyleField(insert.id, path)}
+                      onResetStyleOverrides={() => onResetInsertStyleOverrides(insert.id)}
+                      onResetPosition={() => onResetInsertPosition(insert.id)}
+                      onApplyStylePreset={onApplyStylePreset}
+                      onApplyStyleToTrack={() => onApplyStyleToTrack(insert.id)}
+                      presetLibrary={presetLibrary}
+                      styleBlocks={insertStyleBlocks}
+                      motionBlocks={insertMotionBlocks}
                     />
-                  </>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    O estilo das legendas aparece depois de gerar.
-                  </p>
-                )}
-              </PanelSection>
-
-              <PanelSection
-                id="inserts"
-                title="Inserts"
-                icon={<Layers className="size-4 text-muted-foreground" />}
-                count={orderedInserts.length}
-                collapsed={collapsed.inserts}
-                onToggle={toggleSection}
-                sectionRef={(element) => {
-                  sectionRefs.current.inserts = element
-                }}
-              >
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <AIGenerateButton
-                    duration={videoDuration}
-                    loadMedia={loadAiMedia}
-                    onGenerate={onGenerateAI}
-                    onStatus={onAiStatus}
-                  />
-                  <Button variant="outline" size="sm" onClick={onAddText}>
-                    <Plus data-icon="inline-start" />
-                    Texto
-                  </Button>
-                  <ElementPicker
-                    activeTemplateId={activeTemplateId}
-                    onAddElement={onAddElement}
-                    onApplyTemplate={onApplyTemplate}
-                  />
+                  ))}
                 </div>
-
-                {overflowing.length > 0 ? (
-                  <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {overflowing.length} insert
-                    {overflowing.length === 1 ? "" : "s"} passam do fim do vídeo
-                    {videoDuration > 0 ? ` (${formatTime(videoDuration)})` : ""}.
-                  </p>
-                ) : null}
-
-                {duplicateGroups.map((group) => (
-                  <div
-                    key={group.ids.join("-")}
-                    className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2"
-                  >
-                    <p className="text-xs text-muted-foreground">
-                      {group.ids.length} inserts idênticos
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onMergeDuplicates(group.ids)}
-                    >
-                      Mesclar
-                    </Button>
-                  </div>
-                ))}
-
-                {orderedInserts.length === 0 ? (
-                  hasCaptions ? (
-                    <p className="text-xs text-muted-foreground">
-                      Nenhum chip, texto ou PNG ainda.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border px-4 py-8 text-center">
-                      <Sparkles className="mb-1 size-5 text-muted-foreground/70" />
-                      <p className="text-sm font-medium text-foreground">
-                        Nenhum insert ainda
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Comece pelo gancho — os 2 primeiros segundos.
-                      </p>
-                    </div>
-                  )
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {orderedInserts.map((insert, index) => (
-                      <InsertCard
-                        key={insert.id}
-                        insert={insert}
-                        index={index}
-                        videoDuration={videoDuration}
-                        expanded={selectedId === insert.id}
-                        selected={selectedId === insert.id}
-                        overflowing={overflowingIds.has(insert.id)}
-                        missingLogo={insert.type === "logo-shopee" && !brandLogo}
-                        brandFontId={brandFontId}
-                        onToggle={() => onSelectInsert(insert.id)}
-                        onChange={onChangeInsert}
-                        onRemove={onRemoveInsert}
-                        onBeginInsertGesture={onBeginInsertGesture}
-                        onEndInsertGesture={onEndInsertGesture}
-                        captionStyle={captionStyle}
-                        captionPreset={captionPreset}
-                        onChangeCaptionStyle={onChangeCaptionStyle}
-                        tracks={tracks}
-                        projectStyle={projectStyle}
-                        onPatchStyle={(path, value) => onPatchInsertStyle(insert.id, path, value)}
-                        onResetStyleField={(path) => onResetInsertStyleField(insert.id, path)}
-                        onResetStyleOverrides={() => onResetInsertStyleOverrides(insert.id)}
-                        onResetPosition={() => onResetInsertPosition(insert.id)}
-                        onApplyStylePreset={onApplyStylePreset}
-                        onApplyStyleToTrack={() => onApplyStyleToTrack(insert.id)}
-                        presetLibrary={presetLibrary}
-                      />
-                    ))}
-                  </div>
-                )}
-              </PanelSection>
+              )}
             </>
           ) : null}
         </div>
@@ -580,12 +727,7 @@ export function ControlPanel({
             {renderReplies > 0 ? ` · ${renderReplies} respostas do Mac` : ""}
           </p>
         ) : undoToast ? (
-          <div className="flex items-center justify-center gap-2" role="status">
-            <span className="text-xs text-muted-foreground">{undoToast}</span>
-            <Button type="button" variant="outline" size="xs" onClick={onUndoToast}>
-              Desfazer
-            </Button>
-          </div>
+          <UndoToast message={undoToast} onUndo={onUndoToast} onDismiss={onDismissUndoToast} />
         ) : liveMessage && !finalExportError ? (
           <p className="text-center text-xs text-muted-foreground" aria-live="polite">
             {liveMessage}
@@ -601,58 +743,143 @@ export function ControlPanel({
   )
 }
 
-function PanelSection({
-  id,
-  title,
-  icon,
-  count,
-  actions,
-  collapsed,
-  onToggle,
-  sectionRef,
-  children,
+function SelectionSummaryCard({
+  inserts,
+  selectedIds,
+  onDuplicate,
+  onDelete,
+  onClear,
 }: {
-  id: PanelSectionId
-  title: string
-  icon?: ReactNode
-  count?: number
-  actions?: ReactNode
-  collapsed: boolean
-  onToggle: (id: PanelSectionId) => void
-  sectionRef: (element: HTMLElement | null) => void
-  children: ReactNode
+  inserts: Insert[]
+  selectedIds: readonly string[]
+  onDuplicate?: () => void
+  onDelete?: () => void
+  onClear?: () => void
 }) {
-  const contentId = `panel-section-${id}`
+  const summary = describeSelection(selectionKindCounts(selectableItems(inserts), selectedIds))
   return (
-    <section ref={sectionRef} data-panel-section={id} className="flex flex-col gap-3" aria-labelledby={`${contentId}-title`}>
-      {/* Sticky dentro do viewport do ScrollArea: o título da seção fica visível ao rolar. */}
-      <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between gap-2 border-b border-border bg-background/95 px-5 py-2 backdrop-blur-sm">
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          aria-expanded={!collapsed}
-          aria-controls={contentId}
-          onClick={() => onToggle(id)}
-        >
-          <ChevronDown
-            className={cn("size-4 shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")}
-            aria-hidden
-          />
-          {icon}
-          <h2 id={`${contentId}-title`} className="truncate text-sm font-semibold text-foreground">
-            {title}
-          </h2>
-          {count ? (
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.7rem] font-medium tabular-nums text-muted-foreground">
-              {count}
-            </span>
-          ) : null}
-        </button>
-        {actions && !collapsed ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
+    <div className="rounded-lg border border-brand bg-card px-3 py-2 ring-1 ring-brand/40">
+      <p className="text-sm font-medium text-foreground">{summary}</p>
+      <div className="mt-2 flex items-center gap-1">
+        <Button type="button" variant="outline" size="xs" onClick={onDuplicate}>
+          Duplicar
+        </Button>
+        <Button type="button" variant="outline" size="xs" onClick={onDelete}>
+          Apagar
+        </Button>
+        <Button type="button" variant="ghost" size="icon-xs" aria-label="Limpar seleção" onClick={onClear}>
+          <X />
+        </Button>
       </div>
-      <div id={contentId} hidden={collapsed} className="flex flex-col gap-3">
-        {children}
-      </div>
-    </section>
+    </div>
   )
 }
+
+function UndoToast({
+  message,
+  onUndo,
+  onDismiss,
+}: {
+  message: string
+  onUndo?: () => void
+  onDismiss?: () => void
+}) {
+  const [paused, setPaused] = useState(false)
+  const remainingRef = useRef(8_000)
+  const dismiss = useCallback(() => onDismiss?.(), [onDismiss])
+
+  useEffect(() => {
+    remainingRef.current = 8_000
+    setPaused(false)
+  }, [message])
+
+  useEffect(() => {
+    if (paused || !onDismiss) return
+    const started = Date.now()
+    const timer = window.setTimeout(dismiss, remainingRef.current)
+    return () => {
+      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - started))
+      window.clearTimeout(timer)
+    }
+  }, [dismiss, message, onDismiss, paused])
+
+  useEffect(() => {
+    if (!onDismiss) return
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target
+      if (target instanceof Element && target.closest("[data-undo-toast]")) return
+      dismiss()
+    }
+    window.addEventListener("pointerdown", onPointerDown)
+    return () => window.removeEventListener("pointerdown", onPointerDown)
+  }, [dismiss, onDismiss])
+
+  return (
+    <div
+      data-undo-toast
+      className="flex items-center justify-center gap-2"
+      role="status"
+      onPointerEnter={() => setPaused(true)}
+      onPointerLeave={() => setPaused(false)}
+    >
+      <span className="text-xs text-muted-foreground">{message}</span>
+      <Button type="button" variant="outline" size="xs" onClick={onUndo}>
+        Desfazer
+      </Button>
+    </div>
+  )
+}
+
+function framingSummary(source: CompositionSource): string {
+  const cuts = source.cuts?.length ?? 0
+  const adjusted = hasAnySegmentTransform(source)
+  if (cuts > 0 && adjusted) return `${cuts + 1} trechos · ajustado`
+  if (cuts > 0) return `${cuts + 1} trechos`
+  return adjusted ? "ajustado" : "original"
+}
+
+function watermarkSummary(enabled: boolean, prefs: WatermarkPrefs): string {
+  if (!enabled) return "desligada"
+  const name = prefs.text.trim() || "sem texto"
+  return `${name} · ${prefs.opacityPct}% · ${prefs.loop ? "loop" : "parado"}`
+}
+
+function SelectedCaptionBar({
+  insert,
+  onChange,
+  onBegin,
+  onEnd,
+  onUseSharedStyle,
+}: {
+  insert: Insert
+  onChange: (id: string, patch: Partial<Insert>) => void
+  onBegin?: () => void
+  onEnd?: () => void
+  onUseSharedStyle: () => void
+}) {
+  const preview = insert.text?.trim() || "Legenda"
+  const own = hasInsertOverrides(insert.styleRef) || insert.transform?.touchedByUser === true
+  const range = `${formatTime(insert.start)}–${formatTime(insert.start + insert.duration)}`
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-2">
+      <p className="truncate text-xs font-medium text-foreground">
+        Linha selecionada: &apos;{preview}&apos; · {range}
+      </p>
+      <Textarea
+        aria-label="Texto da linha selecionada"
+        value={insert.text ?? ""}
+        placeholder="Texto da linha"
+        rows={2}
+        onChange={(event) => onChange(insert.id, { text: event.target.value })}
+        onFocus={() => onBegin?.()}
+        onBlur={() => onEnd?.()}
+      />
+      {own ? (
+        <Button type="button" variant="outline" size="xs" className="self-start" onClick={onUseSharedStyle}>
+          Voltar ao estilo geral
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+

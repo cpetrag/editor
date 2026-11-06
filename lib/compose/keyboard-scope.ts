@@ -73,6 +73,54 @@ export function timelineKeyAction(event: {
 
 export const FRAME_STEP_HINT = "← → anda 1 quadro · Shift + seta anda 10 · , e . também"
 
+const TIMELINE_PREVIEW_SELECTOR = "[data-preview-stage], [data-editor-timeline]"
+
+/** Foco na timeline ou no preview. O body não entra: Ctrl+A fora dali continua do navegador. */
+export function isTimelineOrPreviewTarget(target: EventTarget | null): boolean {
+  if (typeof Element === "undefined" || !(target instanceof Element)) return false
+  return target.closest(TIMELINE_PREVIEW_SELECTOR) !== null
+}
+
+export type TimelineSelectionKey =
+  | "select-all"
+  | "delete"
+  | "duplicate"
+  | { nudge: number }
+
+/**
+ * Atalhos da seleção múltipla. Ctrl+A só na timeline/preview.
+ * Delete, Ctrl+D e Alt+setas valem fora de input/textarea/contentEditable.
+ */
+export function timelineSelectionKey(
+  event: {
+    key: string
+    defaultPrevented: boolean
+    target: EventTarget | null
+    shiftKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+    altKey?: boolean
+  },
+  inTimelineOrPreview: boolean,
+): TimelineSelectionKey | null {
+  if (shouldIgnoreGlobalKey(event)) return null
+  const key = event.key.toLowerCase()
+  const command = Boolean(event.ctrlKey || event.metaKey)
+  if (command && key === "a" && !event.shiftKey && !event.altKey) {
+    return inTimelineOrPreview ? "select-all" : null
+  }
+  if (command && key === "d" && !event.shiftKey && !event.altKey) return "duplicate"
+  if (event.key === "Delete" || event.key === "Backspace") {
+    if (command || event.altKey) return null
+    return "delete"
+  }
+  if (!event.altKey || command) return null
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return null
+  if (isInsideRovingGroup(event.target)) return null
+  const frames = (event.shiftKey ? 10 : 1) * (event.key === "ArrowLeft" ? -1 : 1)
+  return { nudge: frames }
+}
+
 /**
  * Quantos quadros andar com ← → (Shift = 10) ou , e . (sempre 1).
  * As setas ficam com o nudge quando há algo selecionado e o foco está no

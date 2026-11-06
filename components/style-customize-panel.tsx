@@ -1,8 +1,10 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
-import { Download, RotateCcw, Upload } from "lucide-react"
+import { useMemo, useState } from "react"
 
+import { CaptionPresetRow } from "@/components/caption-style-card"
+import { CollapsibleBlock } from "@/components/collapsible-block"
+import { StylePresetMenu } from "@/components/style-preset-menu"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -17,7 +19,8 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { ColorField } from "@/components/insert-style-panel"
 import { TextPresetChips } from "@/components/text-preset-chips"
-import { FONT_OPTIONS } from "@/lib/inserts"
+import { FONT_MAP, FONT_OPTIONS } from "@/lib/inserts"
+import { formatPanelNumber } from "@/lib/panel-number"
 import { FontOptionLabel } from "@/components/font-option-label"
 import { WEIGHTS_BY_FONT, clampFontWeight, type FontId, type FontWeight } from "@/lib/compose/insert-style"
 import { insertKind, type CaptionPreset, type CaptionStyle, type CompositionInsert } from "@/lib/composition"
@@ -71,29 +74,36 @@ function rangeGestureHandlers(onBegin?: () => void, onEnd?: () => void) {
 
 function Accordion({
   title,
+  summary,
   open,
   onToggle,
   children,
 }: {
   title: string
+  summary?: string
   open: boolean
   onToggle: () => void
   children: React.ReactNode
 }) {
   return (
-    <div className="rounded-md border border-border">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between px-2.5 py-2 text-left text-xs font-medium hover:bg-muted/60"
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        {title}
-        <span className="text-muted-foreground">{open ? "Ocultar" : "Mostrar"}</span>
-      </button>
-      {open ? <div className="flex flex-col gap-3 border-t border-border p-2.5">{children}</div> : null}
-    </div>
+    <CollapsibleBlock title={title} summary={summary} open={open} onToggle={onToggle}>
+      {children}
+    </CollapsibleBlock>
   )
+}
+
+function colorLabel(color: string): string {
+  const hex = color.trim().toLowerCase()
+  if (hex === "#000" || hex === "#000000" || hex === "black") return "preto"
+  if (hex === "#fff" || hex === "#ffffff" || hex === "white") return "branco"
+  return color
+}
+
+const HIGHLIGHT_SUMMARY: Record<string, string> = {
+  nenhum: "nenhum",
+  "palavra-ativa": "palavra ativa",
+  "karaoke-fill": "karaokê",
+  "palavras-chave": "palavras-chave",
 }
 
 function OriginField({
@@ -161,7 +171,7 @@ function NumberInput({
       id={id}
       type="number"
       className="h-7 w-full rounded-md border border-border bg-background px-2 font-mono text-xs"
-      value={Number.isFinite(value) ? value : 0}
+      value={Number.isFinite(value) ? formatPanelNumber(value) : "0"}
       min={min}
       max={max}
       step={step}
@@ -187,9 +197,6 @@ const SHADOW_SHORTCUT_LABEL: Record<ShadowShortcutId, string> = {
   glow: "Glow",
 }
 
-type StyleAccordionId = "type" | "fill" | "stroke" | "bg" | "highlight"
-type MotionAccordionId = "enter" | "exit" | "loop" | "unit"
-
 export function StyleCustomizePanel({
   insert,
   videoDuration,
@@ -209,6 +216,10 @@ export function StyleCustomizePanel({
   presetLibrary,
   context = "insert",
   onApplyTextPreset,
+  onSelectLook,
+  captionInserts,
+  isBlockOpen,
+  onToggleBlock,
 }: {
   insert: CompositionInsert
   videoDuration: number
@@ -228,15 +239,16 @@ export function StyleCustomizePanel({
   presetLibrary?: PresetLibraryHandlers
   context?: "insert" | "caption"
   onApplyTextPreset?: (presetId: string) => void
+  onSelectLook?: (lookId: string) => void
+  captionInserts?: CompositionInsert[]
+  isBlockOpen: (id: string) => boolean
+  onToggleBlock: (id: string) => void
 }) {
   const kind = insertKind(insert)
-  const [openStyle, setOpenStyle] = useState<StyleAccordionId>("type")
-  const [openMotion, setOpenMotion] = useState<MotionAccordionId>("enter")
   const [savingAs, setSavingAs] = useState(false)
   const [saveName, setSaveName] = useState("")
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState("")
-  const importRef = useRef<HTMLInputElement>(null)
   const userPresets = presetLibrary?.presets ?? []
   const track = useMemo(
     () => trackStyleForInsert(insert, tracks, videoDuration),
@@ -275,6 +287,36 @@ export function StyleCustomizePanel({
     (id) => JSON.stringify(SHADOW_SHORTCUTS[id]) === JSON.stringify(shadows),
   )
   const gesture = rangeGestureHandlers(onBeginGesture, onEndGesture)
+  const fontLabel = FONT_MAP[resolved.text.fontFamily]?.label ?? resolved.text.fontFamily
+  const typeSummary = `${fontLabel} · ${formatPanelNumber(resolved.text.fontSize)}px · ${resolved.text.textTransform === "uppercase" ? "AA" : "Aa"}`
+  const alignLabel =
+    resolved.text.textAlign === "left" ? "esquerda" : resolved.text.textAlign === "right" ? "direita" : "centro"
+  const layoutSummary = `${alignLabel} · ${formatPanelNumber(resolved.text.maxWidth)}%`
+  const fillSummary = resolved.text.gradient.enabled ? "gradiente" : resolved.text.color
+  const strokeSummary = resolved.text.stroke.enabled
+    ? `${formatPanelNumber(resolved.text.stroke.width)}px ${colorLabel(resolved.text.stroke.color)}`
+    : "desligado"
+  const bgSummary = resolved.text.background.enabled ? "ligado" : "desligado"
+  const highlightSummary = HIGHLIGHT_SUMMARY[resolved.text.highlight.mode] ?? resolved.text.highlight.mode
+  const enterSummary = activeRecipe ? RECIPE_LABEL[activeRecipe] : "personalizada"
+  const exitSummary = `${formatPanelNumber(resolved.animation.exit.durationInFrames)} frames`
+  const presetMenu = (
+    <StylePresetMenu
+      presetLibrary={presetLibrary}
+      modified={modified}
+      positionTouched={Boolean(insert.transform?.touchedByUser)}
+      isMine={isMine}
+      showApplyToTrack={context === "insert"}
+      onSaveAs={beginSaveAs}
+      onApplyClean={() => onApplyPreset(activeRef.presetId, "clean")}
+      onResetStyle={onResetOverrides}
+      onResetPosition={onResetPosition}
+      onApplyToTrack={onApplyToTrack}
+      onUpdate={isMine ? () => presetLibrary?.update(activeRef.presetId) : undefined}
+      onRename={isMine ? beginRename : undefined}
+      onRemove={isMine ? () => presetLibrary?.remove(activeRef.presetId) : undefined}
+    />
+  )
 
   function beginSaveAs() {
     setSaveName(`Cópia de ${presetLabel}`)
@@ -302,10 +344,6 @@ export function StyleCustomizePanel({
     setRenaming(false)
   }
 
-  function toggleStyle(id: StyleAccordionId) {
-    setOpenStyle(id)
-  }
-
   function patchAnimTarget(basePath: string, current: AnimTarget, key: keyof AnimTarget, value: number) {
     onPatchStyle(basePath, { ...current, [key]: value })
   }
@@ -314,51 +352,39 @@ export function StyleCustomizePanel({
 
   return (
     <div className="flex flex-col gap-3">
-      {kind === "text" && tab === "style" && onApplyTextPreset ? (
+      {context === "caption" && tab === "style" && onSelectLook ? (
+        <CaptionPresetRow
+          inserts={captionInserts ?? [insert]}
+          captionStyle={captionStyle}
+          captionPreset={captionPreset}
+          userPresets={userPresets}
+          onSelectLook={onSelectLook}
+          menu={presetMenu}
+        />
+      ) : tab === "style" ? (
         <TextPresetChips
           selectedId={insert.preset}
-          modified={hasInsertOverrides(insert.styleRef)}
-          onSelect={onApplyTextPreset}
-          onReset={() =>
-            onApplyTextPreset(
-              isTextPresetId(insert.preset) ? insert.preset : DEFAULT_TEXT_PRESET_ID,
-            )
+          modified={modified}
+          showTextPresets={kind === "text" && Boolean(onApplyTextPreset)}
+          onSelect={(id) => onApplyTextPreset?.(id)}
+          onReset={
+            onApplyTextPreset
+              ? () =>
+                  onApplyTextPreset(
+                    isTextPresetId(insert.preset) ? insert.preset : DEFAULT_TEXT_PRESET_ID,
+                  )
+              : undefined
           }
+          menu={presetMenu}
+          stylePresets={chips}
+          activeStyleId={activeRef.presetId}
+          userPresets={userPresets}
+          resolvedStyle={resolved}
+          onSelectStyle={(id) => onApplyPreset(id, "preserve")}
         />
       ) : null}
-      <div className="flex flex-col gap-2 rounded-md border border-border p-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={activeRef.presetId}
-            onValueChange={(value) => {
-              if (value) onApplyPreset(value, "preserve")
-            }}
-          >
-            <SelectTrigger className="h-7 min-w-[8rem] flex-1 text-xs" aria-label="Preset de estilo">
-              <SelectValue>{() => presetLabel}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {chips.map((chip) => (
-                  <SelectItem key={chip.id} value={chip.id}>
-                    {chip.label}
-                    {chip.mine ? " · meu" : ""}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          {isMine ? (
-            <span className="rounded bg-brand/15 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-brand">
-              meu
-            </span>
-          ) : null}
-          {modified ? (
-            <span className="text-[0.7rem] text-muted-foreground" title="Há overrides neste insert">
-              • modificado
-            </span>
-          ) : null}
-        </div>
+      {tab === "style" ? (
+      <div className="flex flex-col gap-2">
         {savingAs ? (
           <div className="flex flex-wrap items-center gap-1.5">
             <Input
@@ -397,98 +423,13 @@ export function StyleCustomizePanel({
               Cancelar
             </Button>
           </div>
-        ) : (
-          <div className="flex flex-wrap gap-1.5">
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              disabled={!presetLibrary}
-              onClick={beginSaveAs}
-            >
-              Salvar como…
-            </Button>
-            <Button type="button" variant="outline" size="xs" onClick={() => onApplyPreset(activeRef.presetId, "clean")}>
-              Aplicar limpo
-            </Button>
-            <Button type="button" variant="outline" size="xs" onClick={onResetOverrides} disabled={!modified}>
-              <RotateCcw data-icon="inline-start" />
-              Resetar estilo
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              onClick={onResetPosition}
-              disabled={!insert.transform?.touchedByUser}
-            >
-              Resetar posição
-            </Button>
-            {presetLibrary && isMine ? (
-              <>
-                <Button type="button" variant="outline" size="xs" onClick={() => presetLibrary.update(activeRef.presetId)}>
-                  Atualizar
-                </Button>
-                <Button type="button" variant="outline" size="xs" onClick={beginRename}>
-                  Renomear
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={() => presetLibrary.remove(activeRef.presetId)}
-                >
-                  Excluir
-                </Button>
-              </>
-            ) : null}
-            {presetLibrary ? (
-              <>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  title="Exportar presets meus em JSON"
-                  onClick={presetLibrary.exportAll}
-                >
-                  <Download data-icon="inline-start" />
-                  Exportar
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  title="Importar presets de um JSON"
-                  onClick={() => importRef.current?.click()}
-                >
-                  <Upload data-icon="inline-start" />
-                  Importar
-                </Button>
-                <input
-                  ref={importRef}
-                  type="file"
-                  accept="application/json"
-                  className="sr-only"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0]
-                    if (file) presetLibrary.importFile(file)
-                    event.target.value = ""
-                  }}
-                />
-              </>
-            ) : null}
-          </div>
-        )}
-        {context === "insert" ? (
-          <Button type="button" variant="secondary" size="xs" onClick={onApplyToTrack}>
-            Aplicar a todos os inserts de texto
-          </Button>
         ) : null}
       </div>
+      ) : null}
 
       {tab === "style" ? (
         <>
-          <Accordion title="Tipografia" open={openStyle === "type"} onToggle={() => toggleStyle("type")}>
+          <Accordion title="Tipografia" summary={typeSummary} open={isBlockOpen("type")} onToggle={() => onToggleBlock("type")}>
             <OriginField
               label="Fonte"
               origin={originOf("text.fontFamily")}
@@ -521,7 +462,7 @@ export function StyleCustomizePanel({
               </Select>
             </OriginField>
             <OriginField
-              label={`Tamanho ${resolved.text.fontSize}px · quadro 1080`}
+              label={`Tamanho ${formatPanelNumber(resolved.text.fontSize)}px · quadro 1080`}
               origin={originOf("text.fontSize")}
               htmlFor={`size-${insert.id}`}
               onReset={() => onResetField("text.fontSize")}
@@ -562,6 +503,76 @@ export function StyleCustomizePanel({
                 </SelectContent>
               </Select>
             </OriginField>
+            <OriginField
+              label="Caixa"
+              origin={originOf("text.textTransform")}
+              onReset={() => onResetField("text.textTransform")}
+            >
+              <ToggleGroup
+                value={[resolved.text.textTransform]}
+                onValueChange={(value) => {
+                  const next = value[0]
+                  if (next === "none" || next === "uppercase") onPatchStyle("text.textTransform", next)
+                }}
+                variant="outline"
+                className="w-full"
+              >
+                <ToggleGroupItem value="none" className="flex-1 text-xs">
+                  Aa
+                </ToggleGroupItem>
+                <ToggleGroupItem value="uppercase" className="flex-1 text-xs">
+                  AA
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </OriginField>
+          </Accordion>
+
+          <Accordion title="Layout" summary={layoutSummary} open={isBlockOpen("layout")} onToggle={() => onToggleBlock("layout")}>
+            <OriginField
+              label="Alinhamento"
+              origin={originOf("text.textAlign")}
+              onReset={() => onResetField("text.textAlign")}
+            >
+              <ToggleGroup
+                value={[resolved.text.textAlign]}
+                onValueChange={(value) => {
+                  const next = value[0]
+                  if (next === "left" || next === "center" || next === "right") {
+                    onPatchStyle("text.textAlign", next)
+                  }
+                }}
+                variant="outline"
+                className="w-full"
+              >
+                <ToggleGroupItem value="left" className="flex-1 text-xs">
+                  Esq
+                </ToggleGroupItem>
+                <ToggleGroupItem value="center" className="flex-1 text-xs">
+                  Centro
+                </ToggleGroupItem>
+                <ToggleGroupItem value="right" className="flex-1 text-xs">
+                  Dir
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </OriginField>
+            <OriginField
+              label={`Largura máx. ${formatPanelNumber(resolved.text.maxWidth)}%`}
+              origin={originOf("text.maxWidth")}
+              htmlFor={`mw-${insert.id}`}
+              onReset={() => onResetField("text.maxWidth")}
+            >
+              <input
+                id={`mw-${insert.id}`}
+                type="range"
+                min={20}
+                max={100}
+                step={1}
+                value={resolved.text.maxWidth}
+                onChange={(event) => onPatchStyle("text.maxWidth", Number(event.target.value))}
+                {...gesture}
+                className="h-7 w-full accent-brand"
+              />
+            </OriginField>
             <div className="grid grid-cols-2 gap-3">
               <OriginField
                 label="Espaçamento"
@@ -596,76 +607,59 @@ export function StyleCustomizePanel({
                 />
               </OriginField>
             </div>
-            <OriginField
-              label="Caixa"
-              origin={originOf("text.textTransform")}
-              onReset={() => onResetField("text.textTransform")}
-            >
-              <ToggleGroup
-                value={[resolved.text.textTransform]}
-                onValueChange={(value) => {
-                  const next = value[0]
-                  if (next === "none" || next === "uppercase") onPatchStyle("text.textTransform", next)
-                }}
-                variant="outline"
-                className="w-full"
+            <div className="grid grid-cols-2 gap-3">
+              <OriginField
+                label="X (%)"
+                origin={originOf("text.x")}
+                htmlFor={`sx-${insert.id}`}
+                onReset={() => onResetField("text.x")}
               >
-                <ToggleGroupItem value="none" className="flex-1 text-xs">
-                  Aa
-                </ToggleGroupItem>
-                <ToggleGroupItem value="uppercase" className="flex-1 text-xs">
-                  AA
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </OriginField>
-            <OriginField
-              label="Alinhamento"
-              origin={originOf("text.textAlign")}
-              onReset={() => onResetField("text.textAlign")}
-            >
-              <ToggleGroup
-                value={[resolved.text.textAlign]}
-                onValueChange={(value) => {
-                  const next = value[0]
-                  if (next === "left" || next === "center" || next === "right") {
-                    onPatchStyle("text.textAlign", next)
-                  }
-                }}
-                variant="outline"
-                className="w-full"
+                <NumberInput
+                  id={`sx-${insert.id}`}
+                  value={resolved.text.x}
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  onChange={(value) => onPatchStyle("text.x", value)}
+                  onBegin={onBeginGesture}
+                  onEnd={onEndGesture}
+                />
+              </OriginField>
+              <OriginField
+                label="Y (%)"
+                origin={originOf("text.y")}
+                htmlFor={`sy-${insert.id}`}
+                onReset={() => onResetField("text.y")}
               >
-                <ToggleGroupItem value="left" className="flex-1 text-xs">
-                  Esq
-                </ToggleGroupItem>
-                <ToggleGroupItem value="center" className="flex-1 text-xs">
-                  Centro
-                </ToggleGroupItem>
-                <ToggleGroupItem value="right" className="flex-1 text-xs">
-                  Dir
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </OriginField>
-            <OriginField
-              label={`Largura máx. ${resolved.text.maxWidth}%`}
-              origin={originOf("text.maxWidth")}
-              htmlFor={`mw-${insert.id}`}
-              onReset={() => onResetField("text.maxWidth")}
-            >
-              <input
-                id={`mw-${insert.id}`}
-                type="range"
-                min={20}
-                max={100}
-                step={1}
-                value={resolved.text.maxWidth}
-                onChange={(event) => onPatchStyle("text.maxWidth", Number(event.target.value))}
-                {...gesture}
-                className="h-7 w-full accent-brand"
-              />
-            </OriginField>
+                <NumberInput
+                  id={`sy-${insert.id}`}
+                  value={resolved.text.y}
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  onChange={(value) => onPatchStyle("text.y", value)}
+                  onBegin={onBeginGesture}
+                  onEnd={onEndGesture}
+                />
+              </OriginField>
+              <OriginField
+                label="Rotação"
+                origin={originOf("text.rotation")}
+                htmlFor={`rot-${insert.id}`}
+                onReset={() => onResetField("text.rotation")}
+              >
+                <NumberInput
+                  id={`rot-${insert.id}`}
+                  value={resolved.text.rotation}
+                  onChange={(value) => onPatchStyle("text.rotation", value)}
+                  onBegin={onBeginGesture}
+                  onEnd={onEndGesture}
+                />
+              </OriginField>
+            </div>
           </Accordion>
 
-          <Accordion title="Preenchimento" open={openStyle === "fill"} onToggle={() => toggleStyle("fill")}>
+          <Accordion title="Preenchimento" summary={fillSummary} open={isBlockOpen("fill")} onToggle={() => onToggleBlock("fill")}>
             <OriginField
               label="Cor"
               origin={originOf("text.color")}
@@ -719,7 +713,7 @@ export function StyleCustomizePanel({
                   }}
                 />
                 <OriginField
-                  label={`Ângulo ${resolved.text.gradient.angle}°`}
+                  label={`Ângulo ${formatPanelNumber(resolved.text.gradient.angle)}°`}
                   origin={originOf("text.gradient.angle")}
                   htmlFor={`grad-ang-${insert.id}`}
                   onReset={() => onResetField("text.gradient.angle")}
@@ -739,7 +733,7 @@ export function StyleCustomizePanel({
             ) : null}
           </Accordion>
 
-          <Accordion title="Contorno & Sombra" open={openStyle === "stroke"} onToggle={() => toggleStyle("stroke")}>
+          <Accordion title="Contorno & Sombra" summary={strokeSummary} open={isBlockOpen("stroke")} onToggle={() => onToggleBlock("stroke")}>
             <OriginField
               label="Contorno"
               origin={originOf("text.stroke.enabled")}
@@ -760,7 +754,7 @@ export function StyleCustomizePanel({
               </ToggleGroup>
             </OriginField>
             <OriginField
-              label={`Espessura ${resolved.text.stroke.width}px`}
+              label={`Espessura ${formatPanelNumber(resolved.text.stroke.width)}px`}
               origin={originOf("text.stroke.width")}
               htmlFor={`sw-${insert.id}`}
               onReset={() => onResetField("text.stroke.width")}
@@ -850,7 +844,7 @@ export function StyleCustomizePanel({
             </Button>
           </Accordion>
 
-          <Accordion title="Fundo" open={openStyle === "bg"} onToggle={() => toggleStyle("bg")}>
+          <Accordion title="Fundo" summary={bgSummary} open={isBlockOpen("bg")} onToggle={() => onToggleBlock("bg")}>
             <OriginField
               label="Ativo"
               origin={originOf("text.background.enabled")}
@@ -906,7 +900,7 @@ export function StyleCustomizePanel({
               }}
             />
             <OriginField
-              label={`Opacidade ${resolved.text.background.opacity}%`}
+              label={`Opacidade ${formatPanelNumber(resolved.text.background.opacity)}%`}
               origin={originOf("text.background.opacity")}
               htmlFor={`bgo-${insert.id}`}
               onReset={() => onResetField("text.background.opacity")}
@@ -978,7 +972,8 @@ export function StyleCustomizePanel({
             </OriginField>
           </Accordion>
 
-          <Accordion title="Destaque" open={openStyle === "highlight"} onToggle={() => toggleStyle("highlight")}>
+          {kind === "caption" ? (
+          <Accordion title="Destaque" summary={highlightSummary} open={isBlockOpen("highlight")} onToggle={() => onToggleBlock("highlight")}>
             <OriginField
               label="Modo"
               origin={originOf("text.highlight.mode")}
@@ -1047,66 +1042,17 @@ export function StyleCustomizePanel({
               />
             </OriginField>
           </Accordion>
+          ) : null}
         </>
       ) : null}
 
       {tab === "motion" ? (
         <>
-          <div className="grid grid-cols-2 gap-3">
-            <OriginField
-              label="X (%)"
-              origin={originOf("text.x")}
-              htmlFor={`sx-${insert.id}`}
-              onReset={() => onResetField("text.x")}
-            >
-              <NumberInput
-                id={`sx-${insert.id}`}
-                value={resolved.text.x}
-                min={0}
-                max={100}
-                step={0.1}
-                onChange={(value) => onPatchStyle("text.x", value)}
-                onBegin={onBeginGesture}
-                onEnd={onEndGesture}
-              />
-            </OriginField>
-            <OriginField
-              label="Y (%)"
-              origin={originOf("text.y")}
-              htmlFor={`sy-${insert.id}`}
-              onReset={() => onResetField("text.y")}
-            >
-              <NumberInput
-                id={`sy-${insert.id}`}
-                value={resolved.text.y}
-                min={0}
-                max={100}
-                step={0.1}
-                onChange={(value) => onPatchStyle("text.y", value)}
-                onBegin={onBeginGesture}
-                onEnd={onEndGesture}
-              />
-            </OriginField>
-            <OriginField
-              label="Rotação"
-              origin={originOf("text.rotation")}
-              htmlFor={`rot-${insert.id}`}
-              onReset={() => onResetField("text.rotation")}
-            >
-              <NumberInput
-                id={`rot-${insert.id}`}
-                value={resolved.text.rotation}
-                onChange={(value) => onPatchStyle("text.rotation", value)}
-                onBegin={onBeginGesture}
-                onEnd={onEndGesture}
-              />
-            </OriginField>
-          </div>
-
           <Accordion
             title="Entrada"
-            open={openMotion === "enter"}
-            onToggle={() => setOpenMotion("enter")}
+            summary={enterSummary}
+            open={isBlockOpen("enter")}
+            onToggle={() => onToggleBlock("enter")}
           >
             <Field>
               <FieldLabel>Recipe</FieldLabel>
@@ -1201,7 +1147,7 @@ export function StyleCustomizePanel({
             </OriginField>
           </Accordion>
 
-          <Accordion title="Saída" open={openMotion === "exit"} onToggle={() => setOpenMotion("exit")}>
+          <Accordion title="Saída" summary={exitSummary} open={isBlockOpen("exit")} onToggle={() => onToggleBlock("exit")}>
             <AnimTargetFields
               idPrefix={`to-${insert.id}`}
               current={resolved.animation.exit.to}
@@ -1235,7 +1181,7 @@ export function StyleCustomizePanel({
             </OriginField>
           </Accordion>
 
-          <Accordion title="Loop" open={openMotion === "loop"} onToggle={() => setOpenMotion("loop")}>
+          <Accordion title="Loop" summary={resolved.animation.loop.type} open={isBlockOpen("loop")} onToggle={() => onToggleBlock("loop")}>
             <OriginField
               label="Tipo"
               origin={originOf("animation.loop.type")}
@@ -1296,7 +1242,7 @@ export function StyleCustomizePanel({
             </OriginField>
           </Accordion>
 
-          <Accordion title="Unidade" open={openMotion === "unit"} onToggle={() => setOpenMotion("unit")}>
+          <Accordion title="Unidade" summary={resolved.animation.unit} open={isBlockOpen("unit")} onToggle={() => onToggleBlock("unit")}>
             <OriginField
               label="Anima por"
               origin={originOf("animation.unit")}

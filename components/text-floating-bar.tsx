@@ -13,18 +13,23 @@ import {
   Type,
 } from "lucide-react"
 
-import { TEXT_PRESET_FONT_FILES } from "@/lib/text-presets"
 import { TEXT_PRESETS, type TextPresetId } from "@/lib/text-presets"
+import { FONT_OPTIONS } from "@/lib/fonts"
 import type { OverlayTextAlign } from "@/lib/composition"
 import { cn } from "@/lib/utils"
 
 const ALIGNMENTS: OverlayTextAlign[] = ["left", "center", "right"]
 
+function fontChoices(fontId: string) {
+  if (FONT_OPTIONS.some((font) => font.id === fontId)) return FONT_OPTIONS
+  return [{ id: fontId, label: fontId || "Fonte", family: fontId, vibe: "" }, ...FONT_OPTIONS]
+}
+
 export function TextFloatingBar({
   presetId,
   color,
   align,
-  fontFamily,
+  fontId,
   sampling,
   backgroundOn,
   shadowOn,
@@ -46,7 +51,7 @@ export function TextFloatingBar({
   presetId?: string
   color: string
   align: OverlayTextAlign
-  fontFamily: string
+  fontId: string
   sampling: boolean
   backgroundOn: boolean
   shadowOn: boolean
@@ -72,7 +77,7 @@ export function TextFloatingBar({
       )}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="flex max-w-[9.5rem] gap-0.5 overflow-x-auto">
+      <div className="flex max-w-[9.5rem] gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {TEXT_PRESETS.map((preset) => (
           <button
             key={preset.id}
@@ -186,13 +191,13 @@ export function TextFloatingBar({
       <label className="flex items-center gap-1 rounded-full bg-white/5 px-2 py-1 text-[0.65rem]">
         <Type className="size-3" />
         <select
-          value={fontFamily}
+          value={fontId}
           onChange={(event) => onFont(event.target.value)}
-          className="max-w-[5.5rem] bg-transparent text-zinc-100 outline-none"
+          className="max-w-[6.5rem] bg-transparent text-zinc-100 outline-none"
           aria-label="Fonte"
         >
-          {TEXT_PRESET_FONT_FILES.map((font) => (
-            <option key={font.id} value={font.family} className="text-zinc-950">
+          {fontChoices(fontId).map((font) => (
+            <option key={font.id} value={font.id} className="text-zinc-950">
               {font.label}
             </option>
           ))}

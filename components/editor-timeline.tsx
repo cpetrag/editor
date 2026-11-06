@@ -10,6 +10,7 @@ import { sourceZoomPercent } from "@/lib/source-transform"
 import type { SourceCut, listSourceSegments } from "@/lib/source-segments"
 import { clientXToTime, type TimelineHandle } from "@/lib/timeline-clip"
 import {
+  TIMELINE_CLIP_HEIGHT,
   TIMELINE_ZOOM_MIN,
   clipShowsLabel,
   layoutTimelineTracks,
@@ -17,6 +18,13 @@ import {
   scrollLeftToReveal,
   zoomFromWheel,
 } from "@/lib/timeline-layout"
+import {
+  MARQUEE_DRAG_PX,
+  idsTouchingRect,
+  marqueeSelection,
+  selectableItems,
+  type PxRect,
+} from "@/lib/timeline-selection"
 import { cn } from "@/lib/utils"
 
 type SourceSegment = ReturnType<typeof listSourceSegments>[number]
@@ -53,6 +61,14 @@ export interface EditorTimelineProps {
   onScrubStart?: () => void
   onTrimPointerDown: (event: React.PointerEvent, edge: "in" | "out") => void
   onClipPointerDown: (event: React.PointerEvent, insert: Insert, handle: TimelineHandle) => void
+  selectedIds?: readonly string[]
+  snapGuideTime?: number | null
+  onChangeSelection?: (ids: string[], primaryId: string | null) => void
+  onSelectionCommand?: (
+    command: "duplicate" | "delete" | "align" | "track",
+    ids: string[],
+    primaryId: string,
+  ) => void
 }
 
 export function EditorTimeline({
@@ -77,9 +93,25 @@ export function EditorTimeline({
   onScrubStart,
   onTrimPointerDown,
   onClipPointerDown,
+  selectedIds,
+  snapGuideTime = null,
+  onChangeSelection,
+  onSelectionCommand,
 }: EditorTimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const scrubbingRef = useRef(false)
+  const marqueeRef = useRef<{
+    originX: number
+    originY: number
+    additive: boolean
+  } | null>(null)
+  const [marquee, setMarquee] = useState<PxRect | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    ids: string[]
+    primaryId: string
+  } | null>(null)
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const [viewportWidth, setViewportWidth] = useState(0)
@@ -153,35 +185,153 @@ export function EditorTimeline({
     return clientXToTime(clientX, content.getBoundingClientRect(), totalDuration)
   }
 
+  function contentPoint(clientX: number, clientY: number): { x: number; y: number } | null {
+    const content = contentRef.current
+    if (!content) return null
+    const rect = content.getBoundingClientRect()
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
+
+  function clipRects(): { id: string; rect: PxRect }[] {
+    const width = contentWidth
+    if (!(totalDuration > 0) || !(width > 0)) return []
+    const rects: { id: string; rect: PxRect }[] = []
+    for (const insert of inserts) {
+      if (!selectableItems([insert]).length) continue
+      const top = rulerHeight + 4 + (layout.clipTops.get(insert.id) ?? 0)
+      const left = (insert.start / totalDuration) * width
+      const clipWidth = Math.max((insert.duration / totalDuration) * width, 6)
+      rects.push({
+        id: insert.id,
+        rect: { left, top, right: left + clipWidth, bottom: top + TIMELINE_CLIP_HEIGHT },
+      })
+    }
+    return rects
+  }
+
   function onScrubPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || exporting || !(totalDuration > 0)) return
+    const point = contentPoint(event.clientX, event.clientY)
+    if (!point) return
     event.preventDefault()
     event.currentTarget.focus({ preventScroll: true })
+    setContextMenu(null)
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
-      // Ponteiro já solto (ex.: toque cancelado): o scrub segue só com os eventos que chegarem.
+      // Ponteiro já solto (ex.: toque cancelado): o gesto segue só com os eventos que chegarem.
     }
-    scrubbingRef.current = true
+    if (point.y <= rulerHeight) {
+      scrubbingRef.current = true
+      marqueeRef.current = null
+      onScrubStart?.()
+      onSeek(timeAtClientX(event.clientX))
+      return
+    }
+    scrubbingRef.current = false
+    marqueeRef.current = {
+      originX: event.clientX,
+      originY: event.clientY,
+      additive: event.ctrlKey || event.metaKey || event.shiftKey,
+    }
+    setMarquee(null)
     onScrubStart?.()
-    onSeek(timeAtClientX(event.clientX))
   }
 
   function onScrubPointerMove(event: React.PointerEvent<HTMLDivElement>) {
-    if (!scrubbingRef.current) return
-    onSeek(timeAtClientX(event.clientX))
+    if (scrubbingRef.current) {
+      onSeek(timeAtClientX(event.clientX))
+      return
+    }
+    const drag = marqueeRef.current
+    if (!drag) return
+    const moved = Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY)
+    if (moved < MARQUEE_DRAG_PX) return
+    const start = contentPoint(drag.originX, drag.originY)
+    const current = contentPoint(event.clientX, event.clientY)
+    if (!start || !current) return
+    setMarquee({
+      left: Math.min(start.x, current.x),
+      top: Math.min(start.y, current.y),
+      right: Math.max(start.x, current.x),
+      bottom: Math.max(start.y, current.y),
+    })
   }
 
   function endScrub(event: React.PointerEvent<HTMLDivElement>) {
-    if (!scrubbingRef.current) return
-    scrubbingRef.current = false
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    if (scrubbingRef.current) {
+      scrubbingRef.current = false
+      return
+    }
+    const drag = marqueeRef.current
+    marqueeRef.current = null
+    if (!drag) return
+    const moved = Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY)
+    setMarquee(null)
+    if (moved < MARQUEE_DRAG_PX) {
+      onChangeSelection?.([], null)
+      onSeek(timeAtClientX(event.clientX))
+      return
+    }
+    const start = contentPoint(drag.originX, drag.originY)
+    const current = contentPoint(event.clientX, event.clientY)
+    if (!start || !current || !onChangeSelection) return
+    const hit = idsTouchingRect(clipRects(), {
+      left: Math.min(start.x, current.x),
+      top: Math.min(start.y, current.y),
+      right: Math.max(start.x, current.x),
+      bottom: Math.max(start.y, current.y),
+    })
+    const next = marqueeSelection(
+      { ids: [...(selectedIds ?? [])], primaryId: selectedInsertId },
+      hit,
+      selectableItems(inserts),
+      drag.additive,
+    )
+    onChangeSelection(next.ids, next.primaryId)
   }
+
+  function openClipMenu(event: React.MouseEvent, insert: Insert) {
+    const ids = selectedIds ?? []
+    const already = ids.includes(insert.id)
+    const menuIds = already ? [...ids] : [insert.id]
+    if (!already) onChangeSelection?.(menuIds, insert.id)
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      ids: menuIds,
+      primaryId: insert.id,
+    })
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return
+    function close() {
+      setContextMenu(null)
+    }
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target
+      if (target instanceof Element && target.closest("[data-timeline-menu]")) return
+      close()
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") close()
+    }
+    window.addEventListener("pointerdown", onPointerDown)
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [contextMenu])
 
   const segmentsTrack = layout.tracks.find((track) => track.id === "segments")
   const tracksHeight = layout.height
+  const selectedIdList = selectedIds ?? (selectedInsertId ? [selectedInsertId] : [])
+  const singleSelection = selectedIdList.length === 1
 
   return (
     <div data-editor-timeline className="flex max-h-[34vh] min-h-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-background/40">
@@ -335,6 +485,7 @@ export function EditorTimeline({
 
               {inserts.map((insert) => {
                 const widthPct = pct(insert.duration)
+                const selected = selectedIdList.includes(insert.id)
                 return (
                   <TimelineClipBar
                     key={insert.id}
@@ -343,9 +494,12 @@ export function EditorTimeline({
                     widthPct={widthPct}
                     top={layout.clipTops.get(insert.id) ?? 0}
                     showLabel={clipShowsLabel((widthPct / 100) * contentWidth)}
-                    selected={selectedInsertId === insert.id}
+                    selected={selected}
+                    primary={selected && insert.id === selectedInsertId}
+                    showHandles={singleSelection && insert.id === selectedInsertId}
                     disabled={exporting}
                     onPointerDown={(event, handle) => onClipPointerDown(event, insert, handle)}
+                    onContextMenu={(event) => openClipMenu(event, insert)}
                   />
                 )
               })}
@@ -399,6 +553,59 @@ export function EditorTimeline({
                 })
               : null}
           </div>
+
+          {marquee ? (
+            <div
+              className="pointer-events-none absolute z-30 border border-sky-400 bg-sky-400/20"
+              style={{
+                left: marquee.left,
+                top: marquee.top,
+                width: Math.max(marquee.right - marquee.left, 1),
+                height: Math.max(marquee.bottom - marquee.top, 1),
+              }}
+              aria-hidden
+            />
+          ) : null}
+          {snapGuideTime != null && totalDuration > 0 ? (
+            <div
+              className="pointer-events-none absolute inset-y-0 z-[21] w-px bg-sky-400/90"
+              style={{ left: `${pct(snapGuideTime)}%` }}
+              aria-hidden
+            />
+          ) : null}
+          {contextMenu ? (
+            <div
+              data-timeline-menu
+              role="menu"
+              className="fixed z-50 min-w-48 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+              style={{
+                left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 220)),
+                top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 168)),
+              }}
+            >
+              {(
+                [
+                  ["duplicate", "Duplicar"],
+                  ["delete", "Apagar"],
+                  ["align", "Alinhar início ao cabeçote"],
+                  ["track", "Selecionar todos desta faixa"],
+                ] as const
+              ).map(([command, label]) => (
+                <button
+                  key={command}
+                  type="button"
+                  role="menuitem"
+                  className="block w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+                  onClick={() => {
+                    onSelectionCommand?.(command, contextMenu.ids, contextMenu.primaryId)
+                    setContextMenu(null)
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {/* playhead: a cabeça na régua é a alça de arraste (o scrub do conteúdo faz o resto) */}
           <div

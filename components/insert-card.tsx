@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Trash2, GripVertical, ChevronDown, AlertTriangle } from "lucide-react"
+import { Trash2, AlertTriangle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -51,6 +51,8 @@ import { applyTextPreset } from "@/lib/text-presets"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import { InsertStyleFields } from "@/components/insert-style-panel"
 import { StyleCustomizePanel, type PresetLibraryHandlers } from "@/components/style-customize-panel"
+import { BlockToolbar } from "@/components/collapsible-block"
+import type { PanelBlockController } from "@/components/use-panel-blocks"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { NUDGE_HINT } from "@/lib/compose/keyboard-scope"
 import { layoutCaptionInsertForPlay } from "@/lib/compose/caption-layout"
@@ -85,6 +87,8 @@ interface InsertCardProps {
   onApplyStylePreset?: (presetId: string, mode: "preserve" | "clean") => void
   onApplyStyleToTrack?: () => void
   presetLibrary?: PresetLibraryHandlers
+  styleBlocks: PanelBlockController
+  motionBlocks: PanelBlockController
 }
 
 type CardTab = "content" | "style" | "motion"
@@ -230,6 +234,8 @@ export function InsertCard({
   onApplyStylePreset,
   onApplyStyleToTrack,
   presetLibrary,
+  styleBlocks,
+  motionBlocks,
 }: InsertCardProps) {
   const meta = INSERT_TYPE_MAP[insert.type]
   const kind = insertKind(insert)
@@ -305,8 +311,7 @@ export function InsertCard({
         overflowing && "border-destructive/60",
       )}
     >
-      <div className="flex items-center gap-2 p-2">
-        <GripVertical className="size-4 shrink-0 text-muted-foreground/60" aria-hidden />
+      <div className="flex items-center gap-2 px-2 py-1.5">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-muted/60"
@@ -338,13 +343,6 @@ export function InsertCard({
               <AlertTriangle className="size-3.5" />
             </span>
           ) : null}
-          <ChevronDown
-            className={cn(
-              "size-4 shrink-0 text-muted-foreground transition-transform",
-              expanded && "rotate-180",
-            )}
-            aria-hidden
-          />
         </button>
         <Button
           variant="destructive"
@@ -387,10 +385,11 @@ export function InsertCard({
 
       {expanded ? (
         <div className="flex flex-col gap-3 border-t border-border p-3">
+          <div className="flex items-center gap-1">
           <div
             role="tablist"
             aria-label="Campos do insert"
-            className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1"
+            className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-muted p-1"
           >
             {CARD_TABS.map((item) => {
               const selectedTab = tab === item.id
@@ -412,6 +411,13 @@ export function InsertCard({
                 </button>
               )
             })}
+          </div>
+          <BlockToolbar
+            hidden={tab === "content" || kind === "sticker"}
+            allOpen={tab === "motion" ? motionBlocks.allOpen : styleBlocks.allOpen}
+            onExpandAll={tab === "motion" ? motionBlocks.expandAll : styleBlocks.expandAll}
+            onCollapseAll={tab === "motion" ? motionBlocks.collapseAll : styleBlocks.collapseAll}
+          />
           </div>
 
           {tab === "content" ? (
@@ -515,7 +521,7 @@ export function InsertCard({
           ) : null}
 
           {tab === "style" ? (
-            <div role="tabpanel">
+            <div className="flex flex-col gap-2" role="tabpanel">
               {kind !== "sticker" && onPatchStyle && onResetStyleField && onResetStyleOverrides && onResetPosition && onApplyStylePreset && onApplyStyleToTrack ? (
                 <StyleCustomizePanel
                   insert={insert}
@@ -525,6 +531,8 @@ export function InsertCard({
                   captionStyle={captionStyle}
                   captionPreset={captionPreset}
                   tab="style"
+                  isBlockOpen={styleBlocks.isOpen}
+                  onToggleBlock={styleBlocks.toggle}
                   onPatchStyle={onPatchStyle}
                   onResetField={onResetStyleField}
                   onResetOverrides={onResetStyleOverrides}
@@ -554,6 +562,7 @@ export function InsertCard({
             <div className="flex flex-col gap-3" role="tabpanel">
               {kind === "text" || kind === "caption" ? (
                 onPatchStyle && onResetStyleField && onResetStyleOverrides && onResetPosition && onApplyStylePreset && onApplyStyleToTrack ? (
+                  <>
                   <StyleCustomizePanel
                     insert={insert}
                     videoDuration={videoDuration}
@@ -562,6 +571,8 @@ export function InsertCard({
                     captionStyle={captionStyle}
                     captionPreset={captionPreset}
                     tab="motion"
+                    isBlockOpen={motionBlocks.isOpen}
+                    onToggleBlock={motionBlocks.toggle}
                     onPatchStyle={onPatchStyle}
                     onResetField={onResetStyleField}
                     onResetOverrides={onResetStyleOverrides}
@@ -572,6 +583,7 @@ export function InsertCard({
                     onEndGesture={onEndInsertGesture}
                     presetLibrary={presetLibrary}
                   />
+                  </>
                 ) : null
               ) : null}
               {kind === "text" ? (

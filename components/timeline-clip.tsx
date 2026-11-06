@@ -13,8 +13,11 @@ export function TimelineClipBar({
   top,
   showLabel,
   selected,
+  primary,
+  showHandles,
   disabled,
   onPointerDown,
+  onContextMenu,
 }: {
   insert: Insert
   leftPct: number
@@ -22,8 +25,11 @@ export function TimelineClipBar({
   top: number
   showLabel: boolean
   selected: boolean
+  primary: boolean
+  showHandles: boolean
   disabled: boolean
   onPointerDown: (event: React.PointerEvent, handle: TimelineHandle) => void
+  onContextMenu?: (event: React.MouseEvent) => void
 }) {
   const meta = INSERT_TYPE_MAP[insert.type]
   const label = insertLabel(insert)
@@ -38,7 +44,11 @@ export function TimelineClipBar({
       data-timeline-clip
       className={cn(
         "absolute flex items-center overflow-hidden rounded-[4px] opacity-90 ring-1 ring-black/40",
-        selected && "z-10 opacity-100 ring-2 ring-brand",
+        selected &&
+          !primary &&
+          "z-10 opacity-100 ring-2 ring-brand/80 shadow-[0_0_8px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
+        primary &&
+          "z-10 opacity-100 ring-[3px] ring-brand shadow-[0_0_12px_color-mix(in_oklch,var(--brand)_75%,transparent)]",
         disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing",
       )}
       style={{
@@ -50,35 +60,44 @@ export function TimelineClipBar({
       }}
       title={`${label} · ${range}`}
       onClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => onPointerDown(event, "move")}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onContextMenu?.(event)
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation()
+        if (event.button !== 0) return
+        onPointerDown(event, "move")
+      }}
     >
       {showLabel ? (
         <span className="pointer-events-none truncate px-2 text-[0.62rem] font-medium leading-none text-white [text-shadow:0_1px_1px_rgb(0_0_0/0.55)]">
           {label}
         </span>
       ) : null}
-      <span
-        className={cn(
-          "absolute inset-y-0 left-0 z-[1] w-2 cursor-ew-resize rounded-l-[4px]",
-          selected && "bg-white/35",
-        )}
-        aria-hidden
-        onPointerDown={(event) => {
-          event.stopPropagation()
-          onPointerDown(event, "in")
-        }}
-      />
-      <span
-        className={cn(
-          "absolute inset-y-0 right-0 z-[1] w-2 cursor-ew-resize rounded-r-[4px]",
-          selected && "bg-white/35",
-        )}
-        aria-hidden
-        onPointerDown={(event) => {
-          event.stopPropagation()
-          onPointerDown(event, "out")
-        }}
-      />
+      {showHandles ? (
+        <>
+          <span
+            className="absolute inset-y-0 left-0 z-[1] w-2 cursor-ew-resize rounded-l-[4px] bg-white/35"
+            aria-hidden
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              if (event.button !== 0) return
+              onPointerDown(event, "in")
+            }}
+          />
+          <span
+            className="absolute inset-y-0 right-0 z-[1] w-2 cursor-ew-resize rounded-r-[4px] bg-white/35"
+            aria-hidden
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              if (event.button !== 0) return
+              onPointerDown(event, "out")
+            }}
+          />
+        </>
+      ) : null}
     </div>
   )
 }

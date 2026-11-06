@@ -1,8 +1,9 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 
 import { CaptionStyleThumb } from "@/components/caption-style-thumb"
+import { PresetPickerRow } from "@/components/preset-picker-row"
 import { cn } from "@/lib/utils"
 import {
   DEFAULT_CAPTION_STYLE,
@@ -105,5 +106,82 @@ export function CaptionStyleCard({
         })}
       </div>
     </div>
+  )
+}
+
+export function CaptionPresetRow({
+  inserts,
+  captionStyle = DEFAULT_CAPTION_STYLE,
+  captionPreset = "viral",
+  userPresets = [],
+  disabled = false,
+  onSelectLook,
+  menu,
+}: {
+  inserts: CompositionInsert[]
+  captionStyle?: CaptionStyle
+  captionPreset?: CaptionPreset
+  userPresets?: UserPreset[]
+  disabled?: boolean
+  onSelectLook: (lookId: string) => void
+  menu?: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const chips = useMemo(() => captionStyleChips(userPresets), [userPresets])
+  const hasCaptions = inserts.some((insert) => insertKind(insert) === "caption")
+  const activeId = activeCaptionLookId(inserts, captionPreset) ?? captionPreset
+  const active = chips.find((chip) => chip.id === activeId)
+  const lookDisabled = disabled || !hasCaptions
+
+  return (
+    <PresetPickerRow
+      label={`${active?.label ?? "Estilo"}${active?.mine ? " · meu" : ""}`}
+      thumb={
+        <CaptionStyleThumb
+          painted={paintedForLook(activeId, captionStyle, userPresets)}
+          className="h-10 w-16 shrink-0 rounded-md border border-border"
+        />
+      }
+      open={open}
+      onToggle={() => setOpen((current) => !current)}
+      disabled={lookDisabled}
+      menu={menu}
+      gridLabel="Estilo das legendas"
+    >
+      {chips.map((chip) => {
+        const pressed = activeId === chip.id
+        return (
+          <button
+            key={chip.id}
+            type="button"
+            aria-pressed={pressed}
+            disabled={lookDisabled}
+            onClick={() => onSelectLook(chip.id)}
+            className={cn(
+              "overflow-hidden rounded-md border text-left transition-colors",
+              pressed
+                ? "border-brand ring-2 ring-brand/40"
+                : "border-border hover:border-brand/50",
+              lookDisabled ? "cursor-not-allowed opacity-50" : "bg-background",
+            )}
+          >
+            <CaptionStyleThumb
+              painted={paintedForLook(chip.id, captionStyle, userPresets)}
+              className="block h-14 w-full"
+            />
+            <span className="flex items-center justify-between gap-1 px-2 py-1">
+              <span className="truncate text-[0.7rem] font-medium text-foreground">
+                {chip.label}
+              </span>
+              {chip.mine ? (
+                <span className="rounded bg-brand/15 px-1 text-[0.6rem] font-semibold uppercase tracking-wide text-brand">
+                  meu
+                </span>
+              ) : null}
+            </span>
+          </button>
+        )
+      })}
+    </PresetPickerRow>
   )
 }

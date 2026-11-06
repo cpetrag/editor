@@ -9,8 +9,8 @@ import { TextFloatingBar } from "@/components/text-floating-bar"
 import { TextInlineEditor } from "@/components/text-inline-editor"
 import { snapMoveWithGuides } from "@/lib/canvas/guides"
 import { nudgeTextPercents } from "@/lib/canvas/coords"
-import { isDuplicateInsertKey, snapRotationDegrees } from "@/lib/canvas/keys"
-import { percentsFromCenter, playToClient } from "@/lib/compose/layout"
+import { snapRotationDegrees } from "@/lib/canvas/keys"
+import { percentsFromCenter, playBoxToCss, playToClient } from "@/lib/compose/layout"
 import { drawPlayInserts } from "@/lib/compose/draw-play"
 import { ensureComposeFontsReady, fontIdsUsedInComposition } from "@/lib/compose/fonts"
 import { approxBox, hitTestOverlays, resizePatchForTrack, scaleFactorFromDrag } from "@/lib/compose/hit-test"
@@ -39,6 +39,7 @@ import {
   rotationFromDrag,
 } from "@/lib/compose/preview-handles"
 import { nudgePercents, patchForMove } from "@/lib/compose/preview-snap"
+import { roundPanelNumber } from "@/lib/panel-number"
 import {
   applyFontFamily,
   applyTextBackground,
@@ -47,7 +48,6 @@ import {
   getTextPreset,
   isTextPresetId,
   nudgeTextRadius,
-  TEXT_PRESET_FONT_FILES,
   textBackgroundEnabledOf,
   textRadiusOf,
   textShadowEnabledOf,
@@ -57,6 +57,7 @@ import { stickerMediaSrc } from "@/lib/compose/sticker-src"
 import { layoutOverlayInsertForPlay } from "@/lib/compose/caption-layout"
 import { chipHasFreePosition, chipPlayBox, layoutInserts } from "@/lib/insert-layout"
 import { trackStyleForInsert } from "@/lib/style-preset"
+import { resolveStyleForEditor } from "@/lib/style/editor-style"
 import type { StyleLayer, TrackId, UserPreset } from "@/lib/style/types"
 import {
   DEFAULT_CAPTION_STYLE,
@@ -80,7 +81,7 @@ import {
   nudgeElementScale,
   wrapsElementText,
 } from "@/lib/elements"
-import { insertIdOf, isSourceSelected, type PreviewSelection } from "@/lib/preview-selection"
+import { insertIdOf, isSourceSelected, selectedIdsOf, type PreviewSelection } from "@/lib/preview-selection"
 import { getVideoRect, type CoverRect } from "@/lib/export/cover"
 import {
   nudgeSourceTransform,
@@ -233,7 +234,6 @@ export function OverlayCanvas({
   onBeginInsertGesture,
   onEndInsertGesture,
   onCreateTextAt,
-  onDuplicateInsert,
   editingTextId = null,
   onEditingTextId,
   onCancelTextEdit,
@@ -283,6 +283,12 @@ export function OverlayCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
+  const livePlacementRef = useRef<{
+    id: string
+    x?: number
+    y?: number
+    maxWidthPct?: number
+  } | null>(null)
   const insertsRef = useRef(inserts)
   const captionStyleRef = useRef(captionStyle)
   const tracksRef = useRef(tracks)
@@ -618,6 +624,22 @@ export function OverlayCanvas({
   })()
 
   useEffect(() => {
+    function notePlacement(
+      id: string,
+      patch: { x?: number; y?: number; maxWidthPct?: number },
+    ) {
+      const prev = livePlacementRef.current
+      const same = prev?.id === id ? prev : undefined
+      const num = (value: number | undefined, fallback: number | undefined) =>
+        typeof value === "number" && Number.isFinite(value) ? value : fallback
+      livePlacementRef.current = {
+        id,
+        x: num(patch.x, same?.x),
+        y: num(patch.y, same?.y),
+        maxWidthPct: num(patch.maxWidthPct, same?.maxWidthPct),
+      }
+    }
+
     function onMove(event: PointerEvent) {
       const drag = dragRef.current
       const host = hostRef.current
@@ -720,13 +742,15 @@ export function OverlayCanvas({
           projectRef.current,
           videoDurationRef.current,
         )
-        onPatchInsert?.(drag.id, {
+        const moveCommit = {
           x: movePatch.x,
           y: movePatch.y,
           rotation: laid.rotation ?? laid.style?.rotation,
           maxWidthPct: laid.maxWidthPct,
           scale: laid.scale,
-        })
+        }
+        notePlacement(drag.id, moveCommit)
+        onPatchInsert?.(drag.id, moveCommit)
         return
       }
 
@@ -738,13 +762,15 @@ export function OverlayCanvas({
           rotationFromDrag(drag.startRotation, drag.startPointerDeg, nowDeg),
           event.shiftKey,
         )
-        onPatchInsert?.(drag.id, {
+        const rotateCommit = {
           x: drag.base.x,
           y: drag.base.y,
           rotation,
           maxWidthPct: drag.base.maxWidthPct,
           scale: drag.base.scale,
-        })
+        }
+        notePlacement(drag.id, rotateCommit)
+        onPatchInsert?.(drag.id, rotateCommit)
         return
       }
 
@@ -757,13 +783,15 @@ export function OverlayCanvas({
           PLAY_W,
           drag.edge,
         )
-        onPatchInsert?.(drag.id, {
+        const widthCommit = {
           x: drag.base.x,
           y: drag.base.y,
           rotation: drag.base.rotation ?? drag.base.style?.rotation,
           maxWidthPct,
           scale: drag.base.scale,
-        })
+        }
+        notePlacement(drag.id, widthCommit)
+        onPatchInsert?.(drag.id, widthCommit)
         return
       }
 
@@ -783,7 +811,9 @@ export function OverlayCanvas({
         insertKind(drag.base) === "chip" && !chipHasFreePosition(drag.base)
           ? patchForMove(drag.center.x, drag.center.y)
           : {}
-      onPatchInsert?.(drag.id, { ...placePatch, ...sizePatch })
+      const resizeCommit = { ...placePatch, ...sizePatch }
+      notePlacement(drag.id, resizeCommit)
+      onPatchInsert?.(drag.id, resizeCommit)
     }
 
     function onUp() {
@@ -796,6 +826,21 @@ export function OverlayCanvas({
         dragRef.current = null
         onEndInsertGestureRef.current?.()
         return
+      }
+      const placed = livePlacementRef.current
+      livePlacementRef.current = null
+      if (placed && placed.id === drag.id) {
+        const patch: { x?: number; y?: number; maxWidthPct?: number } = {}
+        if (typeof placed.x === "number") patch.x = roundPanelNumber(placed.x)
+        if (typeof placed.y === "number") patch.y = roundPanelNumber(placed.y)
+        if (typeof placed.maxWidthPct === "number") patch.maxWidthPct = roundPanelNumber(placed.maxWidthPct)
+        if (
+          patch.x !== placed.x ||
+          patch.y !== placed.y ||
+          patch.maxWidthPct !== placed.maxWidthPct
+        ) {
+          onPatchInsert?.(placed.id, patch)
+        }
       }
       dragRef.current = null
       onEndInsertGestureRef.current?.()
@@ -814,9 +859,10 @@ export function OverlayCanvas({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (editingTextId) return
-      if (isDuplicateInsertKey(event) && selectedInsert) {
-        event.preventDefault()
-        onDuplicateInsert?.(selectedInsert.id)
+      if (
+        event.altKey &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
         return
       }
       if (!canHandlePreviewNudge(event, selection)) return
@@ -1228,10 +1274,14 @@ export function OverlayCanvas({
               : "#ffffff")
           }
           align={selectedVisible.textAlign ?? "center"}
-          fontFamily={
-            TEXT_PRESET_FONT_FILES.find((font) => font.id === selectedVisible.fontFamily)?.family ??
-            selectedVisible.fontFamily ??
-            "Anton"
+          fontId={
+            resolveStyleForEditor(
+              selectedVisible,
+              videoDuration > 0
+                ? trackStyleForInsert(selectedVisible, tracks, videoDuration)
+                : null,
+              project ?? {},
+            ).text.fontFamily
           }
           sampling={samplingColor}
           backgroundOn={textBackgroundEnabledOf(selectedVisible)}
@@ -1295,6 +1345,45 @@ export function OverlayCanvas({
         onPointerDown={onStagePointerDown}
         onDoubleClick={onStageDoubleClick}
       >
+        {metrics && hostBox
+          ? selectedIdsOf(selection)
+              .filter((id) => id !== selectedInsertId && id !== editingTextId)
+              .map((id) => {
+                const insert = inserts.find((item) => item.id === id)
+                if (!insert || !isActive(insert, time)) return null
+                const laid = layoutOverlayInsert(
+                  insert,
+                  captionStyle,
+                  captionPreset,
+                  tracks,
+                  project ?? {},
+                  videoDuration,
+                )
+                const box = approxBox(
+                  laid,
+                  1,
+                  naturals.get(laid.id),
+                  chipBoxes.get(laid.id) ?? null,
+                  fontId,
+                  undefined,
+                  textLayouts.get(laid.id) ?? null,
+                )
+                const css = playBoxToCss(box, metrics, hostBox)
+                return (
+                  <div
+                    key={id}
+                    className="pointer-events-none absolute z-[1] border-2 border-sky-300/90 shadow-[0_0_12px_rgba(56,189,248,0.55)]"
+                    style={{
+                      left: css.left,
+                      top: css.top,
+                      width: Math.max(css.width, 12),
+                      height: Math.max(css.height, 12),
+                    }}
+                    aria-hidden
+                  />
+                )
+              })
+          : null}
         {editingInsert && editorView ? (
           <TextInlineEditor
             key={editingInsert.id}

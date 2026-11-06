@@ -6,6 +6,7 @@ import { ControlPanel } from "@/components/control-panel"
 import { PreviewPanel, type PreviewHandle } from "@/components/preview-panel"
 import { EditorNav, type EditorTab } from "@/components/editor-nav"
 import { LibraryPanel } from "@/components/library-panel"
+import { projectHasArtInserts } from "@/lib/library-combo"
 import { BatchPanel } from "@/components/batch-panel"
 import { EditorHeaderActions, type SaveStatus } from "@/components/editor-header-actions"
 import { ExportMenu, type ExportMenuActions } from "@/components/export-menu"
@@ -46,6 +47,8 @@ import {
   createStickerInsert,
   duplicateInsert,
   applyTemplateToInserts,
+  appendTemplateToInserts,
+  instantiateTemplate,
   FONT_MAP,
   type Insert,
   type InsertType,
@@ -154,7 +157,19 @@ import {
 import { createIndexedDbPresetStore } from "@/lib/style/preset-store"
 import type { UserPreset } from "@/lib/style/types"
 import type { PresetLibraryHandlers } from "@/components/style-customize-panel"
-import { insertIdOf, isSourceSelected, type PreviewSelection } from "@/lib/preview-selection"
+import {
+  insertIdOf,
+  insertSelection,
+  isSourceSelected,
+  pruneInsertSelection,
+  type PreviewSelection,
+} from "@/lib/preview-selection"
+import {
+  DELETE_CONFIRM_ABOVE,
+  duplicateGroupDelta,
+  moveTimelineGroup,
+  selectableItems,
+} from "@/lib/timeline-selection"
 import {
   clampSourceTransform,
   DEFAULT_SOURCE_TRANSFORM,
@@ -284,6 +299,29 @@ function captionContentFromPatch(patch: Partial<Insert>): Partial<Insert> | null
   return Object.keys(content).length > 0 ? content : null
 }
 
+function applyTimingPatches(
+  inserts: Insert[],
+  patches: readonly { id: string; start: number; duration: number }[],
+  videoDuration: number,
+  baseline: HistorySnapshot | null,
+): Insert[] {
+  const byId = new Map(patches.map((patch) => [patch.id, patch]))
+  return inserts.map((insert) => {
+    const patch = byId.get(insert.id)
+    if (!patch) return insert
+    if (insertKind(insert) === "caption") {
+      const source =
+        baseline?.inserts.find((item) => item.id === insert.id && insertKind(item) === "caption") ??
+        insert
+      return finalizeCaptionInsert(
+        applyCaptionPatch(source, { start: patch.start, duration: patch.duration }),
+        videoDuration,
+      )
+    }
+    return mergeInsertPatch(insert, { start: patch.start, duration: patch.duration })
+  })
+}
+
 function isPlayableUrl(url: string): boolean {
   const value = url.trim()
   return value.startsWith("blob:") || value.startsWith("data:")
@@ -328,6 +366,9 @@ export function VideoEditor() {
   const [exportMode, setExportMode] = useState<ExportMode>("final")
   const [liveMessage, setLiveMessage] = useState("")
   const [undoToast, setUndoToast] = useState<string | null>(null)
+  const dismissUndoToast = useCallback(() => setUndoToast(null), [])
+  const [comboPreview, setComboPreview] = useState<Template | null>(null)
+  const [comboChoice, setComboChoice] = useState(false)
   const [selection, setSelection] = useState<PreviewSelection>(null)
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
   const selectedInsertId = insertIdOf(selection)
@@ -355,6 +396,8 @@ export function VideoEditor() {
   const sourceBlobRef = useRef<Blob | null>(null)
   const previewRef = useRef<PreviewHandle>(null)
   const playheadRef = useRef(0)
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
   const abortRef = useRef<AbortController | null>(null)
   const exportStartedRef = useRef(false)
   const importAbortRef = useRef<AbortController | null>(null)
@@ -841,10 +884,10 @@ export function VideoEditor() {
     setUndoToast(null)
     setSelection((current) => {
       if (current?.kind === "source") return current
-      if (current?.kind === "insert" && snapshot.inserts.some((item) => item.id === current.id)) {
-        return current
-      }
-      return null
+      return pruneInsertSelection(
+        current,
+        new Set(snapshot.inserts.map((item) => item.id)),
+      )
     })
   }, [])
 
@@ -1211,9 +1254,126 @@ export function VideoEditor() {
     (id: string) => {
       if (textEditRef.current?.id === id) textEditRef.current = null
       applyInserts((prev) => prev.filter((insert) => insert.id !== id), "discrete")
-      setSelection((current) => (insertIdOf(current) === id ? null : current))
+      setSelection((current) =>
+        pruneInsertSelection(
+          current,
+          new Set(compositionRef.current.inserts.map((insert) => insert.id)),
+        ),
+      )
       setEditingTextId((current) => (current === id ? null : current))
       setUndoToast("Insert apagado")
+    },
+    [applyInserts],
+  )
+
+  const patchTimings = useCallback(
+    (patches: { id: string; start: number; duration: number }[]) => {
+      const duration = compositionRef.current.source.duration
+      const baseline = gestureRef.current.active ? gestureRef.current.baseline : null
+      applyInserts(
+        (inserts) => applyTimingPatches(inserts, patches, duration, baseline),
+        gestureRef.current.active ? "gesture" : "discrete",
+      )
+    },
+    [applyInserts],
+  )
+
+  const removeSelection = useCallback(
+    (ids: string[]) => {
+      const unique = [...new Set(ids)]
+      if (unique.length === 0) return
+      if (unique.length > DELETE_CONFIRM_ABOVE && !window.confirm(`Apagar ${unique.length} itens?`)) {
+        return
+      }
+      if (textEditRef.current && unique.includes(textEditRef.current.id)) {
+        textEditRef.current = null
+        setEditingTextId(null)
+      }
+      applyInserts((prev) => prev.filter((insert) => !unique.includes(insert.id)), "discrete")
+      setSelection((current) =>
+        pruneInsertSelection(
+          current,
+          new Set(compositionRef.current.inserts.map((insert) => insert.id)),
+        ),
+      )
+      setEditingTextId((current) => (current && unique.includes(current) ? null : current))
+      setUndoToast(unique.length === 1 ? "Insert apagado" : `${unique.length} itens apagados`)
+    },
+    [applyInserts],
+  )
+
+  const duplicateSelection = useCallback(
+    (ids: string[]) => {
+      finishTextEditRef.current("commit")
+      const prev = compositionRef.current
+      const delta = duplicateGroupDelta(selectableItems(prev.inserts), ids, prev.source.duration)
+      if (delta == null) return
+      const selected = prev.inserts.filter((insert) => ids.includes(insert.id))
+      const stickerCount = prev.inserts.filter((insert) => insertKind(insert) === "sticker").length
+      const addedStickers = selected.filter((insert) => insertKind(insert) === "sticker").length
+      if (stickerCount + addedStickers > MAX_STICKERS) {
+        setLiveMessage("Limite de 20 inserts PNG.")
+        return
+      }
+      const primaryId = insertIdOf(selectionRef.current)
+      const copies = selected.map((insert) => {
+        const id = crypto.randomUUID()
+        const start = insert.start + delta
+        if (insertKind(insert) === "caption") {
+          return finalizeCaptionInsert(
+            applyCaptionPatch(insert, { id, start }),
+            prev.source.duration,
+          )
+        }
+        return mergeInsertPatch({ ...insert, id }, { start })
+      })
+      applyInserts((inserts) => [...inserts, ...copies], "discrete")
+      const primaryCopy =
+        copies[selected.findIndex((insert) => insert.id === primaryId)] ?? copies[0]
+      if (primaryCopy) setSelection(insertSelection(primaryCopy.id, copies.map((copy) => copy.id)))
+    },
+    [applyInserts],
+  )
+
+  const nudgeSelection = useCallback(
+    (ids: string[], frames: number) => {
+      const prev = compositionRef.current
+      const moved = moveTimelineGroup({
+        items: selectableItems(prev.inserts),
+        selectedIds: ids,
+        delta: frames / 30,
+        videoDuration: prev.source.duration,
+        snapTolerance: 0,
+        snapTargets: [],
+      })
+      if (!(Math.abs(moved.delta) > 1e-6)) return
+      applyInserts(
+        (inserts) => applyTimingPatches(inserts, moved.starts, prev.source.duration, null),
+        "discrete",
+      )
+    },
+    [applyInserts],
+  )
+
+  const alignSelection = useCallback(
+    (primaryId: string, ids: string[]) => {
+      const prev = compositionRef.current
+      const items = selectableItems(prev.inserts)
+      const primary = items.find((item) => item.id === primaryId)
+      if (!primary) return
+      const moved = moveTimelineGroup({
+        items,
+        selectedIds: ids,
+        delta: playheadRef.current - primary.start,
+        videoDuration: prev.source.duration,
+        snapTolerance: 0,
+        snapTargets: [],
+      })
+      if (!(Math.abs(moved.delta) > 1e-6)) return
+      applyInserts(
+        (inserts) => applyTimingPatches(inserts, moved.starts, prev.source.duration, null),
+        "discrete",
+      )
     },
     [applyInserts],
   )
@@ -1400,6 +1560,8 @@ export function VideoEditor() {
     if (next != null) previewRef.current?.seekTo(next)
   }, [])
 
+  const [panelSelectionTick, setPanelSelectionTick] = useState(0)
+
   const toggleInsert = useCallback((id: string) => {
     // O seek atualiza o estado do PreviewPanel; dentro do updater de setSelection seria setState durante render.
     if (insertIdOf(selection) === id) {
@@ -1407,13 +1569,23 @@ export function VideoEditor() {
       return
     }
     setSelection({ kind: "insert", id })
+    setPanelSelectionTick((tick) => tick + 1)
     seekPlayheadToInsert(id)
   }, [seekPlayheadToInsert, selection])
+
+  const revealCaption = useCallback((id: string) => {
+    const insert = compositionRef.current.inserts.find((item) => item.id === id)
+    if (!insert) return
+    setSelection({ kind: "insert", id })
+    setPanelSelectionTick((tick) => tick + 1)
+    previewRef.current?.seekTo(insert.start)
+  }, [])
 
   const selectInsert = useCallback(
     (id: string | null) => {
       if (id) {
         setSelection({ kind: "insert", id })
+        setPanelSelectionTick((tick) => tick + 1)
         seekPlayheadToInsert(id)
         if (activeTab !== "editor") setActiveTab("editor")
         return
@@ -1429,13 +1601,16 @@ export function VideoEditor() {
         if (textEditRef.current && textEditRef.current.id !== next.id) {
           finishTextEditRef.current("commit")
         }
-        selectInsert(next.id)
+        setSelection(insertSelection(next.id, next.ids ?? [next.id]))
+        setPanelSelectionTick((tick) => tick + 1)
+        if (activeTab !== "editor") setActiveTab("editor")
+        if (!next.ids) seekPlayheadToInsert(next.id)
         return
       }
       finishTextEditRef.current("commit")
       setSelection(next)
     },
-    [selectInsert],
+    [activeTab, seekPlayheadToInsert],
   )
 
   const mergeDuplicates = useCallback(
@@ -1452,12 +1627,51 @@ export function VideoEditor() {
     [patchInserts],
   )
 
-  const applyTemplate = useCallback((template: Template) => {
+  const applyTemplate = useCallback((template: Template, mode: "add" | "replace" = "replace") => {
     const duration = compositionRef.current.source.duration
-    applyInserts((prev) => applyTemplateToInserts(prev, template, duration), "discrete")
+    applyInserts(
+      (prev) =>
+        mode === "add"
+          ? appendTemplateToInserts(prev, template, duration)
+          : applyTemplateToInserts(prev, template, duration),
+      "discrete",
+    )
     setActiveTemplateId(template.id)
+    setComboPreview(null)
+    setComboChoice(false)
     setActiveTab("editor")
   }, [applyInserts])
+
+  const previewCombo = useCallback((template: Template) => {
+    setComboChoice(false)
+    setComboPreview(template)
+  }, [])
+
+  const cancelComboPreview = useCallback(() => {
+    setComboPreview(null)
+    setComboChoice(false)
+  }, [])
+
+  const requestApplyCombo = useCallback(() => {
+    if (!comboPreview) return
+    if (projectHasArtInserts(compositionRef.current.inserts)) {
+      setComboChoice(true)
+      return
+    }
+    applyTemplate(comboPreview, "replace")
+  }, [applyTemplate, comboPreview])
+
+  useEffect(() => {
+    if (!comboPreview) return
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || isEditableTarget(event.target)) return
+      event.preventDefault()
+      setComboPreview(null)
+      setComboChoice(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [comboPreview])
 
   const loadAiMedia = useCallback(async (): Promise<File | null> => {
     const fileId = compositionRef.current.source.fileId
@@ -2072,10 +2286,18 @@ export function VideoEditor() {
     activeTab === "batch" && batchPreview
       ? FONT_MAP[batchPreview.fontId]?.family ?? fontFamily
       : fontFamily
-  const previewInserts =
-    activeTab === "batch" && batchPreview
-      ? applyVariationPreview(composition.inserts, batchPreview.position)
-      : composition.inserts
+  const previewInserts = (() => {
+    const base =
+      activeTab === "batch" && batchPreview
+        ? applyVariationPreview(composition.inserts, batchPreview.position)
+        : composition.inserts
+    if (!comboPreview || activeTab === "batch") return base
+    const ghost = instantiateTemplate(comboPreview, composition.source.duration).map((insert) => ({
+      ...insert,
+      id: `preview-${insert.id}`,
+    }))
+    return [...base, ...ghost]
+  })()
   const live = [liveMessage, quotaWarning].filter(Boolean).join(" ")
   const exportStatus =
     exporting && exportPhase
@@ -2353,7 +2575,20 @@ export function VideoEditor() {
             finalExportError={finalExportError}
             undoToast={undoToast}
             onUndoToast={undoLast}
+            onDismissUndoToast={dismissUndoToast}
             selectedId={selectedInsertId}
+            selectedIds={selection?.kind === "insert" ? (selection.ids ?? [selection.id]) : []}
+            onDuplicateSelection={() => {
+              if (selection?.kind === "insert") {
+                duplicateSelection(selection.ids ?? [selection.id])
+              }
+            }}
+            onDeleteSelection={() => {
+              if (selection?.kind === "insert") {
+                removeSelection(selection.ids ?? [selection.id])
+              }
+            }}
+            onClearSelection={() => setSelection(null)}
             brandLogo={composition.brand.logo}
             brandFontId={composition.brand.fontId}
             onDraftUrlChange={(url) => {
@@ -2386,6 +2621,8 @@ export function VideoEditor() {
             onNewProject={startNewProject}
             onClearInserts={clearInserts}
             onClearCaptions={clearCaptions}
+            onRevealCaption={revealCaption}
+            panelSelectionTick={panelSelectionTick}
             onAddText={addTextInsert}
             onAddElement={addElement}
             onApplyTemplate={applyTemplate}
@@ -2433,12 +2670,18 @@ export function VideoEditor() {
               MAX_STICKERS
             }
             onApplyTemplate={applyTemplate}
-            onAddElement={(type) => {
+            onPreviewTemplate={previewCombo}
+            onAddElement={(type, point) => {
               const created = createInsert(type)
               created.start = nextInsertStart(
                 playheadRef.current,
                 compositionRef.current.source.duration,
               )
+              if (point) {
+                created.x = Math.min(100, Math.max(0, Math.round(point.x * 10) / 10))
+                created.y = Math.min(100, Math.max(0, Math.round(point.y * 10) / 10))
+              }
+              if (point?.text) created.text = point.text
               applyInserts((inserts) => [...inserts, created], "discrete")
               setSelection({ kind: "insert", id: created.id })
             }}
@@ -2452,6 +2695,20 @@ export function VideoEditor() {
                 brand: { ...prev.brand, fontId },
               }))
             }
+            projectInserts={composition.inserts}
+            selectedTextId={
+              composition.inserts.find(
+                (insert) => insert.id === selectedInsertId && insertKind(insert) === "text",
+              )?.id ?? null
+            }
+            usedFontIds={[
+              composition.brand.fontId,
+              ...composition.inserts.map((insert) => insert.fontFamily).filter((id): id is string => Boolean(id)),
+            ]}
+            onUseFontOnText={(fontId) => {
+              if (!selectedInsertId) return
+              changeInsert(selectedInsertId, { fontFamily: fontId })
+            }}
           />
         ) : (
           <BatchPanel
@@ -2477,6 +2734,21 @@ export function VideoEditor() {
           ref={previewRef}
           backgroundUrl={backgroundUrl}
           inserts={previewInserts}
+          comboPreviewLabel={comboPreview?.name ?? null}
+          comboConfirming={comboChoice}
+          onApplyComboPreview={requestApplyCombo}
+          onConfirmComboPreview={(mode) => {
+            if (comboPreview) applyTemplate(comboPreview, mode)
+          }}
+          onCancelComboPreview={cancelComboPreview}
+          onDropElement={(type, x, y) => {
+            const created = createInsert(type)
+            created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+            created.x = Math.min(100, Math.max(0, Math.round(x * 10) / 10))
+            created.y = Math.min(100, Math.max(0, Math.round(y * 10) / 10))
+            applyInserts((inserts) => [...inserts, created], "discrete")
+            setSelection({ kind: "insert", id: created.id })
+          }}
           selection={selection}
           sourceWidth={composition.source.width}
           sourceHeight={composition.source.height}
@@ -2506,7 +2778,12 @@ export function VideoEditor() {
           onPatchSourceTransform={handlePatchSourceTransform}
           onResetSourceTransform={handleResetSourceTransform}
           onPatchInsert={changeInsert}
+          onPatchTimings={patchTimings}
           onRemoveInsert={removeInsert}
+          onDeleteSelection={removeSelection}
+          onDuplicateSelection={duplicateSelection}
+          onNudgeSelection={nudgeSelection}
+          onAlignSelection={alignSelection}
           onCreateTextAt={addTextInsertAt}
           onDuplicateInsert={duplicateSelectedInsert}
           editingTextId={editingTextId}

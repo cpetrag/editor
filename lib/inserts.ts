@@ -91,16 +91,16 @@ export const INSERT_TYPES: InsertTypeMeta[] = [
   },
   {
     value: "preco-riscado",
-    label: "Preço Riscado",
+    label: "Preço de/por",
     category: "conversao",
     colorClass: "bg-track-preco",
     dotVar: "var(--track-preco)",
     hasText: true,
-    defaultText: "R$ 49,90",
+    defaultText: "de R$ 99 · por R$ 49",
   },
   {
     value: "cupom",
-    label: "Selo de Cupom",
+    label: "Cupom com código",
     category: "conversao",
     colorClass: "bg-track-cupom",
     dotVar: "var(--track-cupom)",
@@ -136,12 +136,12 @@ export const INSERT_TYPES: InsertTypeMeta[] = [
   },
   {
     value: "seta",
-    label: "Seta Animada",
+    label: "Seta link aqui 👇",
     category: "atencao",
     colorClass: "bg-track-seta",
     dotVar: "var(--track-seta)",
     hasText: true,
-    defaultText: "AQUI",
+    defaultText: "link aqui 👇",
   },
   {
     value: "tarja-frete",
@@ -334,6 +334,8 @@ export interface Template {
   id: string
   name: string
   description: string
+  /** Etapa principal do combo. Não entra na composição salva. */
+  etapa?: "gancho" | "prova" | "cta"
   /** the inserts this template lays down (without ids) */
   inserts: Array<Partial<Insert> & Pick<Insert, "type" | "start" | "duration">>
   beats?: ComboBeat[]
@@ -344,6 +346,7 @@ export const TEMPLATES: Template[] = COMBO_TEMPLATES.map((combo) => ({
   name: combo.name,
   description: combo.goal,
   beats: combo.beats,
+  etapa: combo.beats[0]?.track === "prova" || combo.beats[0]?.track === "cta" ? combo.beats[0].track : "gancho",
   inserts: combo.beats.map((beat) => {
     const time = resolveBeatTime(beat, 0)
     return {
@@ -380,6 +383,14 @@ export function instantiateTemplate(template: Template, videoDuration = 0): Inse
     ...insert,
     ...newInsertId(),
   }))
+}
+
+export function appendTemplateToInserts(
+  previous: Insert[],
+  template: Template,
+  videoDuration = 0,
+): Insert[] {
+  return [...previous, ...instantiateTemplate(template, videoDuration)]
 }
 
 export function applyTemplateToInserts(

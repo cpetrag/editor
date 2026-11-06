@@ -1,6 +1,7 @@
 import type { InsertType } from "@/lib/composition"
 import type { Template } from "@/lib/inserts"
 import { comboDuration, comboPreviewMarks } from "@/lib/library-preview"
+import { getElementPreset } from "@/lib/elements/catalog"
 
 export function ComboStagePreview({ template }: { template: Template }) {
   const marks = comboPreviewMarks(template)
@@ -68,12 +69,25 @@ export function ComboCardMeta({
 }
 
 export function ElementThumb({ type }: { type: InsertType }) {
+  const preset = getElementPreset(type)
+  const text = preset?.defaultText || type
   return (
     <span
-      className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
+      className="flex h-16 w-full items-center justify-center overflow-hidden rounded-md px-1"
+      style={{ background: "#111", color: preset?.secondary ?? "#fff" }}
       aria-hidden
     >
-      <ElementThumbArt type={type} />
+      <span
+        className="max-w-full truncate px-1.5 py-1 text-center text-[0.65rem] font-black leading-tight"
+        style={{
+          background: preset?.primary ?? "#fff",
+          color: preset?.secondary ?? "#111",
+          borderRadius: 6,
+          fontFamily: preset?.fontFamily,
+        }}
+      >
+        {text}
+      </span>
     </span>
   )
 }

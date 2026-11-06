@@ -70,9 +70,9 @@ const RAW: Omit<ElementPreset, "schema">[] = [
   },
   {
     id: "preco-riscado",
-    name: "Preço Riscado",
+    name: "Preço de/por",
     shape: "price",
-    defaultText: "R$ 49,90",
+    defaultText: "de R$ 99 · por R$ 49",
     hasText: true,
     primary: "#FFFFFF",
     secondary: "#E24B3B",
@@ -91,7 +91,7 @@ const RAW: Omit<ElementPreset, "schema">[] = [
   },
   {
     id: "cupom",
-    name: "Selo de Cupom",
+    name: "Cupom com código",
     shape: "ticket",
     defaultText: "CUPOM10",
     hasText: true,
@@ -175,9 +175,9 @@ const RAW: Omit<ElementPreset, "schema">[] = [
   },
   {
     id: "seta",
-    name: "Seta Animada",
+    name: "Seta link aqui 👇",
     shape: "arrow",
-    defaultText: "AQUI",
+    defaultText: "link aqui 👇",
     hasText: true,
     primary: "#FFE500",
     secondary: "#111111",

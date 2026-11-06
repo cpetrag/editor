@@ -7,9 +7,11 @@ import {
 
 export const COMPOSITION_STORAGE_KEY = "editor.composition.v1"
 export const EDITOR_DB_NAME = "editor-video"
-export const EDITOR_DB_VERSION = 2
+export const EDITOR_DB_VERSION = 3
 export const FILE_STORE = "files"
 export const PRESET_STORE = "presets"
+export const LIBRARY_COMBO_STORE = "library-combos"
+export const LIBRARY_FONT_STORE = "library-fonts"
 
 export interface StorageLike {
   getItem(key: string): string | null
@@ -88,6 +90,12 @@ export function openEditorDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(PRESET_STORE)) {
         db.createObjectStore(PRESET_STORE, { keyPath: "id" })
+      }
+      if (!db.objectStoreNames.contains(LIBRARY_COMBO_STORE)) {
+        db.createObjectStore(LIBRARY_COMBO_STORE, { keyPath: "id" })
+      }
+      if (!db.objectStoreNames.contains(LIBRARY_FONT_STORE)) {
+        db.createObjectStore(LIBRARY_FONT_STORE, { keyPath: "id" })
       }
     }
     request.onsuccess = () => resolve(request.result)

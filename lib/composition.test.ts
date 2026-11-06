@@ -131,6 +131,11 @@ test("parseComposition migrates startTime and position aliases", () => {
   assert.equal("position" in parsed.inserts[0], false)
 })
 
+test("clampInsert keeps a one-frame start", () => {
+  const clamped = clampInsert(sampleInsert({ start: 1 + 1 / 30, duration: 2 }), 20)
+  assert.ok(Math.abs(clamped.start - (1 + 1 / 30)) < 1e-9)
+})
+
 test("clampInsert preserves duration when the start is typed past the end", () => {
   const clamped = clampInsert(sampleInsert({ start: 999, duration: 4 }), 18.088, "start")
   assert.equal(clamped.start, 14.1)

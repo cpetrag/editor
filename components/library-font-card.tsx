@@ -14,6 +14,9 @@ export function FontPreviewCard({
   sample,
   selected,
   onSelect,
+  onUseOnText,
+  canUseOnText = false,
+  used = false,
   ariaLabel,
   loaded,
 }: {
@@ -21,21 +24,17 @@ export function FontPreviewCard({
   sample: string
   selected: boolean
   onSelect: () => void
+  onUseOnText?: () => void
+  canUseOnText?: boolean
+  used?: boolean
   ariaLabel: string
   loaded?: boolean
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-label={ariaLabel}
-      aria-pressed={selected}
+    <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border p-3 text-left transition-colors",
-        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-        selected
-          ? "border-brand bg-brand/10"
-          : "border-border bg-card hover:border-brand/50 hover:bg-accent",
+        "flex flex-col gap-2 rounded-lg border p-3 text-left",
+        selected ? "border-brand bg-brand/10" : "border-border bg-card",
       )}
     >
       <span
@@ -47,8 +46,13 @@ export function FontPreviewCard({
       <span className="flex items-center justify-between gap-1">
         <span className="truncate text-xs font-medium text-foreground">{font.label}</span>
         <span className="flex items-center gap-1">
-          {loaded ? (
+          {used ? (
             <span className="rounded bg-brand/15 px-1 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-brand">
+              Usada no projeto
+            </span>
+          ) : null}
+          {loaded ? (
+            <span className="rounded bg-muted px-1 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground">
               carregada
             </span>
           ) : null}
@@ -56,6 +60,24 @@ export function FontPreviewCard({
         </span>
       </span>
       <span className="truncate text-[0.7rem] text-muted-foreground">{font.vibe}</span>
-    </button>
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          disabled={!canUseOnText}
+          onClick={onUseOnText}
+          className="rounded-md border border-border px-2 py-1 text-left text-[0.65rem] disabled:opacity-40"
+        >
+          Usar no texto selecionado
+        </button>
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          onClick={onSelect}
+          className="rounded-md bg-muted px-2 py-1 text-left text-[0.65rem]"
+        >
+          Definir como padrão
+        </button>
+      </div>
+    </div>
   )
 }

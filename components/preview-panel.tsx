@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
-import { formatTime, type Insert } from "@/lib/inserts"
+import { formatTime, type Insert, type InsertType } from "@/lib/inserts"
 import { DEFAULT_CAPTION_STYLE, FONT_SIZE_MAX, FONT_SIZE_MIN, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { rgbToHex } from "@/lib/canvas/eyedrop"
@@ -45,19 +45,30 @@ import {
   type TimelineHandle,
 } from "@/lib/timeline-clip"
 import { TIMELINE_ZOOM_MAX, TIMELINE_ZOOM_MIN, clampTimelineZoom } from "@/lib/timeline-layout"
+import {
+  moveTimelineGroup,
+  nextClickSelection,
+  selectableItems,
+  idsOnTrack,
+  selectAllItems,
+  snapTargetTimes,
+  snapToleranceSeconds,
+  type TimelineItem,
+} from "@/lib/timeline-selection"
 import { cycleIndex, editorShortcutAction, JKL_SEEK_SECONDS } from "@/lib/editor-shortcuts"
 import {
-  canHandlePreviewNudge,
   cycleOverlayMode,
   FRAME_STEP_HINT,
   frameStepKeyAction,
+  isTimelineOrPreviewTarget,
   SPLIT_HINT,
   TRIM_HINT,
   timelineKeyAction,
+  timelineSelectionKey,
   type OverlayModeId,
 } from "@/lib/compose/keyboard-scope"
 import { secondsFromFrame, toRenderInsert, type RenderProps } from "@/remotion/types"
-import { insertIdOf, type PreviewSelection } from "@/lib/preview-selection"
+import { insertIdOf, insertSelection, selectedIdsOf, type PreviewSelection } from "@/lib/preview-selection"
 import { sourceZoomPercent, type SourceTransform } from "@/lib/source-transform"
 import {
   canSplitSourceAt,
@@ -115,6 +126,11 @@ interface PreviewPanelProps {
   onPatchSourceTransform?: (transform: SourceTransform, time: number) => void
   onResetSourceTransform?: (time: number) => void
   onRemoveInsert?: (id: string) => void
+  onPatchTimings?: (patches: { id: string; start: number; duration: number }[]) => void
+  onDeleteSelection?: (ids: string[]) => void
+  onDuplicateSelection?: (ids: string[]) => void
+  onNudgeSelection?: (ids: string[], frames: number) => void
+  onAlignSelection?: (primaryId: string, ids: string[]) => void
   onCreateTextAt?: (x: number, y: number) => void
   onDuplicateInsert?: (id: string) => void
   editingTextId?: string | null
@@ -130,6 +146,12 @@ interface PreviewPanelProps {
     height: number
     fps: number
   }) => void
+  comboPreviewLabel?: string | null
+  comboConfirming?: boolean
+  onApplyComboPreview?: () => void
+  onConfirmComboPreview?: (mode: "add" | "replace") => void
+  onCancelComboPreview?: () => void
+  onDropElement?: (type: InsertType, x: number, y: number) => void
 }
 
 export type PreviewHandle = {
@@ -172,6 +194,11 @@ export const PreviewPanel = memo(
       onPatchSourceTransform,
       onResetSourceTransform,
       onRemoveInsert,
+      onPatchTimings,
+      onDeleteSelection,
+      onDuplicateSelection,
+      onNudgeSelection,
+      onAlignSelection,
       onCreateTextAt,
       onDuplicateInsert,
       editingTextId = null,
@@ -181,6 +208,12 @@ export const PreviewPanel = memo(
       onEndInsertGesture,
       headerActions,
       onMediaInfo,
+      comboPreviewLabel = null,
+      comboConfirming = false,
+      onApplyComboPreview,
+      onConfirmComboPreview,
+      onCancelComboPreview,
+      onDropElement,
     },
     ref,
   ) {
@@ -191,6 +224,7 @@ export const PreviewPanel = memo(
   const [showRetention, setShowRetention] = useState(true)
   const [timelineZoom, setTimelineZoom] = useState(TIMELINE_ZOOM_MIN)
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
+  const [snapGuideTime, setSnapGuideTime] = useState<number | null>(null)
   const [floatingBarHost, setFloatingBarHost] = useState<HTMLDivElement | null>(null)
   const [videoDuration, setVideoDuration] = useState<number | null>(null)
   const [videoReady, setVideoReady] = useState(false)
@@ -207,6 +241,9 @@ export const PreviewPanel = memo(
     base: { start: number; duration: number }
     originX: number
     dragging: boolean
+    groupIds: string[]
+    collapseToId: string | null
+    items: TimelineItem[]
   } | null>(null)
   const trimDragRef = useRef<{ edge: "in" | "out"; dragging: boolean } | null>(null)
   const playableUrl = isPlayableBackgroundUrl(backgroundUrl)
@@ -379,21 +416,38 @@ export const PreviewPanel = memo(
       if (!drag || !track) return
       if (!drag.dragging && Math.abs(event.clientX - drag.originX) < 3) return
       drag.dragging = true
-      const time = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
-      const next =
-        drag.mode === "in"
-          ? trimInsertIn(drag.base, time, totalDuration)
-          : drag.mode === "out"
-            ? trimInsertOut(drag.base, time, totalDuration)
-            : moveInsertTiming(drag.base, time - drag.grabOffset, totalDuration)
-      onPatchInsert?.(drag.id, next)
+      const rect = track.getBoundingClientRect()
+      const time = clientXToTime(event.clientX, rect, totalDuration)
+      if (drag.mode === "in" || drag.mode === "out") {
+        const next =
+          drag.mode === "in"
+            ? trimInsertIn(drag.base, time, totalDuration)
+            : trimInsertOut(drag.base, time, totalDuration)
+        onPatchInsert?.(drag.id, next)
+        return
+      }
+      const proposed = moveInsertTiming(drag.base, time - drag.grabOffset, totalDuration)
+      const moved = moveTimelineGroup({
+        items: drag.items,
+        selectedIds: drag.groupIds,
+        delta: proposed.start - drag.base.start,
+        videoDuration: totalDuration,
+        snapTolerance: event.altKey ? 0 : snapToleranceSeconds(rect.width, totalDuration),
+        snapTargets: snapTargetTimes(drag.items, drag.groupIds, currentTimeRef.current),
+      })
+      setSnapGuideTime(moved.guide)
+      if (onPatchTimings) onPatchTimings(moved.starts)
+      else onPatchInsert?.(drag.id, { start: moved.starts[0]?.start ?? proposed.start, duration: drag.base.duration })
     }
 
     function onUp() {
       const drag = dragRef.current
       if (!drag) return
       if (!drag.dragging) {
-        const insert = insertsRef.current.find((item) => item.id === drag.id)
+        if (drag.collapseToId) {
+          onSelect?.(insertSelection(drag.collapseToId, [drag.collapseToId]))
+        }
+        const insert = insertsRef.current.find((item) => item.id === drag.collapseToId ?? drag.id)
         if (insert) {
           const clamped = Math.min(totalDuration, Math.max(0, insert.start))
           setCurrentTime(clamped)
@@ -405,6 +459,7 @@ export const PreviewPanel = memo(
         }
       }
       dragRef.current = null
+      setSnapGuideTime(null)
       onEndInsertGesture?.()
     }
 
@@ -416,7 +471,7 @@ export const PreviewPanel = memo(
       window.removeEventListener("pointerup", onUp)
       window.removeEventListener("pointercancel", onUp)
     }
-  }, [onEndInsertGesture, onPatchInsert, totalDuration])
+  }, [onEndInsertGesture, onPatchInsert, onPatchTimings, onSelect, totalDuration])
 
   const markTrim = useCallback(
     (edge: "in" | "out") => {
@@ -523,17 +578,37 @@ export const PreviewPanel = memo(
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!canHandlePreviewNudge(event, selection)) return
-      const selectedInsertId = insertIdOf(selection)
-      if (typeof selectedInsertId !== "string") return
-      if (event.key !== "Delete" && event.key !== "Backspace") return
-      event.preventDefault()
-      event.stopPropagation()
-      onRemoveInsert?.(selectedInsertId)
+      const action = timelineSelectionKey(event, isTimelineOrPreviewTarget(event.target))
+      if (!action) return
+      const ids = selectedIdsOf(selection)
+      if (action === "select-all") {
+        const next = selectAllItems(selectableItems(insertsRef.current), insertIdOf(selection))
+        if (!next.primaryId) return
+        event.preventDefault()
+        onSelect?.(insertSelection(next.primaryId, next.ids))
+        return
+      }
+      if (ids.length === 0) return
+      if (action === "delete") {
+        event.preventDefault()
+        event.stopPropagation()
+        if (onDeleteSelection) onDeleteSelection(ids)
+        else if (ids[0]) onRemoveInsert?.(ids[0])
+        return
+      }
+      if (action === "duplicate") {
+        event.preventDefault()
+        onDuplicateSelection?.(ids)
+        return
+      }
+      if (typeof action === "object") {
+        event.preventDefault()
+        onNudgeSelection?.(ids, action.nudge)
+      }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [onRemoveInsert, selection])
+  }, [onDeleteSelection, onDuplicateSelection, onNudgeSelection, onRemoveInsert, onSelect, selection])
 
   async function togglePlay() {
     const player = playerRef.current
@@ -643,18 +718,38 @@ export const PreviewPanel = memo(
       const track = trackRef.current
       if (!track) return
       const time = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
-      onSelect?.({ kind: "insert", id: insert.id })
+      const items = selectableItems(insertsRef.current)
+      const currentIds = selectedIdsOf(selection)
+      const additive = event.ctrlKey || event.metaKey
+      const range = event.shiftKey
+      if (additive || range) {
+        const next = nextClickSelection(
+          { ids: currentIds, primaryId: insertIdOf(selection) },
+          insert.id,
+          items,
+          { additive, range },
+        )
+        onSelect?.(next.primaryId ? insertSelection(next.primaryId, next.ids) : null)
+        return
+      }
+      const already = currentIds.includes(insert.id)
+      const groupIds = already ? currentIds : [insert.id]
+      const trimOne = (handle === "in" || handle === "out") && groupIds.length === 1
+      if (!already) onSelect?.(insertSelection(insert.id, [insert.id]))
       onBeginInsertGesture?.()
       dragRef.current = {
         id: insert.id,
-        mode: handle,
+        mode: trimOne ? handle : "move",
         grabOffset: time - insert.start,
         base: { start: insert.start, duration: insert.duration },
         originX: event.clientX,
         dragging: false,
+        groupIds,
+        collapseToId: already && groupIds.length > 1 ? insert.id : null,
+        items,
       }
     },
-    [exporting, onBeginInsertGesture, onSelect, totalDuration],
+    [exporting, onBeginInsertGesture, onSelect, selection, totalDuration],
   )
 
   const onTimelineTrimPointerDown = useCallback(
@@ -763,8 +858,46 @@ export const PreviewPanel = memo(
             </label>
           ) : null}
           </div>
-        <div className="relative aspect-[9/16] h-full max-h-full w-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50">
-          {/* subtle grid so empty space doesn't look broken */}
+        <div
+          className="relative aspect-[9/16] h-full max-h-full w-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50"
+          onDragOver={(event) => {
+            if (!event.dataTransfer.types.includes("application/x-editor-element")) return
+            event.preventDefault()
+          }}
+          onDrop={(event) => {
+            const type = event.dataTransfer.getData("application/x-editor-element")
+            if (!type || !onDropElement) return
+            event.preventDefault()
+            const rect = event.currentTarget.getBoundingClientRect()
+            const x = ((event.clientX - rect.left) / rect.width) * 100
+            const y = ((event.clientY - rect.top) / rect.height) * 100
+            onDropElement(type as InsertType, x, y)
+          }}
+        >
+          {comboPreviewLabel ? (
+            <div className="absolute inset-x-2 top-2 z-30 flex items-center justify-between gap-2 rounded-lg bg-zinc-950/90 px-2 py-1.5 text-xs text-zinc-100 shadow-lg">
+              <span className="min-w-0 truncate">{comboPreviewLabel}</span>
+              <span className="flex shrink-0 gap-1">
+                {comboConfirming ? (
+                  <>
+                    <Button type="button" size="xs" variant="outline" onClick={() => onConfirmComboPreview?.("add")}>
+                      Adicionar aos atuais
+                    </Button>
+                    <Button type="button" size="xs" onClick={() => onConfirmComboPreview?.("replace")}>
+                      Substituir
+                    </Button>
+                  </>
+                ) : (
+                  <Button type="button" size="xs" onClick={onApplyComboPreview}>
+                    Aplicar
+                  </Button>
+                )}
+                <Button type="button" size="xs" variant="ghost" onClick={onCancelComboPreview}>
+                  Cancelar
+                </Button>
+              </span>
+            </div>
+          ) : null}
           <div
             className="absolute inset-0 opacity-[0.06]"
             style={{
@@ -956,6 +1089,42 @@ export const PreviewPanel = memo(
             ) : null}
           </div>
 
+          {selectedIdsOf(selection).length >= 2 ? (
+            <div className="flex shrink-0 items-center gap-1" role="status">
+              <span className="text-xs text-foreground">
+                {selectedIdsOf(selection).length} selecionados
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                disabled={exporting}
+                onClick={() => onDuplicateSelection?.(selectedIdsOf(selection))}
+              >
+                Duplicar
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                disabled={exporting}
+                onClick={() => onDeleteSelection?.(selectedIdsOf(selection))}
+              >
+                Apagar
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Limpar seleção"
+                title="Limpar seleção"
+                onClick={() => onSelect?.(null)}
+              >
+                <X />
+              </Button>
+            </div>
+          ) : null}
+
           <span
             className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
             title={FRAME_STEP_HINT}
@@ -1083,6 +1252,22 @@ export const PreviewPanel = memo(
               playing={playing}
               inserts={inserts}
               selectedInsertId={typeof selectedInsertId === "string" ? selectedInsertId : null}
+              selectedIds={selectedIdsOf(selection)}
+              snapGuideTime={snapGuideTime}
+              onChangeSelection={(ids, primaryId) => {
+                onSelect?.(primaryId ? insertSelection(primaryId, ids) : null)
+              }}
+              onSelectionCommand={(command, ids, primaryId) => {
+                if (command === "duplicate") onDuplicateSelection?.(ids)
+                else if (command === "delete") onDeleteSelection?.(ids)
+                else if (command === "align") onAlignSelection?.(primaryId, ids)
+                else {
+                  const items = selectableItems(inserts)
+                  const track = items.find((item) => item.id === primaryId)?.track
+                  if (!track) return
+                  onSelect?.(insertSelection(primaryId, idsOnTrack(items, track)))
+                }
+              }}
               exporting={exporting}
               showRetention={showRetention}
               segments={segments}

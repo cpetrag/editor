@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 
-import { CaptionStyleCard } from "@/components/caption-style-card"
+import { usePanelBlocks } from "@/components/use-panel-blocks"
+import { CAPTION_STYLE_BLOCK_IDS, MOTION_BLOCK_IDS } from "@/lib/panel-sections"
 import {
   StyleCustomizePanel,
   type PresetLibraryHandlers,
@@ -10,7 +11,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { CaptionPreset, CaptionStyle, CompositionInsert } from "@/lib/composition"
 import type { Insert } from "@/lib/inserts"
-import type { StyleLayer, TrackId, UserPreset } from "@/lib/style/types"
+import type { StyleLayer, TrackId } from "@/lib/style/types"
 
 type VisualTab = "style" | "motion"
 
@@ -25,7 +26,6 @@ export function CaptionVisualPanel({
   videoDuration,
   captionStyle,
   captionPreset = "viral",
-  userPresets = [],
   onSelectLook,
   tracks,
   projectStyle,
@@ -44,7 +44,6 @@ export function CaptionVisualPanel({
   videoDuration: number
   captionStyle: CaptionStyle
   captionPreset?: CaptionPreset
-  userPresets?: UserPreset[]
   onSelectLook: (lookId: string) => void
   tracks?: Partial<Record<TrackId, StyleLayer>>
   projectStyle?: StyleLayer
@@ -59,19 +58,12 @@ export function CaptionVisualPanel({
   presetLibrary?: PresetLibraryHandlers
 }) {
   const [tab, setTab] = useState<VisualTab>("style")
+  const styleBlocks = usePanelBlocks("captions-style", CAPTION_STYLE_BLOCK_IDS)
+  const motionBlocks = usePanelBlocks("captions-motion", MOTION_BLOCK_IDS)
+  const blocks = tab === "style" ? styleBlocks : motionBlocks
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
-      <p className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
-        Visual · todas as linhas
-      </p>
-      <CaptionStyleCard
-        inserts={inserts}
-        captionStyle={captionStyle}
-        captionPreset={captionPreset}
-        userPresets={userPresets}
-        onSelectLook={onSelectLook}
-      />
       <div
         role="tablist"
         aria-label="Estilo e movimento das legendas"
@@ -107,6 +99,10 @@ export function CaptionVisualPanel({
         captionPreset={captionPreset}
         tab={tab}
         context="caption"
+        captionInserts={inserts}
+        onSelectLook={onSelectLook}
+        isBlockOpen={blocks.isOpen}
+        onToggleBlock={blocks.toggle}
         onPatchStyle={onPatchStyle}
         onResetField={onResetField}
         onResetOverrides={onResetOverrides}

@@ -13,7 +13,7 @@ import type { SourceImport } from "@/lib/commit-source"
 import { hasPlayableSource } from "@/lib/commit-source"
 import type { CompositionSource } from "@/lib/composition"
 import type { RecentSource } from "@/lib/recent-sources"
-import { hasAnySegmentTransform } from "@/lib/source-segments"
+import { formatTime } from "@/lib/inserts"
 import {
   WATERMARK_FONT_PX_MAX,
   WATERMARK_FONT_PX_MIN,
@@ -52,15 +52,8 @@ type BackgroundSourceCardProps = {
   onRestorePrevious: () => void
   onRetry: () => void
   onDownloadCopy: () => void
-  canClearInserts: boolean
-  onClearInserts: () => void
   sourceSelected?: boolean
   onSelectSource?: () => void
-  onResetTransform?: () => void
-  watermarkEnabled?: boolean
-  watermarkPrefs: WatermarkPrefs
-  onWatermarkEnabledChange?: (enabled: boolean) => void
-  onWatermarkPrefsChange?: (prefs: WatermarkPrefs) => void
 }
 
 function canonicalFieldNumber(
@@ -139,36 +132,19 @@ function WatermarkNumberField({
   )
 }
 
-function WatermarkRow({
-  enabled,
+export function WatermarkFields({
   prefs,
-  canEnable,
-  onEnabledChange,
   onPrefsChange,
 }: {
-  enabled: boolean
   prefs: WatermarkPrefs
-  canEnable: boolean
-  onEnabledChange?: (enabled: boolean) => void
   onPrefsChange?: (prefs: WatermarkPrefs) => void
 }) {
   return (
     <div
-      className="mt-2 flex min-w-0 flex-col gap-1.5 border-t border-border pt-2"
+      className="flex min-w-0 flex-col gap-2"
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        <label className="flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-foreground">
-          <input
-            type="checkbox"
-            className="size-3.5 accent-brand"
-            checked={enabled}
-            disabled={!canEnable}
-            aria-label="Marca d'água neste vídeo"
-            onChange={(event) => onEnabledChange?.(event.target.checked)}
-          />
-          Marca
-        </label>
         <input
           type="text"
           maxLength={40}
@@ -201,7 +177,7 @@ function WatermarkRow({
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <WatermarkNumberField
-          label="Opac."
+          label="Opacidade"
           suffix="%"
           value={prefs.opacityPct}
           min={WATERMARK_OPACITY_PCT_MIN}
@@ -211,7 +187,7 @@ function WatermarkRow({
           onCommit={(opacityPct) => onPrefsChange?.({ ...prefs, opacityPct })}
         />
         <WatermarkNumberField
-          label="Tam."
+          label="Tamanho"
           value={prefs.fontPx}
           min={WATERMARK_FONT_PX_MIN}
           max={WATERMARK_FONT_PX_MAX}
@@ -220,7 +196,7 @@ function WatermarkRow({
           onCommit={(fontPx) => onPrefsChange?.({ ...prefs, fontPx })}
         />
         <WatermarkNumberField
-          label="Vel."
+          label="Velocidade"
           suffix="×"
           value={prefs.speed}
           min={WATERMARK_SPEED_MIN}
@@ -316,15 +292,8 @@ export function BackgroundSourceCard({
   onRestorePrevious,
   onRetry,
   onDownloadCopy,
-  canClearInserts,
-  onClearInserts,
   sourceSelected = false,
   onSelectSource,
-  onResetTransform,
-  watermarkEnabled,
-  watermarkPrefs,
-  onWatermarkEnabledChange,
-  onWatermarkPrefsChange,
 }: BackgroundSourceCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -359,13 +328,10 @@ export function BackgroundSourceCard({
     const original = source.canonicalUrl || source.remoteUrl
     return (
       <Field>
-        <FieldLabel>
-          <FileVideo className="size-3.5 text-muted-foreground" />
-          Vídeo de fundo
-        </FieldLabel>
+        <FieldLabel>Arquivo</FieldLabel>
         <div
           className={cn(
-            "flex items-start gap-3 rounded-lg border bg-card p-3",
+            "flex items-center gap-2 rounded-lg border bg-card px-2.5 py-2",
             sourceSelected ? "border-brand ring-1 ring-brand/40" : "border-border",
           )}
           onPointerDown={(event) => {
@@ -373,85 +339,57 @@ export function BackgroundSourceCard({
             onSelectSource?.()
           }}
         >
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
             <FileVideo className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-foreground">{sourceHeadline(source)}</p>
-            <p className="font-mono text-[0.7rem] tabular-nums text-muted-foreground">
-              {sourceTechLine(source)}
+            <p className="truncate font-mono text-[0.7rem] tabular-nums text-muted-foreground">
+              {formatTime(source.duration)} · {source.width}×{source.height}
             </p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              {provider ? (
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {provider}
-                </span>
-              ) : null}
-              {kind === "url" && original ? (
-                <a
-                  href={original}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[0.7rem] text-brand underline-offset-2 hover:underline"
-                >
-                  Abrir original
-                </a>
-              ) : null}
-              {kind === "url" && !missingFile ? (
-                <button
-                  type="button"
-                  className="text-[0.7rem] text-brand underline-offset-2 hover:underline"
-                  onClick={onDownloadCopy}
-                >
-                  Baixar cópia
-                </button>
-              ) : null}
-            </div>
-            {missingFile ? (
-              <p className="mt-1 text-[0.7rem] text-destructive">
-                O vídeo não está neste navegador. Use Trocar para baixar de novo.
-              </p>
-            ) : null}
-            {burnedInWarning && kind === "url" ? (
-              <p className="mt-1 text-[0.7rem] text-muted-foreground">
-                Esse vídeo tem legenda embutida — as legendas que você gerar vão se sobrepor.
-              </p>
-            ) : null}
-            <WatermarkRow
-              enabled={watermarkEnabled === true}
-              prefs={watermarkPrefs}
-              canEnable={playable}
-              onEnabledChange={onWatermarkEnabledChange}
-              onPrefsChange={onWatermarkPrefsChange}
-            />
           </div>
-          <div className="flex shrink-0 flex-col gap-1">
-            <Button type="button" variant="outline" size="xs" onClick={onReplace}>
-              Trocar
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              disabled={!canClearInserts}
-              onClick={onClearInserts}
-            >
-              Limpar inserts
-            </Button>
-            {!missingFile ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                className="h-auto whitespace-normal text-left leading-tight"
-                disabled={!hasAnySegmentTransform(source)}
-                onClick={onResetTransform}
-              >
-                Resetar enquadramento
-              </Button>
-            ) : null}
-          </div>
+          <Button type="button" variant="outline" size="xs" onClick={onReplace}>
+            Trocar
+          </Button>
         </div>
+        {provider || (kind === "url" && original) || (kind === "url" && !missingFile) ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {provider ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                {provider}
+              </span>
+            ) : null}
+            {kind === "url" && original ? (
+              <a
+                href={original}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[0.7rem] text-brand underline-offset-2 hover:underline"
+              >
+                Abrir original
+              </a>
+            ) : null}
+            {kind === "url" && !missingFile ? (
+              <button
+                type="button"
+                className="text-[0.7rem] text-brand underline-offset-2 hover:underline"
+                onClick={onDownloadCopy}
+              >
+                Baixar cópia
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {missingFile ? (
+          <p className="text-[0.7rem] text-destructive">
+            O vídeo não está neste navegador. Use Trocar para baixar de novo.
+          </p>
+        ) : null}
+        {burnedInWarning && kind === "url" ? (
+          <p className="text-[0.7rem] text-muted-foreground">
+            Esse vídeo tem legenda embutida — as legendas que você gerar vão se sobrepor.
+          </p>
+        ) : null}
         {previousSource ? <PreviousNote source={previousSource} onRestore={onRestorePrevious} /> : null}
       </Field>
     )
@@ -621,13 +559,6 @@ export function BackgroundSourceCard({
             ))}
           </div>
         ) : null}
-        <WatermarkRow
-          enabled={watermarkEnabled === true}
-          prefs={watermarkPrefs}
-          canEnable={playable}
-          onEnabledChange={onWatermarkEnabledChange}
-          onPrefsChange={onWatermarkPrefsChange}
-        />
       </div>
       {missingFile && playable ? (
         <FieldDescription>

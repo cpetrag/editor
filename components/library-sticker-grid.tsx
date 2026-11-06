@@ -1,7 +1,7 @@
 "use client"
 
-import { useRef, useState } from "react"
-import { MoreHorizontal, Star } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { MoreHorizontal, Star, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,9 +13,15 @@ import {
 import { stickerThumbUrl } from "@/lib/compose/sticker-src"
 import {
   filterPngItems,
+  pngBackdropClass,
+  PNG_BRAND_TAGS,
+  readPngBackdrop,
+  setPngTags,
   togglePngFavorite,
   touchPngRecent,
+  writePngBackdrop,
   type LibraryPngMeta,
+  type PngBackdrop,
   type PngFilter,
 } from "@/lib/library-png-meta"
 import { matchesQuery, midTruncate, type LibraryPngItem } from "@/lib/library-search"
@@ -46,12 +52,22 @@ export function StickerGrid({
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<PngFilter>("all")
+  const [tag, setTag] = useState<string | null>(null)
+  const [backdrop, setBackdrop] = useState<PngBackdrop>("checker")
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState("")
 
   const searched = items.filter((item) => matchesQuery(item.name, query))
-  const visible = filterPngItems(searched, filter, pngMeta)
+  const tagged = tag
+    ? searched.filter((item) => (pngMeta.tags[item.id] ?? []).includes(tag))
+    : searched
+  const visible = filterPngItems(tagged, filter, pngMeta)
+
+  useEffect(() => {
+    setBackdrop(readPngBackdrop())
+  }, [])
 
   async function uploadFiles(files: FileList | File[]) {
     const pngs = [...files].filter(
@@ -149,6 +165,33 @@ export function StickerGrid({
           onClick={() => setFilter("favorite")}
           label="Favoritos"
         />
+        {PNG_BRAND_TAGS.map((brand) => (
+          <FilterChip
+            key={brand}
+            pressed={tag === brand}
+            onClick={() => setTag((current) => (current === brand ? null : brand))}
+            label={brand}
+          />
+        ))}
+      </div>
+      <div className="flex gap-1">
+        {(["checker", "light", "dark"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            aria-pressed={backdrop === mode}
+            className={cn(
+              "rounded-full px-2 py-1 text-[0.65rem]",
+              backdrop === mode ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+            )}
+            onClick={() => {
+              setBackdrop(mode)
+              writePngBackdrop(mode)
+            }}
+          >
+            {mode === "checker" ? "Xadrez" : mode === "light" ? "Claro" : "Escuro"}
+          </button>
+        ))}
       </div>
       {stickerLimitReached ? (
         <p className="text-xs text-muted-foreground">Limite de 20 inserts PNG no projeto.</p>
@@ -200,9 +243,7 @@ export function StickerGrid({
                   className="flex w-full flex-col overflow-hidden rounded-lg border border-border bg-card text-left hover:border-brand/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                   title={item.name}
                 >
-                  <span
-                    className="aspect-square w-full bg-[image:repeating-conic-gradient(#e7e5e4_0%_25%,#fafafa_0%_50%)] bg-[size:12px_12px] dark:bg-[image:repeating-conic-gradient(#292524_0%_25%,#1c1917_0%_50%)]"
-                  >
+                  <span className={cn("aspect-square w-full", pngBackdropClass(backdrop))} title={item.name}>
                     <img
                       src={stickerThumbUrl(item.id, 160)}
                       srcSet={`${stickerThumbUrl(item.id, 160)} 1x, ${stickerThumbUrl(item.id, 320)} 2x`}
@@ -218,6 +259,48 @@ export function StickerGrid({
                     {midTruncate(item.name)}
                   </span>
                 </button>
+                <div className="pointer-events-none absolute left-1 top-1 z-20 flex gap-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100">
+                  <button
+                    type="button"
+                    aria-label={favorite ? "Remover favorito" : "Favoritar"}
+                    className="flex size-6 items-center justify-center rounded-full bg-black/70 text-white"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onPngMetaChange(togglePngFavorite(pngMeta, item.id))
+                    }}
+                  >
+                    <Star className={cn("size-3.5", favorite && "fill-amber-300 text-amber-300")} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Apagar ${item.name}`}
+                    className="flex size-6 items-center justify-center rounded-full bg-black/70 text-white"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setConfirmDelete(item.id)
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+                {confirmDelete === item.id ? (
+                  <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-1 bg-black/75 p-2 text-center text-[0.65rem] text-white">
+                    <p>Apagar este PNG?</p>
+                    <button
+                      type="button"
+                      className="rounded bg-white px-2 py-0.5 text-zinc-950"
+                      onClick={() => {
+                        void deleteItem(item, items, onItemsChange, onToast)
+                        setConfirmDelete(null)
+                      }}
+                    >
+                      Apagar
+                    </button>
+                    <button type="button" onClick={() => setConfirmDelete(null)}>
+                      Cancelar
+                    </button>
+                  </div>
+                ) : null}
                 <div
                   className="absolute right-1 top-1 z-20"
                   onClick={(event) => event.stopPropagation()}

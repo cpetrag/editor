@@ -9,6 +9,7 @@ import {
   shouldIgnoreGlobalKey,
   frameStepKeyAction,
   timelineKeyAction,
+  timelineSelectionKey,
 } from "./keyboard-scope.ts"
 
 test("frameStepKeyAction anda 1 quadro, 10 com Shift, e aceita , .", () => {
@@ -43,6 +44,21 @@ test("timelineKeyAction mapeia I/O/S e ignora modificadores e repetição", () =
   assert.equal(timelineKeyAction({ ...base, key: "o", metaKey: true }), null)
   assert.equal(timelineKeyAction({ ...base, key: "i", repeat: true }), null)
   assert.equal(timelineKeyAction({ ...base, key: "i", defaultPrevented: true }), null)
+})
+
+test("timelineSelectionKey separa Ctrl+A do restante e ignora setas sem Alt", () => {
+  const base = { defaultPrevented: false, target: null }
+  assert.equal(timelineSelectionKey({ ...base, key: "a", ctrlKey: true }, true), "select-all")
+  assert.equal(timelineSelectionKey({ ...base, key: "a", metaKey: true }, false), null)
+  assert.equal(timelineSelectionKey({ ...base, key: "Delete" }, false), "delete")
+  assert.equal(timelineSelectionKey({ ...base, key: "d", ctrlKey: true }, false), "duplicate")
+  assert.deepEqual(timelineSelectionKey({ ...base, key: "ArrowRight", altKey: true }, false), { nudge: 1 })
+  assert.deepEqual(
+    timelineSelectionKey({ ...base, key: "ArrowLeft", altKey: true, shiftKey: true }, false),
+    { nudge: -10 },
+  )
+  assert.equal(timelineSelectionKey({ ...base, key: "ArrowRight" }, true), null)
+  assert.equal(timelineSelectionKey({ ...base, key: "Delete", defaultPrevented: true }, true), null)
 })
 
 test("shouldIgnoreGlobalKey skips prevented events", () => {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react"
 import {
   ImageIcon,
   LayoutTemplate,
@@ -27,13 +27,14 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { stickerThumbUrl } from "@/lib/compose/sticker-src"
-import { FONT_OPTIONS, FONT_PREVIEW_SAMPLE } from "@/lib/fonts"
+import { FONT_MOOD, FONT_OPTIONS, FONT_PREVIEW_SAMPLE, type FontMood } from "@/lib/fonts"
 import {
   TEXT_PRESET_FONT_FILES,
   ensureTextPresetFontsReady,
   isTextPresetFontLoaded,
 } from "@/lib/text-presets"
 import {
+  type Insert,
   type InsertType,
   type Template,
 } from "@/lib/inserts"
@@ -51,7 +52,14 @@ import {
   type VisibleElement,
 } from "@/lib/library-catalog"
 import { readPngMeta, writePngMeta, type LibraryPngMeta } from "@/lib/library-png-meta"
-import { comboOverflowsVideo } from "@/lib/library-preview"
+import {
+  comboContentSummary,
+  comboMainText,
+  comboMatchesEtapa,
+  type ComboEtapaFilter,
+} from "@/lib/library-combo"
+import { deleteUserCombo, listUserCombos, saveUserCombo } from "@/lib/library-combo-store"
+import { listLibraryFonts, saveLibraryFont, type StoredLibraryFont } from "@/lib/library-font-store"
 import {
   countLibraryResults,
   formatLibrarySearchSubtitle,
@@ -82,7 +90,12 @@ interface LibraryPanelProps {
   onAddLibrarySticker: (item: { id: string; name: string }) => void
   stickerLimitReached: boolean
   onApplyTemplate: (template: Template) => void
-  onAddElement: (type: InsertType) => void
+  onPreviewTemplate: (template: Template) => void
+  onAddElement: (type: InsertType, point?: { x: number; y: number; text?: string }) => void
+  projectInserts: Insert[]
+  selectedTextId: string | null
+  usedFontIds: string[]
+  onUseFontOnText: (fontId: string) => void
   onUndo: () => void
   videoDuration: number
   videoUrl?: string
@@ -95,13 +108,20 @@ export function LibraryPanel({
   onAddLibrarySticker,
   stickerLimitReached,
   onApplyTemplate,
+  onPreviewTemplate,
   onAddElement,
+  projectInserts,
+  selectedTextId,
+  usedFontIds,
+  onUseFontOnText,
   onUndo,
   videoDuration,
   videoUrl,
   videoId,
 }: LibraryPanelProps) {
   const [section, setSection] = useState<LibrarySection>("templates")
+  const [etapa, setEtapa] = useState<ComboEtapaFilter>("todos")
+  const [userCombos, setUserCombos] = useState<Template[]>([])
   const [catalog, setCatalog] = useState<LibraryCatalog>(readLibraryCatalog)
   const [toast, setToast] = useState<LibraryToast | null>(null)
   const [query, setQuery] = useState("")
@@ -144,19 +164,39 @@ export function LibraryPanel({
     })
   }
 
+  useEffect(() => {
+    void listUserCombos().then(setUserCombos).catch(() => setUserCombos([]))
+  }, [])
+
   function applyCombo(template: Template) {
-    onApplyTemplate(template)
-    setToast({
-      message: formatApplyToast("combo", template.name, template.inserts.length),
-      undo: () => {
-        onUndo()
-        setToast(null)
-      },
-    })
+    onPreviewTemplate(template)
+  }
+
+  async function saveProjectAsCombo() {
+    const name = window.prompt("Nome do combo")?.trim()
+    if (!name) return
+    const art = projectInserts.filter((insert) => insert.kind !== "caption" && insert.type !== "legenda")
+    if (art.length === 0) {
+      setToast({ message: "O projeto não tem inserts para salvar." })
+      return
+    }
+    const template: Template = {
+      id: `combo-${crypto.randomUUID()}`,
+      name,
+      description: "Meu combo",
+      etapa: "gancho",
+      inserts: art.map(({ id: _id, ...rest }) => rest),
+    }
+    await saveUserCombo(template)
+    setUserCombos((current) => [template, ...current])
+    setToast({ message: `Combo "${name}" salvo` })
   }
 
   function applyElement(element: VisibleElement) {
-    onAddElement(element.type)
+    onAddElement(
+      element.type,
+      element.id === "mais-vendido" ? { x: 50, y: 40, text: "MAIS VENDIDO" } : undefined,
+    )
     setToast({
       message: formatApplyToast("element", element.label, 1),
       undo: () => {
@@ -335,15 +375,33 @@ export function LibraryPanel({
             />
           ) : section === "templates" ? (
             <TemplatesList
-              templates={templates}
+              templates={templates.filter((template) => comboMatchesEtapa(template, etapa))}
+              userCombos={userCombos.filter((template) => comboMatchesEtapa(template, etapa))}
+              etapa={etapa}
+              onEtapa={setEtapa}
               videoDuration={videoDuration}
               fontId={fontId}
               videoUrl={videoUrl}
               videoId={videoId}
-              onApply={applyCombo}
+              onPreview={onPreviewTemplate}
+              onSaveProject={saveProjectAsCombo}
               onDuplicate={duplicateCombo}
               onRename={renameCombo}
               onDelete={deleteCombo}
+              onRenameUser={async (template, name) => {
+                const next = { ...template, name }
+                await saveUserCombo(next)
+                setUserCombos((current) => current.map((item) => (item.id === template.id ? next : item)))
+              }}
+              onDuplicateUser={async (template) => {
+                const copy = { ...template, id: `combo-${crypto.randomUUID()}`, name: `${template.name} cópia` }
+                await saveUserCombo(copy)
+                setUserCombos((current) => [copy, ...current])
+              }}
+              onDeleteUser={async (template) => {
+                await deleteUserCombo(template.id)
+                setUserCombos((current) => current.filter((item) => item.id !== template.id))
+              }}
             />
           ) : section === "elements" ? (
             <ElementsGrid
@@ -378,6 +436,9 @@ export function LibraryPanel({
               sample={fontSample}
               onSampleChange={setFontSample}
               onSelectFont={selectFont}
+              selectedTextId={selectedTextId}
+              usedFontIds={usedFontIds}
+              onUseFontOnText={onUseFontOnText}
             />
           )}
         </div>
@@ -411,11 +472,108 @@ export function LibraryPanel({
 
 function TemplatesList({
   templates,
+  userCombos,
+  etapa,
+  onEtapa,
   videoDuration,
   fontId,
   videoUrl,
   videoId,
-  onApply,
+  onPreview,
+  onSaveProject,
+  onDuplicate,
+  onRename,
+  onDelete,
+  onRenameUser,
+  onDuplicateUser,
+  onDeleteUser,
+}: {
+  templates: Template[]
+  userCombos: Template[]
+  etapa: ComboEtapaFilter
+  onEtapa: (etapa: ComboEtapaFilter) => void
+  videoDuration: number
+  fontId: string
+  videoUrl?: string
+  videoId?: string
+  onPreview: (template: Template) => void
+  onSaveProject: () => void
+  onDuplicate: (template: Template) => void
+  onRename: (template: Template, name: string) => void
+  onDelete: (template: Template) => void
+  onRenameUser: (template: Template, name: string) => void
+  onDuplicateUser: (template: Template) => void
+  onDeleteUser: (template: Template) => void
+}) {
+  const filters: Array<{ id: ComboEtapaFilter; label: string }> = [
+    { id: "todos", label: "Todos" },
+    { id: "gancho", label: "Gancho" },
+    { id: "prova", label: "Prova" },
+    { id: "cta", label: "CTA" },
+  ]
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {filters.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={etapa === item.id}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium",
+              etapa === item.id ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+            )}
+            onClick={() => onEtapa(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+        <Button type="button" size="xs" variant="outline" className="ml-auto" onClick={onSaveProject}>
+          Salvar projeto atual como combo
+        </Button>
+      </div>
+      {userCombos.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Meus combos</h2>
+          <ComboGrid
+            templates={userCombos}
+            videoDuration={videoDuration}
+            fontId={fontId}
+            videoUrl={videoUrl}
+            videoId={videoId}
+            onPreview={onPreview}
+            onDuplicate={onDuplicateUser}
+            onRename={onRenameUser}
+            onDelete={onDeleteUser}
+          />
+        </section>
+      ) : null}
+      {templates.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nenhum combo nesta etapa.</p>
+      ) : (
+        <ComboGrid
+          templates={templates}
+          videoDuration={videoDuration}
+          fontId={fontId}
+          videoUrl={videoUrl}
+          videoId={videoId}
+          onPreview={onPreview}
+          onDuplicate={onDuplicate}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      )}
+    </div>
+  )
+}
+
+function ComboGrid({
+  templates,
+  videoDuration,
+  fontId,
+  videoUrl,
+  videoId,
+  onPreview,
   onDuplicate,
   onRename,
   onDelete,
@@ -425,45 +583,41 @@ function TemplatesList({
   fontId: string
   videoUrl?: string
   videoId?: string
-  onApply: (template: Template) => void
+  onPreview: (template: Template) => void
   onDuplicate: (template: Template) => void
   onRename: (template: Template, name: string) => void
   onDelete: (template: Template) => void
 }) {
-  if (templates.length === 0) {
-    return <p className="text-xs text-muted-foreground">Nenhum combo nesta biblioteca.</p>
-  }
-
   return (
-    <div className="flex flex-col gap-3">
+    <div className="grid grid-cols-2 gap-2">
       {templates.map((template) => (
         <LibraryActionCard
           key={template.id}
           name={template.name}
-          ariaLabel={`Aplicar combo ${template.name}`}
-          onApply={() => onApply(template)}
+          ariaLabel={`Ver prévia do combo ${template.name}`}
+          compact
+          onApply={() => onPreview(template)}
           onDuplicate={() => onDuplicate(template)}
           onRename={(name) => onRename(template, name)}
           onDelete={() => onDelete(template)}
         >
-          <div className="flex gap-3 pr-24">
-            <ComboStillPreview
-              template={template}
-              fontId={fontId}
-              videoUrl={videoUrl}
-              videoId={videoId}
-              videoDuration={videoDuration}
-            />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-foreground">{template.name}</p>
-              <p className="text-xs text-muted-foreground">{template.description}</p>
+          <div className="relative mb-2 aspect-[9/16] overflow-hidden rounded-md bg-zinc-900">
+            <div className="absolute inset-0 opacity-40">
+              <ComboStillPreview
+                template={template}
+                fontId={fontId}
+                videoUrl={videoUrl}
+                videoId={videoId}
+                videoDuration={videoDuration}
+              />
             </div>
+            <div className="absolute inset-0 bg-black/55" />
+            <p className="absolute inset-2 flex items-center justify-center text-center text-sm font-black uppercase leading-tight text-white">
+              {comboMainText(template)}
+            </p>
           </div>
-          <ComboCardMeta
-            template={template}
-            overflows={comboOverflowsVideo(template, videoDuration)}
-            videoDuration={videoDuration}
-          />
+          <p className="truncate text-xs font-semibold text-foreground">{template.name}</p>
+          <p className="text-[0.65rem] text-muted-foreground">{comboContentSummary(template)}</p>
         </LibraryActionCard>
       ))}
     </div>
@@ -486,16 +640,34 @@ function ElementsGrid({
   if (elements.length === 0) {
     return <p className="text-xs text-muted-foreground">Nenhum elemento nesta biblioteca.</p>
   }
+  const showcase = elements.some((item) => item.label.toLowerCase().includes("mais vendido"))
+    ? elements
+    : [
+        ...elements,
+        {
+          ...elements.find((item) => item.type === "selo-frete"),
+          id: "mais-vendido",
+          type: "selo-frete" as const,
+          label: "Selo Mais vendido",
+        },
+      ].filter((item) => item && item.type)
 
   return (
         <div className="grid grid-cols-2 gap-2">
-          {elements.map((item) => (
+          {showcase.map((item) => (
             <LibraryActionCard
               key={item.id}
               name={item.label}
               ariaLabel={`Aplicar elemento ${item.label}`}
               compact
-              onApply={() => onApply(item)}
+              dragType={item.type}
+              onApply={() =>
+                onApply(
+                  item.id === "mais-vendido"
+                    ? { ...item, label: "Selo Mais vendido" }
+                    : item,
+                )
+              }
               onDuplicate={() => onDuplicate(item)}
               onRename={(name) => onRename(item, name)}
               onDelete={() => onDelete(item)}
@@ -523,6 +695,7 @@ function LibraryActionCard({
   onDuplicate,
   onRename,
   onDelete,
+  dragType,
   children,
 }: {
   name: string
@@ -532,6 +705,7 @@ function LibraryActionCard({
   onDuplicate: () => void
   onRename: (name: string) => void
   onDelete: () => void
+  dragType?: string
   children: ReactNode
 }) {
   const [renaming, setRenaming] = useState(false)
@@ -578,6 +752,12 @@ function LibraryActionCard({
       <button
         type="button"
         aria-label={ariaLabel}
+        draggable={Boolean(dragType)}
+        onDragStart={(event) => {
+          if (!dragType) return
+          event.dataTransfer.setData("application/x-editor-element", dragType)
+          event.dataTransfer.effectAllowed = "copy"
+        }}
         onClick={onApply}
         className={cn(
           "flex w-full flex-col rounded-lg border border-border bg-card text-left transition-colors",
@@ -696,22 +876,43 @@ function FontsGrid({
   sample,
   onSampleChange,
   onSelectFont,
+  selectedTextId,
+  usedFontIds,
+  onUseFontOnText,
 }: {
   fontId: string
   sample: string
   onSampleChange: (value: string) => void
   onSelectFont: (fontId: string) => void
+  selectedTextId: string | null
+  usedFontIds: string[]
+  onUseFontOnText: (fontId: string) => void
 }) {
   const [readyTick, setReadyTick] = useState(0)
+  const [mood, setMood] = useState<FontMood | "todos">("todos")
+  const [customFonts, setCustomFonts] = useState<StoredLibraryFont[]>([])
+  const inputRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
     let cancelled = false
     void ensureTextPresetFontsReady().then(() => {
       if (!cancelled) setReadyTick((tick) => tick + 1)
     })
+    void listLibraryFonts().then((fonts) => {
+      if (!cancelled) setCustomFonts(fonts)
+    })
     return () => {
       cancelled = true
     }
   }, [])
+  const moods: Array<{ id: FontMood | "todos"; label: string }> = [
+    { id: "todos", label: "Todas" },
+    { id: "impacto", label: "Impacto" },
+    { id: "condensada", label: "Condensada" },
+    { id: "elegante", label: "Elegante" },
+    { id: "manuscrita", label: "Manuscrita" },
+    { id: "tecnica", label: "Técnica" },
+  ]
+  const fonts = FONT_OPTIONS.filter((font) => mood === "todos" || FONT_MOOD[font.id] === mood)
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
@@ -722,9 +923,56 @@ function FontsGrid({
           aria-label="Texto de exemplo das fontes"
           placeholder="Digite um texto de exemplo"
         />
+        <div className="flex flex-wrap gap-1">
+          {moods.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={mood === item.id}
+              className={cn(
+                "rounded-full px-2 py-1 text-[0.65rem]",
+                mood === item.id ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+              )}
+              onClick={() => setMood(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+          <Button type="button" size="xs" variant="outline" onClick={() => inputRef.current?.click()}>
+            Enviar .ttf/.otf
+          </Button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".ttf,.otf,font/ttf,font/otf"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) {
+                void saveLibraryFont(file).then((saved) => {
+                  if (saved) setCustomFonts((current) => [saved, ...current])
+                })
+              }
+              event.target.value = ""
+            }}
+          />
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        {FONT_OPTIONS.map((font) => {
+        {customFonts.map((font) => (
+          <FontPreviewCard
+            key={font.id}
+            font={{ id: font.id, label: font.label, family: font.family, vibe: "Enviada" }}
+            sample={sample}
+            selected={fontId === font.id}
+            used={usedFontIds.includes(font.family) || usedFontIds.includes(font.id)}
+            canUseOnText={Boolean(selectedTextId)}
+            onUseOnText={() => onUseFontOnText(font.family)}
+            onSelect={() => onSelectFont(font.id)}
+            ariaLabel={`Fonte ${font.label}`}
+          />
+        ))}
+        {fonts.map((font) => {
           const isActive = font.id === fontId
           const hosted = TEXT_PRESET_FONT_FILES.find((item) => item.id === font.id)
           const loaded = Boolean(
@@ -737,6 +985,9 @@ function FontsGrid({
               sample={sample}
               selected={isActive}
               loaded={loaded}
+              used={usedFontIds.includes(font.id)}
+              canUseOnText={Boolean(selectedTextId)}
+              onUseOnText={() => onUseFontOnText(font.id)}
               onSelect={() => onSelectFont(font.id)}
               ariaLabel={`Definir ${font.label} como fonte padrão`}
             />

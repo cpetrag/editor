@@ -32,6 +32,29 @@ export const FONT_MAP: Record<string, FontOption> = Object.fromEntries(
   FONT_OPTIONS.map((font) => [font.id, font]),
 ) as Record<string, FontOption>
 
+export const FONT_MOOD = {
+  anton: "impacto",
+  archivo: "impacto",
+  alfa: "impacto",
+  lilita: "impacto",
+  luckiest: "impacto",
+  titan: "impacto",
+  montserrat: "impacto",
+  baloo: "impacto",
+  bebas: "condensada",
+  oswald: "condensada",
+  playfair: "elegante",
+  poppins: "elegante",
+  nunito: "elegante",
+  caveat: "manuscrita",
+  space: "tecnica",
+  inter: "tecnica",
+  geist: "tecnica",
+  courier: "tecnica",
+} as const
+
+export type FontMood = (typeof FONT_MOOD)[keyof typeof FONT_MOOD]
+
 export const FONT_PREVIEW_SAMPLE = "Oferta relâmpago"
 
 export function withProjectFont(fonts: string[], fontId: string): string[] {

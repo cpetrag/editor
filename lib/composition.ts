@@ -468,6 +468,11 @@ function roundTenths(value: number): number {
   return Math.round(value * 10) / 10
 }
 
+/** 30 fps: um décimo (passo do arraste) cai em quadro cheio e 1/30 s também sobrevive. */
+function roundToFrame(value: number): number {
+  return Math.round(value * 30) / 30
+}
+
 export type ClampField = "start" | "duration" | "both"
 
 function clampCaptionWords(
@@ -495,8 +500,8 @@ export function clampInsert(
   if (!(videoDuration > 0)) {
     return withCaptionWords({
       ...insert,
-      start: Math.max(0, roundTenths(insert.start)),
-      duration: Math.max(MIN_DURATION, roundTenths(insert.duration)),
+      start: Math.max(0, roundToFrame(insert.start)),
+      duration: Math.max(MIN_DURATION, roundToFrame(insert.duration)),
     })
   }
 
@@ -514,9 +519,9 @@ export function clampInsert(
   if (duration > videoDuration) {
     duration = videoDuration
   }
-  duration = Math.max(MIN_DURATION, roundTenths(duration))
+  duration = Math.max(MIN_DURATION, roundToFrame(duration))
   const maxStart = Math.max(0, videoDuration - duration)
-  const start = roundTenths(clamp(insert.start, 0, maxStart))
+  const start = roundToFrame(clamp(insert.start, 0, maxStart))
   return withCaptionWords({ ...insert, start, duration })
 }
 
