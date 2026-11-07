@@ -73,20 +73,25 @@ type Chunk = {
   missing?: boolean
   rise: number
   opacity: number
+  /** Espaço antes deste trecho, quando ele não abre a linha. `0` cola no anterior. */
+  gapBefore?: number
 }
 
 function priceChunks(text: string, font: MeasureFont, color: string, accent: boolean): Chunk[] | null {
   const match = text.match(/^(R\$)\s*(\d[\d.]*)(,\d{2})$/)
   if (!match) return null
   const main = font.size
+  const symbol = main * 0.42
+  const cents = main * 0.45
   return [
     {
       text: match[1] ?? "R$",
-      font: { ...font, size: main * 0.42, letterSpacing: 0 },
+      font: { ...font, size: symbol, letterSpacing: 0 },
       color,
       accent,
-      rise: main * 1.05,
+      rise: symbol * 1.05,
       opacity: 1,
+      gapBefore: 0,
     },
     {
       text: match[2] ?? "",
@@ -95,14 +100,16 @@ function priceChunks(text: string, font: MeasureFont, color: string, accent: boo
       accent,
       rise: 0,
       opacity: 1,
+      gapBefore: main * 0.12,
     },
     {
       text: match[3] ?? "",
-      font: { ...font, size: main * 0.45, letterSpacing: 0 },
+      font: { ...font, size: cents, letterSpacing: 0 },
       color,
       accent,
-      rise: main * 0.95,
+      rise: cents * 0.95,
       opacity: 1,
+      gapBefore: 0,
     },
   ]
 }
@@ -207,6 +214,8 @@ export function layoutMarkedText(input: {
     let x = -currentWidth / 2
     const pieces: PaintPiece[] = []
     for (const chunk of current) {
+      const gap = pieces.length > 0 ? (chunk.gapBefore ?? space) : 0
+      x += gap
       const width = widthOf(chunk.text, chunk.font, input.measure)
       pieces.push({ ...chunk, x, y: 0, width })
       x += width
@@ -217,11 +226,11 @@ export function layoutMarkedText(input: {
   }
 
   const pushChunk = (chunk: Chunk, width: number) => {
-    const gap = current.length > 0 ? space : 0
+    const gap = current.length > 0 ? (chunk.gapBefore ?? space) : 0
     if (current.length > 0 && currentWidth + gap + width > input.maxWidth && input.maxWidth > 0) flush()
-    if (current.length > 0) currentWidth += space
-    current.push(chunk)
-    currentWidth += width
+    const usedGap = current.length > 0 ? (chunk.gapBefore ?? space) : 0
+    current.push({ ...chunk, gapBefore: usedGap })
+    currentWidth += usedGap + width
   }
 
   for (const chunk of chunks) {
@@ -289,6 +298,17 @@ export function layoutMarkedText(input: {
     blockW: bbox.w,
     blockH: bbox.h,
   }
+}
+
+/** Layout com espaços entre palavras. Usado pelo preview, pela miniatura e pelo teste. */
+export function layoutInsert(text: string, style: InsertStyle, maxWidth = 20000): InsertPaintLayout {
+  return layoutMarkedText({
+    text,
+    style,
+    maxWidth,
+    measure: (value, font) => value.length * font.size * 0.5,
+    editPreview: true,
+  })
 }
 
 /** Linha do riscado: mesma largura do run, cruzando os glifos. */
