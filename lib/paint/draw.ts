@@ -122,6 +122,14 @@ function fontOf(piece: PaintPiece): string {
   return `${italic}${piece.font.weight} ${piece.font.size}px "${piece.font.family}"`
 }
 
+export function deviceScaleOf(ctx: CanvasRenderingContext2D): number {
+  if (typeof ctx.getTransform !== "function") return 1
+  const matrix = ctx.getTransform()
+  if (!matrix || typeof matrix.a !== "number") return 1
+  const scale = Math.hypot(matrix.a, matrix.b)
+  return Number.isFinite(scale) && scale > 0 ? scale : 1
+}
+
 function paintPiece(ctx: CanvasRenderingContext2D, piece: PaintPiece, style: InsertStyle, strokeScale: number): void {
   ctx.save()
   ctx.font = fontOf(piece)
@@ -152,24 +160,30 @@ function paintPiece(ctx: CanvasRenderingContext2D, piece: PaintPiece, style: Ins
     ctx.lineWidth = strokeWidth
     ctx.strokeText(piece.text, piece.x, piece.y)
   }
+  const pixelScale = deviceScaleOf(ctx)
   if (style.text.longShadow && !piece.missing) {
     ctx.fillStyle = style.text.longShadow.color
     for (let step = style.text.longShadow.length; step >= 1; step -= 1) {
-      ctx.fillText(piece.text, piece.x + step * 1.4 * strokeScale, piece.y + step * 1.4 * strokeScale)
+      const shift = step * 1.4 * strokeScale
+      ctx.fillText(piece.text, piece.x + shift, piece.y + shift)
     }
   }
-  if (!style.text.boxShadow && style.text.shadows.length > 0 && !style.text.gradient.enabled) {
-    const shadow = style.text.shadows[0]
-    if (shadow) {
-      ctx.shadowOffsetX = shadow.x * strokeScale
-      ctx.shadowOffsetY = shadow.y * strokeScale
-      ctx.shadowBlur = shadow.blur * strokeScale
+  if (!style.text.boxShadow && style.text.shadows.length > 0 && piece.color !== "transparent") {
+    for (const shadow of style.text.shadows) {
+      ctx.save()
+      ctx.shadowOffsetX = shadow.x * pixelScale
+      ctx.shadowOffsetY = shadow.y * pixelScale
+      ctx.shadowBlur = shadow.blur * pixelScale
       ctx.shadowColor = shadow.color
+      ctx.fillStyle = fill
+      ctx.fillText(piece.text, piece.x, piece.y)
+      ctx.restore()
     }
   }
+  ctx.shadowColor = "transparent"
+  ctx.shadowBlur = 0
   ctx.fillStyle = fill
   if (piece.color !== "transparent") ctx.fillText(piece.text, piece.x, piece.y)
-  ctx.shadowColor = "transparent"
   const line = strikeLine(piece)
   if (line) {
     ctx.strokeStyle = piece.color
@@ -225,10 +239,11 @@ export function paintInsertLayout(
     ctx.fillStyle = style.text.background.color
     if (style.text.boxShadow) {
       const shadow = style.text.shadows[0]
+      const pixelScale = deviceScaleOf(ctx)
       if (shadow) {
-        ctx.shadowOffsetX = shadow.x
-        ctx.shadowOffsetY = shadow.y
-        ctx.shadowBlur = shadow.blur
+        ctx.shadowOffsetX = shadow.x * pixelScale
+        ctx.shadowOffsetY = shadow.y * pixelScale
+        ctx.shadowBlur = shadow.blur * pixelScale
         ctx.shadowColor = shadow.color
       }
     }

@@ -282,28 +282,35 @@ function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
       ref.current.height = Math.round(cssH * dpr)
       const ctx = ref.current.getContext("2d")
       if (!ctx) return
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const backdrop = ctx.createLinearGradient(0, 0, cssW, cssH)
+      const scale = (cssH / 1920) * 4
+      const logicalW = Math.max(1, Math.round(cssW / scale))
+      const logicalH = Math.max(1, Math.round(cssH / scale))
+      const off = document.createElement("canvas")
+      off.width = logicalW
+      off.height = logicalH
+      const offCtx = off.getContext("2d")
+      if (!offCtx) return
+      const backdrop = offCtx.createLinearGradient(0, 0, logicalW, logicalH)
       backdrop.addColorStop(0, "#6b5646")
       backdrop.addColorStop(1, "#2a211b")
-      ctx.fillStyle = backdrop
-      ctx.fillRect(0, 0, cssW, cssH)
-      const scale = (cssH / 1920) * 4
-      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0)
-      paintMarkedInsert(ctx, {
+      offCtx.fillStyle = backdrop
+      offCtx.fillRect(0, 0, logicalW, logicalH)
+      paintMarkedInsert(offCtx, {
         text: sampleTextForPreset(presetId),
         style: { ...style, text: { ...style.text, rotation: 0 } },
-        maxWidth: cssW / scale - 8,
+        maxWidth: logicalW - 16,
         measure: (text, font) => {
           const italic = font.italic ? "italic " : ""
-          ctx.font = `${italic}${font.weight} ${font.size}px "${font.family}"`
-          return ctx.measureText(text).width
+          offCtx.font = `${italic}${font.weight} ${font.size}px "${font.family}"`
+          return offCtx.measureText(text).width
         },
-        origin: { cx: cssW / 2 / scale, cy: cssH / 2 / scale },
+        origin: { cx: logicalW / 2, cy: logicalH / 2 },
         brandKitId: kitId,
         editPreview: false,
         productData: { preco: "R$ 49,90", preco_de: "R$ 89,90" },
       })
+      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0)
+      ctx.drawImage(off, 0, 0)
     })
     return () => {
       cancelled = true
