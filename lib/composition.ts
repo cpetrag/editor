@@ -29,6 +29,9 @@ import {
   serializeSourceCuts,
   type SourceCut,
 } from "./source-segments.ts"
+import type { BrandKitId } from "./brand/kits.ts"
+import type { ContentNiche } from "./content/presets.ts"
+import type { ProductData } from "./content/runs.ts"
 import { parseCustomPresets } from "./style/user-presets.ts"
 import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
 import { migrateTextPresetId } from "./text-presets/migrate.ts"
@@ -168,6 +171,7 @@ export interface CompositionInsert {
   maxWidthPct?: number
   textAlign?: OverlayTextAlign
   role?: "gancho" | "prova" | "cta"
+  contentId?: string
   scale?: number
   fillColor?: string
   accentColor?: string
@@ -312,6 +316,10 @@ export interface Composition {
   customPresets?: Record<string, UserPreset>
   watermarkEnabled?: boolean
   retention?: { ganchoEnd: number; ctaStart: number }
+  productData?: ProductData
+  niche?: ContentNiche
+  brandKitId?: BrandKitId
+  projectSeed?: string
 }
 
 const INSERT_TYPES: readonly InsertType[] = [
@@ -828,6 +836,7 @@ function parseInsert(raw: unknown): CompositionInsert | null {
         ...(asStoredString(raw.fontFamily) ? { fontFamily: asStoredString(raw.fontFamily) } : {}),
         ...(asNumber(raw.rotation) !== null ? { rotation: asNumber(raw.rotation)! } : {}),
         ...(raw.role === "gancho" || raw.role === "prova" || raw.role === "cta" ? { role: raw.role } : {}),
+        ...(typeof raw.contentId === "string" && raw.contentId ? { contentId: raw.contentId } : {}),
       },
       raw,
     )
@@ -976,6 +985,44 @@ function isSupportedVersion(value: unknown): boolean {
   )
 }
 
+function isContentNicheValue(value: unknown): value is ContentNiche {
+  return value === "shopee" || value === "moda" || value === "beleza" || value === "bebe"
+}
+
+function isBrandKitValue(value: unknown): value is BrandKitId {
+  return (
+    value === "shopee" ||
+    value === "beleza" ||
+    value === "bebe" ||
+    value === "moda" ||
+    value === "contraste"
+  )
+}
+
+function parseProductData(raw: unknown): ProductData | undefined {
+  if (!isRecord(raw)) return undefined
+  const keys = [
+    "produto",
+    "preco",
+    "preco_de",
+    "desconto",
+    "cupom",
+    "nota",
+    "vendidos",
+    "tamanhos",
+    "qtd",
+  ] as const
+  const data: ProductData = {}
+  let found = false
+  for (const key of keys) {
+    const value = raw[key]
+    if (typeof value !== "string") continue
+    data[key] = value
+    found = true
+  }
+  return found ? data : undefined
+}
+
 function parseRetention(raw: unknown): { ganchoEnd: number; ctaStart: number } | undefined {
   if (!isRecord(raw)) return undefined
   const ganchoEnd = asNumber(raw.ganchoEnd)
@@ -1011,6 +1058,7 @@ export function parseComposition(input: unknown): Composition {
     : []
 
   const source = parseSource(input.source)
+  const productData = parseProductData(input.productData)
   const styleRef = parseStyleRef(input.styleRef)
   const tracks = parseTracks(input.tracks)
   const customPresets = parseCustomPresets(input.customPresets)
@@ -1039,6 +1087,10 @@ export function parseComposition(input: unknown): Composition {
     ...(customPresets ? { customPresets } : {}),
     ...(input.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(retention ? { retention } : {}),
+    ...(productData ? { productData } : {}),
+    ...(isContentNicheValue(input.niche) ? { niche: input.niche } : {}),
+    ...(isBrandKitValue(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
+    ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
   })
 }
 
@@ -1084,6 +1136,7 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
         ? { rotation: insert.rotation }
         : {}),
       ...(insert.role ? { role: insert.role } : {}),
+      ...(insert.contentId ? { contentId: insert.contentId } : {}),
     }
   }
   if (kind === "caption") {
@@ -1170,6 +1223,10 @@ export function serializeComposition(composition: Composition): string {
     ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(composition.retention ? { retention: composition.retention } : {}),
+    ...(composition.productData ? { productData: composition.productData } : {}),
+    ...(composition.niche ? { niche: composition.niche } : {}),
+    ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    ...(composition.projectSeed ? { projectSeed: composition.projectSeed } : {}),
   }
   return JSON.stringify(payload)
 }

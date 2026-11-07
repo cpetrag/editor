@@ -40,6 +40,18 @@ export type TextStyle = {
   y: number
   rotation: number
   opacity: number
+  /** Cor do trecho entre asteriscos. `slot:*` resolve com o kit. */
+  accent?: string
+  italic?: boolean
+  accentFont?: string
+  outerStroke?: { width: number; color: string }
+  longShadow?: { length: number; color: string }
+  priceLayout?: boolean
+  underline?: boolean
+  boxShadow?: boolean
+  shape?: "fita" | "balao" | "etiqueta" | "selo" | "tarja"
+  glass?: boolean
+  highlightBar?: { color: string; skew: number }
 }
 
 export type AnimTarget = {
@@ -49,6 +61,31 @@ export type AnimTarget = {
   rotate?: number
   opacity?: number
   blur?: number
+  scaleX?: number
+  scaleY?: number
+  rotateX?: number
+  rotateY?: number
+  skewX?: number
+  clip?: number
+  jitter?: number
+}
+
+export type EasingName =
+  | "linear"
+  | "ease-in"
+  | "ease-out"
+  | "ease-in-out"
+  | "spring"
+  | "back-in"
+  | "back-out"
+  | "elastic-out"
+  | "bounce-out"
+
+export type EmphasisHit = {
+  type: "punch" | "tremida" | "flash" | "giro" | "pulo"
+  atFrame: number
+  durationInFrames: number
+  strength: number
 }
 
 export type Animation = {
@@ -57,16 +94,46 @@ export type Animation = {
     from: AnimTarget
     durationInFrames: number
     delayInFrames: number
-    easing: "linear" | "ease-out" | "spring"
+    easing: EasingName
     overshoot: number
     staggerInFrames: number
+    recipeId?: string
   }
   exit: {
     to: AnimTarget
     durationInFrames: number
-    easing: "linear" | "ease-out" | "spring"
+    easing: EasingName
+    recipeId?: string
+    staggerInFrames?: number
   }
-  loop: { type: "nenhum" | "pulse" | "shake" | "float"; amplitude: number; speed: number }
+  loop: {
+    type:
+      | "nenhum"
+      | "pulse"
+      | "shake"
+      | "float"
+      | "batimento"
+      | "tremor"
+      | "chacoalho"
+      | "flutuar"
+      | "quicar"
+      | "balanco"
+      | "gelatina"
+      | "onda"
+      | "brilho"
+      | "piscar"
+      | "inclinar3d"
+    amplitude: number
+    speed: number
+    recipeId?: string
+  }
+  emphasis?: EmphasisHit[]
+  origin?: "centro" | "base" | "topo"
+  order?: "inicio" | "fim" | "centro" | "aleatorio"
+  intensity?: number
+  speed?: number
+  packId?: string
+  clipDir?: "esq" | "dir" | "cima" | "baixo"
 }
 
 export type InsertStyle = { text: TextStyle; animation: Animation }
@@ -76,7 +143,7 @@ export type StyleRef = {
   overrides: DeepPartial<InsertStyle>
 }
 
-export type PresetGroup = "legenda" | "gancho" | "prova" | "cta"
+export type PresetGroup = "legenda" | "gancho" | "prova" | "cta" | "oferta"
 
 export type Preset = {
   label: string

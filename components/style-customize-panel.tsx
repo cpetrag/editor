@@ -23,7 +23,9 @@ import { FONT_MAP, FONT_OPTIONS } from "@/lib/inserts"
 import { formatPanelNumber } from "@/lib/panel-number"
 import { FontOptionLabel } from "@/components/font-option-label"
 import { WEIGHTS_BY_FONT, clampFontWeight, type FontId, type FontWeight } from "@/lib/compose/insert-style"
+import { MotionPanel } from "@/components/motion-panel"
 import { insertKind, type CaptionPreset, type CaptionStyle, type CompositionInsert } from "@/lib/composition"
+import type { RetentionCuts } from "@/lib/insert-ops"
 import { chipsForContext, trackStyleForInsert } from "@/lib/style-preset"
 import { LEGADO_PRESET_ID } from "@/lib/style/presets"
 import { DEFAULT_TEXT_PRESET_ID, isTextPresetId } from "@/lib/text-presets"
@@ -220,6 +222,9 @@ export function StyleCustomizePanel({
   captionInserts,
   isBlockOpen,
   onToggleBlock,
+  getPlayhead,
+  onPlayRange,
+  retentionCuts,
 }: {
   insert: CompositionInsert
   videoDuration: number
@@ -243,6 +248,9 @@ export function StyleCustomizePanel({
   captionInserts?: CompositionInsert[]
   isBlockOpen: (id: string) => boolean
   onToggleBlock: (id: string) => void
+  getPlayhead?: () => number
+  onPlayRange?: (start: number, end: number) => void
+  retentionCuts?: RetentionCuts | null
 }) {
   const kind = insertKind(insert)
   const [savingAs, setSavingAs] = useState(false)
@@ -1046,7 +1054,19 @@ export function StyleCustomizePanel({
         </>
       ) : null}
 
-      {tab === "motion" ? (
+      {tab === "motion" && context !== "caption" ? (
+        <MotionPanel
+          insert={insert}
+          animation={resolved.animation}
+          videoDuration={videoDuration}
+          retentionCuts={retentionCuts}
+          onChange={(next) => onPatchStyle("animation", next)}
+          getPlayhead={getPlayhead}
+          onPlayRange={onPlayRange}
+        />
+      ) : null}
+
+      {tab === "motion" && context === "caption" ? (
         <>
           <Accordion
             title="Entrada"

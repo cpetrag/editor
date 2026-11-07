@@ -26,6 +26,10 @@ export const FONT_OPTIONS: FontOption[] = [
   { id: "titan", label: "Titan One", family: "var(--font-titan)", vibe: "Pesada · grito" },
   { id: "caveat", label: "Caveat", family: '"Caveat", cursive', vibe: "Manuscrita · OFL" },
   { id: "courier", label: "Courier Prime", family: '"Courier Prime", monospace', vibe: "Máquina · OFL" },
+  { id: "archivo-black", label: "Archivo Black", family: '"Archivo Black", sans-serif', vibe: "Pesada · oferta" },
+  { id: "permanent-marker", label: "Permanent Marker", family: '"Permanent Marker", cursive', vibe: "Caneta · OFL" },
+  { id: "pacifico", label: "Pacifico", family: "Pacifico, cursive", vibe: "Script · OFL" },
+  { id: "fredoka", label: "Fredoka", family: "Fredoka, sans-serif", vibe: "Bolha · OFL" },
 ]
 
 export const FONT_MAP: Record<string, FontOption> = Object.fromEntries(
@@ -51,6 +55,10 @@ export const FONT_MOOD = {
   inter: "tecnica",
   geist: "tecnica",
   courier: "tecnica",
+  "archivo-black": "impacto",
+  "permanent-marker": "manuscrita",
+  pacifico: "manuscrita",
+  fredoka: "impacto",
 } as const
 
 export type FontMood = (typeof FONT_MOOD)[keyof typeof FONT_MOOD]

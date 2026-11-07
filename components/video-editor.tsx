@@ -11,12 +11,13 @@ import {
   FACTORY_CTA_TEXT,
   FACTORY_HOOK_TEXT,
   FACTORY_PROOF_TEXT,
-  buildChampionStructure,
   hookVariationFiles,
   hookVariationManifest,
   runHookVariationQueue,
   type HookJobState,
 } from "@/lib/structure-preset"
+import { applyContentRecipe, recipeInsertsForEmptyMarkers } from "@/lib/content/recipes"
+import { contentPresetById, contentPresetsFor, isContentNiche, type ContentNiche } from "@/lib/content/presets"
 import {
   listStructurePresets,
   saveStructurePreset,
@@ -135,6 +136,7 @@ import {
   sourceKind,
 } from "@/lib/source-url"
 import { isEditableTarget } from "@/lib/is-editable-target"
+import { emptyVariableWarnings } from "@/lib/content/empty-vars"
 import { checklistItemsFromComposition, collectExportWarnings } from "@/lib/export-checklist"
 import { committedInlineText, DEFAULT_INLINE_TEXT } from "@/lib/compose/inline-editor-style"
 import { assembleInserts, type GeneratePipelineResult } from "@/lib/ai-generate"
@@ -401,6 +403,7 @@ export function VideoEditor() {
   const [batchPreview, setBatchPreview] = useState<Variation | null>(null)
   const historyRef = useRef(emptyHistory())
   const gestureRef = useRef(emptyGesture())
+  const textHistoryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false })
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved")
   const syncHistoryFlags = useCallback(() => {
@@ -1257,6 +1260,28 @@ export function VideoEditor() {
             )
           }),
         )
+        return
+      }
+      if (
+        current &&
+        insertKind(current) === "text" &&
+        Object.keys(patch).length === 1 &&
+        typeof patch.text === "string"
+      ) {
+        if (!gestureRef.current.active) {
+          gestureRef.current = beginInsertGesture(historyPresent(compositionRef.current), gestureRef.current)
+        }
+        patchInserts((prev) => prev.map((insert) => (insert.id === id ? mergeInsertPatch(insert, patch) : insert)))
+        if (textHistoryTimer.current) clearTimeout(textHistoryTimer.current)
+        textHistoryTimer.current = setTimeout(() => {
+          const closed = endInsertGesture(
+            historyRef.current,
+            gestureRef.current,
+            historyPresent(compositionRef.current),
+          )
+          historyRef.current = closed.history
+          gestureRef.current = closed.gesture
+        }, 800)
         return
       }
       patchInserts((prev) =>
@@ -2206,26 +2231,50 @@ export function VideoEditor() {
     [backgroundUrl, composition, stickerBlobUrls, watermarkPrefs],
   )
 
-  const commitStructure = useCallback((mode: "replace" | "add", copy: { hook: string; proof: string; cta: string }) => {
+  const commitStructure = useCallback((_mode: "replace" | "add", _copy: { hook: string; proof: string; cta: string }) => {
     applyComposition((prev) => {
-      const built = buildChampionStructure(prev.source.duration, copy)
-      const kept = mode === "replace" ? prev.inserts.filter((insert) => insertKind(insert) === "caption") : prev.inserts
+      const niche: ContentNiche = isContentNiche(prev.niche ?? "") ? prev.niche! : "shopee"
+      const added = recipeInsertsForEmptyMarkers({
+        duration: prev.source.duration,
+        niche,
+        inserts: prev.inserts,
+        cuts: prev.retention,
+        productData: prev.productData,
+      })
+      if (added.length === 0) return prev
       return {
         ...prev,
-        inserts: [...kept, ...built.inserts],
-        retention: built.retention,
-        watermarkEnabled: true,
+        niche,
+        projectSeed: prev.projectSeed || prev.source.fileName || "projeto",
+        inserts: [...prev.inserts, ...added],
       }
     }, "discrete")
   }, [applyComposition])
 
   const requestStructure = useCallback((copy: { hook: string; proof: string; cta: string }) => {
-    const hasArt = compositionRef.current.inserts.some((insert) => insertKind(insert) !== "caption")
-    if (!hasArt) {
-      commitStructure("replace", copy)
+    const current = compositionRef.current
+    const niche: ContentNiche = isContentNiche(current.niche ?? "") ? current.niche ?? "shopee" : "shopee"
+    if (gestureRef.current.active) {
+      const closed = endInsertGesture(
+        historyRef.current,
+        gestureRef.current,
+        historyPresent(current),
+      )
+      historyRef.current = closed.history
+      gestureRef.current = closed.gesture
+    }
+    const added = recipeInsertsForEmptyMarkers({
+      duration: current.source.duration,
+      niche,
+      inserts: current.inserts,
+      cuts: current.retention,
+      productData: current.productData,
+    })
+    if (added.length === 0) {
+      setLiveMessage("Cada marcador já tem um texto. Nada foi sobreposto.")
       return
     }
-    setStructureChoice(copy)
+    commitStructure("add", copy)
   }, [commitStructure])
 
   const saveCurrentStructure = useCallback(() => {
@@ -2249,9 +2298,24 @@ export function VideoEditor() {
       })
   }, [])
 
-  const exportHookVariations = useCallback(async (hooks: string[]) => {
+  const exportHookVariations = useCallback(async (input: { hooks: string[]; varyText: boolean; varyRecipes: boolean }) => {
     if (hookRunning || !hookDialogId) return
     const stem = sanitizeExportStem(exportFileName) || "video"
+    const current = compositionRef.current
+    const niche = isContentNiche(current.niche ?? "") ? current.niche ?? "shopee" : "shopee"
+    const sourceInsert = current.inserts.find((insert) => insert.id === hookDialogId)
+    const slot = sourceInsert?.contentId?.split("-")[0]
+    const catalog = contentPresetsFor(
+      slot === "gancho" || slot === "prova" || slot === "oferta" || slot === "cta" ? slot : "gancho",
+      niche,
+    )
+    const useCatalog = input.varyText || input.varyRecipes
+    const chosen = useCatalog ? catalog.slice(0, 5) : []
+    const hooks = chosen.length > 0 ? chosen.map((item) => item.text) : input.hooks
+    const extras = chosen.map((item) => ({
+      contentId: item.id,
+      ...(input.varyRecipes ? { styleId: item.style, packId: item.pack } : {}),
+    }))
     const plan = hookVariationFiles(stem, hooks)
     setHookRunning(true)
     setHookJobs(plan.map((item) => ({ fileName: item.fileName, hook: item.hook, status: "queued", error: null })))
@@ -2269,16 +2333,20 @@ export function VideoEditor() {
         },
       })
       await runHookVariationQueue({
-        jobs: plan.map((item) => ({
+        jobs: plan.map((item, index) => ({
           fileName: item.fileName,
           hook: item.hook,
           run: async () => {
             const base = compositionRef.current
+            const extra = extras[index]
+            const recipe = extra?.contentId ? contentPresetById(extra.contentId) : undefined
             const next = {
               ...base,
-              inserts: base.inserts.map((insert) =>
-                insert.id === hookDialogId ? { ...insert, text: item.hook } : insert,
-              ),
+              inserts: base.inserts.map((insert) => {
+                if (insert.id !== hookDialogId) return insert
+                if (input.varyRecipes && recipe) return applyContentRecipe(insert, recipe)
+                return { ...insert, text: item.hook, ...(extra?.contentId ? { contentId: extra.contentId } : {}) }
+              }),
             }
             const jobId = await startFinalRender({
               video: videoBlob,
@@ -2305,7 +2373,7 @@ export function VideoEditor() {
         })),
         onUpdate: setHookJobs,
       })
-      const manifest = hookVariationManifest(stem, hooks)
+      const manifest = hookVariationManifest(stem, hooks, extras)
       const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const link = document.createElement("a")
@@ -2484,17 +2552,20 @@ export function VideoEditor() {
 
   const exportWarnings = useMemo(
     () =>
-      collectExportWarnings(
-        checklistItemsFromComposition({
-          inserts: composition.inserts,
-          source: { duration: composition.source.duration },
-          captionStyle: composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
-          captionPreset: composition.captionPreset,
-          tracks: composition.tracks,
-          styleRef: composition.styleRef,
-          brand: { fontId: composition.brand.fontId, logo: composition.brand.logo },
-        }),
-      ),
+      [
+        ...collectExportWarnings(
+          checklistItemsFromComposition({
+            inserts: composition.inserts,
+            source: { duration: composition.source.duration },
+            captionStyle: composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
+            captionPreset: composition.captionPreset,
+            tracks: composition.tracks,
+            styleRef: composition.styleRef,
+            brand: { fontId: composition.brand.fontId, logo: composition.brand.logo },
+          }),
+        ),
+        ...emptyVariableWarnings(composition.inserts, composition.productData),
+      ],
     [
       composition.brand.fontId,
       composition.brand.logo,
@@ -2502,6 +2573,7 @@ export function VideoEditor() {
       composition.captionStyle,
       composition.inserts,
       composition.source.duration,
+      composition.productData,
       composition.styleRef,
       composition.tracks,
     ],
@@ -2748,8 +2820,8 @@ export function VideoEditor() {
             setHookDialogId(null)
             setHookJobs([])
           }}
-          onExport={(hooks) => {
-            void exportHookVariations(hooks)
+          onExport={(input) => {
+            void exportHookVariations(input)
           }}
         />
       ) : null}
@@ -3004,6 +3076,16 @@ export function VideoEditor() {
             sourceSelected={isSourceSelected(selection)}
             onSelectSource={() => setSelection({ kind: "source" })}
             onResetTransform={handleResetAllSourceTransforms}
+            getPlayhead={() => playheadRef.current}
+            onPlayRange={(start, end) => previewRef.current?.playRange(start, end)}
+            retentionCuts={composition.retention ?? null}
+            productData={composition.productData}
+            niche={composition.niche ?? "shopee"}
+            brandKitId={composition.brandKitId ?? "shopee"}
+            projectSeed={composition.projectSeed || composition.source.fileName || "projeto"}
+            onProductData={(productData) => applyComposition((prev) => ({ ...prev, productData }), "discrete")}
+            onNiche={(niche) => applyComposition((prev) => ({ ...prev, niche }), "discrete")}
+            onBrandKit={(brandKitId) => applyComposition((prev) => ({ ...prev, brandKitId }), "discrete")}
             watermarkEnabled={composition.watermarkEnabled === true}
             watermarkPrefs={watermarkPrefs}
             onWatermarkEnabledChange={handleWatermarkEnabled}
@@ -3080,6 +3162,7 @@ export function VideoEditor() {
         )}
         <PreviewPanel
           ref={previewRef}
+          onPatchInsertStyle={patchInsertStyle}
           backgroundUrl={backgroundUrl}
           inserts={previewInserts}
           comboPreviewLabel={comboPreview?.name ?? null}
@@ -3114,6 +3197,8 @@ export function VideoEditor() {
           captionPreset={composition.captionPreset}
           captionStyle={composition.captionStyle}
           styleRef={composition.styleRef}
+          productData={composition.productData}
+          brandKitId={composition.brandKitId}
           tracks={composition.tracks}
           customPresets={composition.customPresets}
           onPatchCaptionStyle={handlePreviewCaptionStyle}

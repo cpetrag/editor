@@ -17,6 +17,10 @@ export const FONT_IDS = [
   "titan",
   "caveat",
   "courier",
+  "archivo-black",
+  "permanent-marker",
+  "pacifico",
+  "fredoka",
 ] as const
 
 export type FontId = (typeof FONT_IDS)[number]
@@ -57,6 +61,10 @@ export const WEIGHTS_BY_FONT: Record<FontId, readonly FontWeight[]> = {
   titan: [400],
   caveat: [700],
   courier: [700],
+  "archivo-black": [400],
+  "permanent-marker": [400],
+  pacifico: [400],
+  fredoka: [700],
 }
 
 export function clampFontWeight(fontId: FontId, weight: FontWeight): FontWeight {
@@ -91,8 +99,8 @@ const FONT_ALIASES: Record<string, FontId> = {
   "bebas-neue": "bebas",
   "bebas neue": "bebas",
   archivo: "archivo",
-  "archivo-black": "archivo",
-  "archivo black": "archivo",
+  "archivo-black": "archivo-black",
+  "archivo black": "archivo-black",
   playfair: "playfair",
   "playfair-display": "playfair",
   "playfair display": "playfair",
@@ -124,6 +132,10 @@ const FONT_ALIASES: Record<string, FontId> = {
   courier: "courier",
   "courier-prime": "courier",
   "courier prime": "courier",
+  "permanent-marker": "permanent-marker",
+  "permanent marker": "permanent-marker",
+  pacifico: "pacifico",
+  fredoka: "fredoka",
 }
 
 const STYLE_KEYS = [

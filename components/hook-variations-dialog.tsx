@@ -17,13 +17,15 @@ export function HookVariationsDialog({
   jobs: { fileName: string; status: "queued" | "running" | "ok" | "error"; error: string | null }[]
   running: boolean
   onClose: () => void
-  onExport: (hooks: string[]) => void
+  onExport: (input: { hooks: string[]; varyText: boolean; varyRecipes: boolean }) => void
 }) {
   const [fields, setFields] = useState<string[]>(() => [initialHook, "", ""])
+  const [varyText, setVaryText] = useState(false)
+  const [varyRecipes, setVaryRecipes] = useState(false)
 
   if (!open) return null
   const filled = fields.map((item) => item.trim()).filter(Boolean)
-  const canExport = filled.length >= 2 && filled.length <= 5 && !running
+  const canExport = (varyText || varyRecipes || (filled.length >= 2 && filled.length <= 5)) && !running
 
   return (
     <div
@@ -66,6 +68,22 @@ export function HookVariationsDialog({
             </label>
           ))}
         </div>
+        <label className="mt-3 flex items-center gap-2 text-xs text-foreground">
+          <input type="checkbox" checked={varyText} disabled={running} onChange={(event) => setVaryText(event.target.checked)} />
+          Variar o texto dentro do mesmo momento e nicho
+        </label>
+        <label className="mt-1 flex items-center gap-2 text-xs text-foreground">
+          <input
+            type="checkbox"
+            checked={varyRecipes}
+            disabled={running}
+            onChange={(event) => {
+              setVaryRecipes(event.target.checked)
+              if (event.target.checked) setVaryText(true)
+            }}
+          />
+          Variar receitas
+        </label>
         <div className="mt-2 flex gap-2">
           <Button
             type="button"
@@ -108,7 +126,7 @@ export function HookVariationsDialog({
           <Button type="button" variant="ghost" size="sm" disabled={running} onClick={onClose}>
             Fechar
           </Button>
-          <Button type="button" size="sm" disabled={!canExport} onClick={() => onExport(filled)}>
+          <Button type="button" size="sm" disabled={!canExport} onClick={() => onExport({ hooks: filled, varyText, varyRecipes })}>
             Exportar variações
           </Button>
         </div>

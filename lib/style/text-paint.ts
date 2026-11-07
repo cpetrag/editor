@@ -1,3 +1,4 @@
+import { graphemes as segmentGraphemes } from "../content/runs.ts"
 import type { Animation, InsertStyle, TextStyle } from "./types.ts"
 
 export type StrokeCss = {
@@ -170,6 +171,7 @@ export function layoutTextTokens(input: {
   lineHeight: number
   blockH: number
   spaceWidth: number
+  graphemes?: boolean
 }): LaidToken[] {
   const tokens: LaidToken[] = []
   let wordIndex = 0
@@ -184,7 +186,8 @@ export function layoutTextTokens(input: {
     const y = -input.blockH / 2 + input.lineHeight / 2 + lineIndex * input.lineHeight
     for (const piece of pieces) {
       if (input.unit === "letra") {
-        for (const char of piece) {
+        const chars = input.graphemes ? segmentGraphemes(piece) : [...piece]
+        for (const char of chars) {
           const width = input.measure(char)
           tokens.push({
             text: char,

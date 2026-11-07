@@ -5,6 +5,10 @@ export const TEXT_PRESET_FONT_FILES = [
   { id: "poppins", family: "Poppins", weight: 700, file: "Poppins-Bold.woff2", label: "Poppins" },
   { id: "caveat", family: "Caveat", weight: 700, file: "Caveat-Bold.woff2", label: "Caveat" },
   { id: "courier", family: "Courier Prime", weight: 700, file: "CourierPrime-Bold.woff2", label: "Courier Prime" },
+  { id: "archivo-black", family: "Archivo Black", weight: 400, file: "ArchivoBlack-Regular.woff2", label: "Archivo Black" },
+  { id: "permanent-marker", family: "Permanent Marker", weight: 400, file: "PermanentMarker-Regular.woff2", label: "Permanent Marker" },
+  { id: "pacifico", family: "Pacifico", weight: 400, file: "Pacifico-Regular.woff2", label: "Pacifico" },
+  { id: "fredoka", family: "Fredoka", weight: 700, file: "Fredoka-Bold.woff2", label: "Fredoka" },
 ] as const
 
 export type TextPresetFontId = (typeof TEXT_PRESET_FONT_FILES)[number]["id"]
@@ -27,6 +31,7 @@ async function loadTextPresetFonts(): Promise<void> {
     try {
       const face = new FontFace(spec.family, `url(${url})`, {
         weight: String(spec.weight),
+        style: "style" in spec && spec.style === "italic" ? "italic" : "normal",
         display: "block",
       })
       loads.push(
@@ -50,6 +55,17 @@ async function loadTextPresetFonts(): Promise<void> {
     } catch {
       // ignore
     }
+  }
+  try {
+    const italic = new FontFace("Playfair Display", "url(/fonts/PlayfairDisplay-BoldItalic.woff2)", {
+      weight: "700",
+      style: "italic",
+      display: "block",
+    })
+    document.fonts.add(await italic.load())
+    await document.fonts.load('italic 700 56px "Playfair Display"')
+  } catch {
+    // o itálico entra quando o arquivo está no ar
   }
 }
 

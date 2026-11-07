@@ -52,6 +52,7 @@ export type ExportWarningCode =
   | "safe-right"
   | "contrast-bare"
   | "contrast-low"
+  | "empty-var"
 
 export type ExportWarning = {
   id: string

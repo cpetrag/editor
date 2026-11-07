@@ -73,12 +73,19 @@ export function hookVariationFiles(baseName: string, hooks: string[]): HookVaria
   }))
 }
 
-export function hookVariationManifest(baseName: string, hooks: string[]) {
+export function hookVariationManifest(
+  baseName: string,
+  hooks: string[],
+  extras?: Array<{ contentId?: string; styleId?: string; packId?: string }>,
+) {
   return {
     baseName: slug(baseName) || "video",
-    variations: hookVariationFiles(baseName, hooks).map((item) => ({
+    variations: hookVariationFiles(baseName, hooks).map((item, index) => ({
       file: item.fileName,
       hook: item.hook,
+      ...(extras?.[index]?.contentId ? { contentId: extras[index]?.contentId } : {}),
+      ...(extras?.[index]?.styleId ? { styleId: extras[index]?.styleId } : {}),
+      ...(extras?.[index]?.packId ? { packId: extras[index]?.packId } : {}),
     })),
   }
 }

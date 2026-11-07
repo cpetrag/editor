@@ -222,6 +222,8 @@ export function OverlayCanvas({
   paintVisual = true,
   tracks,
   project,
+  productData,
+  brandKitId,
   videoDuration = 0,
   customPresets,
   watermark,
@@ -255,6 +257,8 @@ export function OverlayCanvas({
   sourceTransform?: SourceTransform
   tracks?: Partial<Record<TrackId, StyleLayer>>
   project?: StyleLayer
+  productData?: import("@/lib/content/runs").ProductData
+  brandKitId?: string
   videoDuration?: number
   customPresets?: UserPreset[]
   watermark?: WatermarkPaint | null
@@ -443,7 +447,7 @@ export function OverlayCanvas({
           },
           captionPreset,
           captionStyle,
-          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true },
+          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId },
           watermark ?? null,
         )
       }

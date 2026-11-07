@@ -1,4 +1,5 @@
 import { deepMerge } from "./deep-merge.ts"
+import { offerPresetGroup, offerStylePatch } from "./offer-styles.ts"
 import type { DeepPartial, InsertStyle, Preset, PresetGroup, StyleRef, UserPreset } from "./types.ts"
 
 export const LEGADO_PRESET_ID = "legado" as const
@@ -599,6 +600,14 @@ export function lookupNamedPreset(
 ): Preset | undefined {
   const factory = PRESETS[presetId]
   if (factory && presetId !== LEGADO_PRESET_ID) return factory
+  const offer = offerStylePatch(presetId)
+  if (offer) {
+    return {
+      label: presetId,
+      group: offerPresetGroup(presetId),
+      style: deepMerge(LEGADO_STYLE, offer),
+    }
+  }
   const fromArg = catalog?.[presetId]
   if (fromArg) return fromArg
   return extraPresets.get(presetId)
@@ -607,6 +616,8 @@ export function lookupNamedPreset(
 export function getPresetStyle(presetId: string | undefined): InsertStyle {
   if (presetId && PRESETS[presetId]) return PRESETS[presetId]!.style
   if (presetId) {
+    const offer = offerStylePatch(presetId)
+    if (offer) return deepMerge(LEGADO_STYLE, offer)
     const extra = extraPresets.get(presetId)
     if (extra) return extra.style
   }

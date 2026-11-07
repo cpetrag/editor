@@ -1,3 +1,4 @@
+import type { ProductData } from "../content/runs.ts"
 import type { CaptionPreset, CaptionStyle, CompositionInsert } from "../composition.ts"
 import { DEFAULT_FPS, insertKind } from "../composition.ts"
 import { toAbsoluteCaptionWords } from "../caption-time.ts"
@@ -20,6 +21,8 @@ export type PlayStyleContext = {
   customPresets?: UserPreset[]
   /** Editor overlay: skip enter fade so glyphs stay visible while scrubbing/editing. */
   editPreview?: boolean
+  productData?: ProductData
+  brandKitId?: string
 }
 
 function isActive(insert: CompositionInsert, time: number): boolean {

@@ -28,6 +28,10 @@ const FAMILIES: Record<string, string> = {
   titan: '"Titan One", sans-serif',
   caveat: "Caveat, cursive",
   courier: '"Courier Prime", monospace',
+  "archivo-black": '"Archivo Black", sans-serif',
+  "permanent-marker": '"Permanent Marker", cursive',
+  pacifico: "Pacifico, cursive",
+  fredoka: "Fredoka, sans-serif",
 }
 
 export function canvasFontFamily(fontId: string): string {
@@ -52,8 +56,11 @@ function addFamily(ids: Set<string>, family: string | undefined): void {
 
 function addStyleRef(ids: Set<string>, styleRef: StyleRef | undefined): void {
   if (!styleRef) return
-  addFamily(ids, getPresetStyle(styleRef.presetId).text.fontFamily)
+  const preset = getPresetStyle(styleRef.presetId)
+  addFamily(ids, preset.text.fontFamily)
+  addFamily(ids, preset.text.accentFont)
   addFamily(ids, styleRef.overrides.text?.fontFamily)
+  addFamily(ids, styleRef.overrides.text?.accentFont)
 }
 
 export function fontIdsUsedInComposition(composition: {
@@ -118,6 +125,7 @@ export async function ensureComposeFontsReady(
     for (const weight of weights) {
       loads.push(document.fonts.load(`${weight} 56px ${family}`))
     }
+    if (fontId === "playfair") loads.push(document.fonts.load(`italic 700 56px ${family}`))
   }
   try {
     await Promise.all(loads)

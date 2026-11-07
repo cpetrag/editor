@@ -23,6 +23,7 @@ export function wrapLines(
   text: string,
   maxWidth: number,
   measureWidth: (value: string) => number,
+  breakWords = true,
 ): string[] {
   const paragraphs = text.replace(/\r/g, "").split("\n")
   const lines: string[] = []
@@ -40,7 +41,7 @@ export function wrapLines(
       }
     }
     for (const word of words) {
-      if (measureWidth(word) > maxWidth) {
+      if (breakWords && measureWidth(word) > maxWidth) {
         flush()
         const pieces = breakLongToken(word, maxWidth, measureWidth)
         for (const piece of pieces) {

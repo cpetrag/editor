@@ -1,3 +1,4 @@
+import { staticFile } from "remotion"
 import { loadFont as loadAlfaSlabOne } from "@remotion/google-fonts/AlfaSlabOne"
 import { loadFont as loadAnton } from "@remotion/google-fonts/Anton"
 import { loadFont as loadArchivoBlack } from "@remotion/google-fonts/ArchivoBlack"
@@ -47,13 +48,17 @@ const LOADERS: Record<FontId, FontLoader> = {
   titan: loadTitanOne as FontLoader,
   caveat: hostedFontLoader("Caveat", "Caveat-Bold.woff2", "700"),
   courier: hostedFontLoader("Courier Prime", "CourierPrime-Bold.woff2", "700"),
+  "archivo-black": hostedFontLoader("Archivo Black", "ArchivoBlack-Regular.woff2", "400"),
+  "permanent-marker": hostedFontLoader("Permanent Marker", "PermanentMarker-Regular.woff2", "400"),
+  pacifico: hostedFontLoader("Pacifico", "Pacifico-Regular.woff2", "400"),
+  fredoka: hostedFontLoader("Fredoka", "Fredoka-Bold.woff2", "700"),
 }
 
-function hostedFontLoader(family: string, file: string, weight: string): FontLoader {
+function hostedFontLoader(family: string, file: string, weight: string, style = "normal"): FontLoader {
   return () => ({
     waitUntilDone: async () => {
       if (typeof FontFace === "undefined" || typeof document === "undefined") return
-      const face = new FontFace(family, `url(/fonts/${file})`, { weight, display: "block" })
+      const face = new FontFace(family, `url(${staticFile(`fonts/${file}`)})`, { weight, style, display: "block" })
       const loaded = await face.load()
       document.fonts.add(loaded)
     },
@@ -116,6 +121,9 @@ export async function waitForRenderFonts(props: RenderProps): Promise<void> {
       await ensureTextPresetFontsReady()
     }
     await Promise.all(ids.map((fontId) => startFont(fontId).waitUntilDone()))
+    if (ids.includes("playfair")) {
+      await hostedFontLoader("Playfair Display", "PlayfairDisplay-BoldItalic.woff2", "700", "italic")().waitUntilDone()
+    }
   })()
   waitFontsByKey.set(key, pending)
   return pending

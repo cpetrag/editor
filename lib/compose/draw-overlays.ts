@@ -66,6 +66,7 @@ export function drawOverlayInserts(
   for (const insert of inserts) {
     if (!isActive(insert, time)) continue
     if (insertKind(insert) !== "text") continue
+    // Texto entra igual ao export. editPreview continua valendo só para a legenda.
     const duration = styleContext?.videoDuration ?? 0
     const track = trackStyleForInsert(insert, styleContext?.tracks, duration)
     const project = styleContext?.project ?? {}
@@ -84,7 +85,8 @@ export function drawOverlayInserts(
         frame,
         brandFontId,
         styleContext?.fps && styleContext.fps > 0 ? styleContext.fps : DEFAULT_FPS,
-        styleContext?.editPreview === true,
+        false,
+        styleContext,
       )
       continue
     }
@@ -98,7 +100,8 @@ export function drawOverlayInserts(
         frame,
         brandFontId,
         styleContext?.fps && styleContext.fps > 0 ? styleContext.fps : DEFAULT_FPS,
-        styleContext?.editPreview === true,
+        false,
+        styleContext,
       )
       continue
     }

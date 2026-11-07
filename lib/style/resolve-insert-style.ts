@@ -10,7 +10,8 @@ import { getTextPreset, isTextPresetId } from "../text-presets/catalog.ts"
 import { textPresetToInsertStyle } from "../text-presets/to-insert-style.ts"
 import { deepMerge, isEmptyOverrides } from "./deep-merge.ts"
 import { styleRefFromLegacy } from "./migrate.ts"
-import { getPresetStyle, LEGADO_PRESET_ID } from "./presets.ts"
+import { offerStylePatch } from "./offer-styles.ts"
+import { getPresetStyle, LEGADO_PRESET_ID, PRESETS } from "./presets.ts"
 import type { InsertStyle, StyleLayer } from "./types.ts"
 
 export type ResolveInsertStyleContext = {
@@ -71,16 +72,22 @@ export function resolveInsertStyle(
   const project = ctx.project ?? {}
   const track = ctx.track ?? null
   const ref = insert.styleRef ?? track?.styleRef ?? project.styleRef
-  const factory = Boolean(ref && ref.presetId !== LEGADO_PRESET_ID)
+  const namedPreset =
+    Boolean(ref?.presetId) &&
+    ref?.presetId !== LEGADO_PRESET_ID &&
+    (Boolean(offerStylePatch(ref?.presetId)) || Boolean(PRESETS[ref?.presetId ?? ""]))
+  const factory = namedPreset
 
-  const base = isTextPresetId(insert.preset)
-    ? textPresetToInsertStyle(getTextPreset(insert.preset), frameWidth, {
-        x: insert.x ?? 50,
-        y: insert.y ?? 35,
-        fontSize: insert.fontSize,
-        rotation: insert.rotation,
-      })
-    : getPresetStyle(ref?.presetId)
+  const base = namedPreset
+    ? getPresetStyle(ref?.presetId)
+    : isTextPresetId(insert.preset)
+      ? textPresetToInsertStyle(getTextPreset(insert.preset), frameWidth, {
+          x: insert.x ?? 50,
+          y: insert.y ?? 35,
+          fontSize: insert.fontSize,
+          rotation: insert.rotation,
+        })
+      : getPresetStyle(ref?.presetId)
 
   const merged = deepMerge(
     base,

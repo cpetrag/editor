@@ -1,4 +1,8 @@
 import type { CompositionInsert } from "../composition.ts"
+import type { ProductData } from "../content/runs.ts"
+import { offerStylePatch } from "../style/offer-styles.ts"
+import { resolveInsertStyle } from "../style/resolve-insert-style.ts"
+import { layoutMarkedText } from "../paint/layout.ts"
 import { PLAY_H, PLAY_W } from "./layout.ts"
 import { resolveLayerStyle } from "./resolve-style.ts"
 import { wrapLines } from "./wrap-lines.ts"
@@ -30,8 +34,9 @@ function layoutAtSize(
   lineHeight: number,
   maxWidth: number,
   measureWidth: TextMeasure,
+  breakWords = true,
 ): Omit<TextLayout, "effectiveFontSize" | "overflow" | "cx" | "cy" | "rotation"> {
-  const lines = wrapLines(text, maxWidth, (value) => measureWidth(fontSize, value))
+  const lines = wrapLines(text, maxWidth, (value) => measureWidth(fontSize, value), breakWords)
   const lineH = fontSize * lineHeight
   const widths = lines.map((line) => measureWidth(fontSize, line))
   const blockW = Math.max(0, ...widths)
@@ -50,9 +55,11 @@ export function layoutTextBlock(options: {
   fontSize: number
   lineHeight: number
   measureWidth: TextMeasure
+  breakWords?: boolean
 }): Pick<TextLayout, "lines" | "blockW" | "blockH" | "effectiveFontSize" | "overflow"> {
   const configured = Math.max(1, options.fontSize)
   const floor = Math.max(1, configured * TEXT_SHRINK_FLOOR)
+  const breakWords = options.breakWords !== false
   let size = configured
   let layout = layoutAtSize(
     options.text,
@@ -60,6 +67,7 @@ export function layoutTextBlock(options: {
     options.lineHeight,
     options.maxWidth,
     options.measureWidth,
+    breakWords,
   )
   while (overflows(layout, options.maxWidth, options.maxHeight) && size > floor + 1e-6) {
     const next = Math.max(floor, size - Math.max(1, configured * 0.04))
@@ -71,6 +79,7 @@ export function layoutTextBlock(options: {
       options.lineHeight,
       options.maxWidth,
       options.measureWidth,
+      breakWords,
     )
   }
   return {
@@ -100,7 +109,35 @@ export function layoutInsertText(
   brandFontId: string,
   frame: { width: number; height: number } = { width: PLAY_W, height: PLAY_H },
   measureWidth?: TextMeasure,
+  options?: { breakWords?: boolean; productData?: ProductData; brandKitId?: string; editPreview?: boolean },
 ): TextLayout | null {
+  const marked =
+    insert.kind !== "caption" &&
+    (Boolean(offerStylePatch(insert.styleRef?.presetId)) || /[*~{]/.test(insert.text ?? ""))
+  if (marked) {
+    const painted = resolveInsertStyle(insert, { frameWidth: frame.width })
+    const maxW = (painted.text.maxWidth / 100) * frame.width
+    const laid = layoutMarkedText({
+      text: insert.text ?? "",
+      style: painted,
+      maxWidth: maxW,
+      productData: options?.productData,
+      editPreview: options?.editPreview ?? true,
+      brandKitId: options?.brandKitId,
+      measure: (text, font) =>
+        measureWidth ? measureWidth(font.size, text) : text.length * font.size * 0.55,
+    })
+    return {
+      lines: laid.lines.map((line) => line.pieces.map((piece) => piece.text).join(" ")),
+      blockW: laid.blockW,
+      blockH: laid.blockH,
+      effectiveFontSize: painted.text.fontSize,
+      overflow: laid.blockW > maxW + 0.5,
+      cx: (painted.text.x / 100) * frame.width,
+      cy: (painted.text.y / 100) * frame.height,
+      rotation: painted.text.rotation || insert.rotation || 0,
+    }
+  }
   const style = resolveLayerStyle(insert, brandFontId)
   const raw = style.uppercase ? style.text.toUpperCase() : style.text
   if (!raw.trim()) return null
@@ -113,6 +150,7 @@ export function layoutInsertText(
     fontSize: style.fontSize,
     lineHeight: style.lineHeight,
     measureWidth: measure,
+    breakWords: options?.breakWords,
   })
   return {
     ...laid,

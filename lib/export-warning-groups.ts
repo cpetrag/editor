@@ -15,6 +15,7 @@ const GROUP_LABELS: Record<ExportWarningCode, string> = {
   "safe-right": "Entram na coluna dos botões",
   "contrast-bare": "Sem fundo nem contorno",
   "contrast-low": "Pouco contraste com o fundo",
+  "empty-var": "Variável vazia",
 }
 
 /** Agrupa avisos do mesmo tipo, na ordem em que o primeiro de cada tipo aparece. */

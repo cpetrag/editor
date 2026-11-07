@@ -286,6 +286,11 @@ test("warnInvisibleCaptionPaint registra id, preset e motivo", () => {
   }
 })
 
+test("plano de legenda não recebe o envelope de fundo dos inserts", () => {
+  const drawn = draw(viralStyle(), 1.2)
+  assert.equal(drawn.backgroundMotion, undefined)
+})
+
 test("por-linha no plano gera dois fundos", () => {
   const style = captionStyleToInsertStyle(caption, "limpo")
   style.text.background.mode = "por-linha"

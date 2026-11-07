@@ -25,6 +25,7 @@ import {
   selectableItems,
   type PxRect,
 } from "@/lib/timeline-selection"
+import type { ClipMotionMarks } from "@/lib/motion/select"
 import { cn } from "@/lib/utils"
 
 type SourceSegment = ReturnType<typeof listSourceSegments>[number]
@@ -71,6 +72,9 @@ export interface EditorTimelineProps {
     ids: string[],
     primaryId: string,
   ) => void
+  motionById?: Record<string, ClipMotionMarks>
+  onEmphasisMove?: (insertId: string, index: number, atFrame: number) => void
+  onEmphasisGesture?: (phase: "start" | "end") => void
 }
 
 export function EditorTimeline({
@@ -101,6 +105,9 @@ export function EditorTimeline({
   snapGuideTime = null,
   onChangeSelection,
   onSelectionCommand,
+  motionById,
+  onEmphasisMove,
+  onEmphasisGesture,
 }: EditorTimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const scrubbingRef = useRef(false)
@@ -505,6 +512,11 @@ export function EditorTimeline({
                     disabled={exporting}
                     onPointerDown={(event, handle) => onClipPointerDown(event, insert, handle)}
                     onContextMenu={(event) => openClipMenu(event, insert)}
+                    motion={motionById?.[insert.id]}
+                    onEmphasisMove={
+                      onEmphasisMove ? (index, atFrame) => onEmphasisMove(insert.id, index, atFrame) : undefined
+                    }
+                    onEmphasisGesture={onEmphasisGesture}
                   />
                 )
               })}

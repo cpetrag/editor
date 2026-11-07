@@ -12,6 +12,7 @@ import {
   LEGADO_PRESET_ID,
   extraPresetCatalog,
   factoryPresetsInGroup,
+  getPresetStyle,
   lookupNamedPreset,
 } from "./style/presets.ts"
 import { applyPresetToStyleRef } from "./style/edit-style.ts"
@@ -171,9 +172,11 @@ export function applyFactoryPreset(
   }
 
   const mode = options.mode ?? "preserve"
+  const painted = getPresetStyle(presetId)
   const stamp = (insert: CompositionInsert): CompositionInsert => ({
     ...insert,
     styleRef: applyPresetToStyleRef(insert.styleRef, presetId, mode),
+    ...(painted.text.rotation ? { rotation: painted.text.rotation } : { rotation: undefined }),
   })
 
   if (preset.group === "legenda") {

@@ -158,11 +158,10 @@ export function mergeDuplicateGroup(inserts: Insert[], ids: string[]): Insert[] 
   return inserts.filter((insert) => !drop.has(insert.id))
 }
 
-export function overflowingInserts(inserts: Insert[], videoDuration: number): Insert[] {
+export function overflowingInserts(inserts: Insert[], videoDuration: number, fps = 30): Insert[] {
   if (!(videoDuration > 0)) return []
-  return inserts.filter(
-    (insert) => insert.start + insert.duration > videoDuration + 1e-6,
-  )
+  const slack = fps > 0 ? 1 / fps : 1e-6
+  return inserts.filter((insert) => insert.start + insert.duration > videoDuration + slack)
 }
 
 export function stackLanes(inserts: Insert[]): Map<string, number> {

@@ -50,6 +50,8 @@ export type RenderProps = {
   captionStyle: CaptionStyle
   stickerSrcs: Record<string, string>
   styleRef?: Composition["styleRef"]
+  productData?: Composition["productData"]
+  brandKitId?: Composition["brandKitId"]
   tracks?: Composition["tracks"]
   customPresets?: Composition["customPresets"]
   watermark?: WatermarkPaint
@@ -167,6 +169,8 @@ export function toRenderProps(input: {
     captionStyle: composition.captionStyle,
     stickerSrcs: { ...(input.stickerSrcs ?? {}) },
     ...(composition.styleRef ? { styleRef: composition.styleRef } : {}),
+    ...(composition.productData ? { productData: composition.productData } : {}),
+    ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
     ...(composition.tracks ? { tracks: composition.tracks } : {}),
     ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),
     ...(paint ? { watermark: paint } : {}),

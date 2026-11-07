@@ -79,6 +79,8 @@ function paintInserts(
       project: props.styleRef ? { styleRef: props.styleRef } : {},
       tracks: props.tracks,
       customPresets: props.customPresets ? Object.values(props.customPresets) : undefined,
+      productData: props.productData,
+      brandKitId: props.brandKitId,
     },
     props.watermark ?? null,
   )

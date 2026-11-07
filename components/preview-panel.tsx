@@ -34,10 +34,14 @@ import { useEditorShortcuts } from "@/hooks/useEditorShortcuts"
 import { DEFAULT_CAPTION_STYLE, FONT_SIZE_MAX, FONT_SIZE_MIN, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { rgbToHex } from "@/lib/canvas/eyedrop"
+import { ExportCompareLayer, type ExportCompareMode } from "@/components/export-compare-layer"
 import { OverlayCanvas } from "@/components/overlay-canvas"
 import { SourceZoomSlider } from "@/components/source-zoom-slider"
 import { PreviewPlayer, type PreviewPlayerHandle } from "@/components/preview-player"
 import { EditorTimeline } from "@/components/editor-timeline"
+import { clipMotionMarks, moveEmphasis } from "@/lib/motion/select"
+import { resolveStyleForEditor } from "@/lib/style/editor-style"
+import { trackStyleForInsert } from "@/lib/style-preset"
 import { ShortcutHelpDialog } from "@/components/shortcut-help-dialog"
 import {
   clientXToTime,
@@ -120,6 +124,8 @@ interface PreviewPanelProps {
   captionPreset?: CaptionPreset
   captionStyle?: CaptionStyle
   styleRef?: StyleRef
+  productData?: Composition["productData"]
+  brandKitId?: Composition["brandKitId"]
   tracks?: Partial<Record<TrackId, TrackStyle>>
   customPresets?: Composition["customPresets"]
   watermark?: WatermarkPaint | null
@@ -162,12 +168,14 @@ interface PreviewPanelProps {
   onConfirmComboPreview?: (mode: "add" | "replace") => void
   onCancelComboPreview?: () => void
   onDropElement?: (type: InsertType, x: number, y: number) => void
+  onPatchInsertStyle?: (id: string, path: string, value: unknown) => void
 }
 
 export type PreviewHandle = {
   getVideo: () => HTMLVideoElement | null
   getCurrentTime: () => number
   seekTo: (seconds: number) => void
+  playRange: (start: number, end: number) => void
 }
 
 export const PreviewPanel = memo(
@@ -195,6 +203,8 @@ export const PreviewPanel = memo(
       captionPreset = "viral",
       captionStyle,
       styleRef,
+      productData,
+      brandKitId,
       tracks,
       customPresets,
       watermark,
@@ -229,12 +239,14 @@ export const PreviewPanel = memo(
       onConfirmComboPreview,
       onCancelComboPreview,
       onDropElement,
+      onPatchInsertStyle,
     },
     ref,
   ) {
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [overlay, setOverlay] = useState<OverlayModeId>("none")
+  const [exportCompare, setExportCompare] = useState<ExportCompareMode>("off")
   const [sourceFramingActive, setSourceFramingActive] = useState(false)
   const [showRetention, setShowRetention] = useState(true)
   const [timelineZoom, setTimelineZoom] = useState(TIMELINE_ZOOM_MIN)
@@ -252,6 +264,7 @@ export const PreviewPanel = memo(
   const [videoError, setVideoError] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<PreviewPlayerHandle>(null)
+  const soloRef = useRef<{ start: number; end: number } | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const insertsRef = useRef(inserts)
   const videoReadyRef = useRef(videoReady)
@@ -283,6 +296,20 @@ export const PreviewPanel = memo(
   trimWindowRef.current = trimWindow
   const totalDurationRef = useRef(totalDuration)
   totalDurationRef.current = totalDuration
+  const motionById = useMemo(() => {
+    const map: Record<string, ReturnType<typeof clipMotionMarks>> = {}
+    const project = { styleRef }
+    for (const insert of inserts) {
+      if (insertKind(insert) === "sticker") continue
+      const track = trackStyleForInsert(insert, tracks, totalDuration)
+      map[insert.id] = clipMotionMarks(
+        resolveStyleForEditor(insert, track, project).animation,
+        insert.duration,
+        30,
+      )
+    }
+    return map
+  }, [inserts, styleRef, totalDuration, tracks])
   const currentTimeRef = useRef(0)
   const framing = useMemo(
     () => ({ transform: sourceTransform, cuts: sourceCuts }),
@@ -392,6 +419,13 @@ export const PreviewPanel = memo(
     const time = secondsFromFrame(frame, renderFps)
     const span = trimWindowRef.current
     const player = playerRef.current
+    const solo = soloRef.current
+    if (player?.isPlaying() && solo && time >= solo.end - 0.5 / renderFps) {
+      player.seekToFrame(Math.round(solo.start * renderFps))
+      currentTimeRef.current = solo.start
+      setCurrentTime(solo.start)
+      return
+    }
     // O Player toca o arquivo inteiro; a saída do corte para a reprodução aqui.
     if (player?.isPlaying() && span.end < totalDurationRef.current && time >= span.end) {
       player.pause()
@@ -408,7 +442,8 @@ export const PreviewPanel = memo(
     setPlaying(nextPlaying)
   }, [])
 
-  function seekTo(next: number) {
+  function seekTo(next: number, options?: { keepSolo?: boolean }) {
+    if (!options?.keepSolo) soloRef.current = null
     const clamped = Math.min(totalDuration, Math.max(0, next))
     currentTimeRef.current = clamped
     setCurrentTime(clamped)
@@ -419,10 +454,18 @@ export const PreviewPanel = memo(
     }
   }
 
+  function playRange(start: number, end: number) {
+    const loopEnd = Math.max(start + 1 / renderFps, end)
+    soloRef.current = { start, end: loopEnd }
+    seekTo(start, { keepSolo: true })
+    playerRef.current?.play()
+  }
+
   useImperativeHandle(ref, () => ({
     getVideo: () => videoRef.current,
     getCurrentTime: () => currentTime,
     seekTo,
+    playRange,
   }))
 
   const pauseForScrub = useCallback(() => {
@@ -906,6 +949,45 @@ export const PreviewPanel = memo(
               )
             })}
           </div>
+          <div className="flex items-center rounded-full border border-border p-0.5" role="group" aria-label="Sobrepor export">
+              <button
+                type="button"
+                aria-pressed={exportCompare !== "off"}
+                onClick={() => setExportCompare((mode) => (mode === "off" ? "half" : "off"))}
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-xs font-medium",
+                  exportCompare !== "off" ? "bg-brand text-brand-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Sobrepor export
+              </button>
+              {exportCompare !== "off" ? (
+                <>
+                  <button
+                    type="button"
+                    aria-pressed={exportCompare === "half"}
+                    onClick={() => setExportCompare("half")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-xs font-medium",
+                      exportCompare === "half" ? "bg-brand text-brand-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    50%
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={exportCompare === "diff"}
+                    onClick={() => setExportCompare("diff")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-xs font-medium",
+                      exportCompare === "diff" ? "bg-brand text-brand-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    Diferença
+                  </button>
+                </>
+              ) : null}
+            </div>
           <div className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground 2xl:flex">
             <Smartphone className="size-3.5" />
             9:16
@@ -1111,6 +1193,8 @@ export const PreviewPanel = memo(
             // Preview player freezes inserts while paused; this canvas redraws on inserts/time.
             paintVisual
             tracks={tracks}
+            productData={productData}
+            brandKitId={brandKitId}
             project={styleRef ? { styleRef } : {}}
             videoDuration={totalDuration}
             customPresets={customPresets ? Object.values(customPresets) : undefined}
@@ -1135,6 +1219,24 @@ export const PreviewPanel = memo(
               const card = document.querySelector(`[data-insert-card][data-insert-id="${CSS.escape(id)}"]`)
               if (card instanceof HTMLElement) scrollIntoPanelViewport(card)
             }}
+          />
+
+          <ExportCompareLayer
+            mode={exportCompare}
+            time={currentTime}
+            inserts={inserts}
+            fontId={fontId}
+            logoSrc={logoSrc}
+            blobUrls={stickerBlobUrls}
+            captionPreset={captionPreset}
+            captionStyle={captionStyle ?? DEFAULT_CAPTION_STYLE}
+            tracks={tracks}
+            styleRef={styleRef}
+            productData={productData}
+            brandKitId={brandKitId}
+            videoDuration={totalDuration}
+            customPresets={customPresets ? Object.values(customPresets) : undefined}
+            watermark={watermark}
           />
 
           {/* Overlays */}
@@ -1397,6 +1499,19 @@ export const PreviewPanel = memo(
               onScrubStart={pauseForScrub}
               onTrimPointerDown={onTimelineTrimPointerDown}
               onClipPointerDown={onTimelineClipPointerDown}
+              motionById={motionById}
+              onEmphasisMove={(id, index, atFrame) => {
+                if (!onPatchInsertStyle) return
+                const insert = insertsRef.current.find((item) => item.id === id)
+                if (!insert) return
+                const track = trackStyleForInsert(insert, tracks, totalDurationRef.current)
+                const resolved = resolveStyleForEditor(insert, track, { styleRef })
+                onPatchInsertStyle(id, "animation", moveEmphasis(resolved.animation, index, atFrame))
+              }}
+              onEmphasisGesture={(phase) => {
+                if (phase === "start") onBeginInsertGesture?.()
+                else onEndInsertGesture?.()
+              }}
             />
           </div>
         ) : null}

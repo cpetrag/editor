@@ -23,10 +23,18 @@ function applyFactoryChipPose(
   const cy = chip.y + chip.height / 2
   ctx.translate(cx, cy)
   ctx.translate(pose.x, pose.y)
+  const rotateX = ((pose.rotateX ?? 0) * Math.PI) / 180
+  const rotateY = ((pose.rotateY ?? 0) * Math.PI) / 180
+  if (rotateX !== 0 || rotateY !== 0) ctx.scale(Math.cos(rotateY), Math.cos(rotateX))
   ctx.rotate((pose.rotate * Math.PI) / 180)
-  ctx.scale(pose.scale, pose.scale)
+  const skew = ((pose.skewX ?? 0) * Math.PI) / 180
+  if (skew !== 0) ctx.transform(1, 0, Math.tan(skew), 1, 0, 0)
+  ctx.scale(pose.scale * (pose.scaleX ?? 1), pose.scale * (pose.scaleY ?? 1))
   ctx.globalAlpha *= pose.opacity
-  if (pose.blur > 0) ctx.filter = `blur(${pose.blur}px)`
+  const filters: string[] = []
+  if (pose.blur > 0) filters.push(`blur(${pose.blur}px)`)
+  if ((pose.brightness ?? 1) !== 1) filters.push(`brightness(${pose.brightness})`)
+  if (filters.length > 0) ctx.filter = filters.join(" ")
   ctx.translate(-cx, -cy)
 }
 

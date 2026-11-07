@@ -147,6 +147,15 @@ test("sortInsertsByStart is flat and stable by start then id", () => {
   )
 })
 
+test("overflowingInserts ignores a single frame of rounding", () => {
+  const overflow = overflowingInserts(
+    [insert({ id: "edge", start: 11.9, duration: 3 })],
+    14.899,
+    30,
+  )
+  assert.deepEqual(overflow.map((item) => item.id), [])
+})
+
 test("overflowingInserts lists inserts past the video end", () => {
   const overflow = overflowingInserts(
     [insert({ id: "ok", start: 1, duration: 3 }), insert({ id: "bad", start: 19, duration: 4 })],

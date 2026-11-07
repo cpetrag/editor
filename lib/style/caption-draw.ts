@@ -1,3 +1,4 @@
+import { backgroundEnvelope } from "../motion/engine.ts"
 import { animatedPoseAt, IDENTITY_POSE, type AnimPose } from "./anim-engine.ts"
 import { activeWordIndex, wordHighlight, type WordPaint } from "./highlight.ts"
 import { backgroundRects, layoutTextTokens, type BgRect, type LaidToken } from "./text-paint.ts"
@@ -13,11 +14,16 @@ export type PlannedToken = LaidToken &
   WordPaint & {
     pose: AnimPose
     word?: PlanWord
+    accent?: boolean
+    strike?: boolean
+    missing?: boolean
   }
 
 export type StyledTextPlan = {
   backgrounds: BgRect[]
   tokens: PlannedToken[]
+  /** Fundo de insert por palavra/letra: fade + scale, ausente nas legendas. */
+  backgroundMotion?: { opacity: number; scale: number }
 }
 
 function highlightNeedsWordTimings(mode: TextStyle["highlight"]["mode"]): boolean {
@@ -91,6 +97,11 @@ export function planStyledTextDraw(input: {
   cardStart: number
   cardDuration: number
   skipEnter?: boolean
+  seed?: number
+  /** Inserts com fundo: a caixa entra junto. Legendas automáticas deixam isso desligado. */
+  followBackground?: boolean
+  /** Inserts de texto: letra = grafema. Legendas continuam por caractere UTF-16. */
+  graphemes?: boolean
 }): StyledTextPlan {
   const { style, time, fps } = input
   const highlight = highlightForPlan(input.words, style.text.highlight)
@@ -110,11 +121,14 @@ export function planStyledTextDraw(input: {
     lineHeight: input.lineHeight,
     blockH: input.blockH,
     spaceWidth: input.spaceWidth,
+    graphemes: input.graphemes,
   })
   const activeIndex = activeWordIndex(input.words, time)
   const cardStartFrame = input.cardStart * fps
   const cardDurationFrames = Math.max(0, input.cardDuration * fps)
   const frame = time * fps
+  const unitCount = Math.max(1, tokens.reduce((max, token) => Math.max(max, token.unitIndex + 1), 0))
+  const seed = input.seed ?? 0
 
   const planned: PlannedToken[] = tokens.map((token) => {
     const word = input.words[token.wordIndex]
@@ -136,6 +150,8 @@ export function planStyledTextDraw(input: {
             cardDurationFrames,
             frame,
             fps,
+            unitCount,
+            seed,
           })
     return { ...token, ...paint, pose, word }
   })
@@ -149,6 +165,8 @@ export function planStyledTextDraw(input: {
           cardDurationFrames,
           frame,
           fps,
+          unitCount,
+          seed,
         })
       : IDENTITY_POSE
 
@@ -177,7 +195,20 @@ export function planStyledTextDraw(input: {
       })
     : []
 
-  return { backgrounds, tokens: planned }
+  const backgroundMotion =
+    input.followBackground &&
+    !input.skipEnter &&
+    animation.unit !== "bloco" &&
+    bg.enabled &&
+    bg.mode !== "por-palavra"
+      ? backgroundEnvelope(
+          frame,
+          { animation, startFrame: cardStartFrame, durationInFrames: cardDurationFrames },
+          unitCount,
+        )
+      : undefined
+
+  return { backgrounds, tokens: planned, backgroundMotion }
 }
 
 function wordBoxesFromTokens(

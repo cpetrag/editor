@@ -34,6 +34,9 @@ import type { SourceImport } from "@/lib/commit-source"
 import { hasPlayableSource } from "@/lib/commit-source"
 import type { RecentSource } from "@/lib/recent-sources"
 import { DEFAULT_WATERMARK_PREFS, type WatermarkPrefs } from "@/lib/watermark"
+import { ProductDataFields } from "@/components/insert-content"
+import type { ProductData } from "@/lib/content/runs"
+import type { ContentNiche } from "@/lib/content/presets"
 import { hasAnySegmentTransform } from "@/lib/source-segments"
 import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
@@ -144,6 +147,16 @@ interface ControlPanelProps {
   watermarkPrefs: WatermarkPrefs
   onWatermarkEnabledChange?: (enabled: boolean) => void
   onWatermarkPrefsChange?: (prefs: WatermarkPrefs) => void
+  getPlayhead?: () => number
+  onPlayRange?: (start: number, end: number) => void
+  retentionCuts?: { ganchoEnd: number; ctaStart: number } | null
+  productData?: ProductData
+  niche?: ContentNiche
+  brandKitId?: string
+  projectSeed?: string
+  onProductData?: (data: ProductData) => void
+  onNiche?: (niche: ContentNiche) => void
+  onBrandKit?: (id: string) => void
 }
 
 export function ControlPanel({
@@ -229,6 +242,16 @@ export function ControlPanel({
   watermarkPrefs = DEFAULT_WATERMARK_PREFS,
   onWatermarkEnabledChange,
   onWatermarkPrefsChange,
+  getPlayhead,
+  onPlayRange,
+  retentionCuts,
+  productData,
+  niche = "shopee",
+  brandKitId = "shopee",
+  projectSeed = "projeto",
+  onProductData,
+  onNiche,
+  onBrandKit,
 }: ControlPanelProps) {
   const [newProjectArmed, setNewProjectArmed] = useState(false)
 
@@ -629,6 +652,17 @@ export function ControlPanel({
                   >
                     <WatermarkFields prefs={watermarkPrefs} onPrefsChange={onWatermarkPrefsChange} />
                   </CollapsibleBlock>
+                  <details className="rounded-md border border-border px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-foreground">Dados do produto</summary>
+                    <div className="mt-2">
+                      <ProductDataFields
+                        data={productData ?? {}}
+                        niche={niche}
+                        onChange={(data) => onProductData?.(data)}
+                        onNiche={(next) => onNiche?.(next)}
+                      />
+                    </div>
+                  </details>
                 </>
               ) : null}
             </>
@@ -714,7 +748,7 @@ export function ControlPanel({
               {overflowing.length > 0 ? (
                 <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {overflowing.length} insert
-                  {overflowing.length === 1 ? "" : "s"} passam do fim do vídeo
+                  {overflowing.length === 1 ? " passa" : "s passam"} do fim do vídeo
                   {videoDuration > 0 ? ` (${formatTime(videoDuration)})` : ""}.
                 </p>
               ) : null}
@@ -795,6 +829,15 @@ export function ControlPanel({
                       presetLibrary={presetLibrary}
                       styleBlocks={insertStyleBlocks}
                       motionBlocks={insertMotionBlocks}
+                      getPlayhead={getPlayhead}
+                      onPlayRange={onPlayRange}
+                      retentionCuts={retentionCuts}
+                      niche={niche}
+                      productData={productData}
+                      brandKitId={brandKitId}
+                      projectSeed={projectSeed}
+                      onNiche={onNiche}
+                      onBrandKit={onBrandKit}
                     />
                   ))}
                 </div>

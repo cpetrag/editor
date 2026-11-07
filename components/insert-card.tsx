@@ -34,6 +34,7 @@ import {
   type CaptionPreset,
   type CaptionStyle,
 } from "@/lib/composition"
+import type { RetentionCuts } from "@/lib/insert-ops"
 import { formatSeconds, formatTimecode as formatFieldTimecode, parseDecimal } from "@/lib/parse-decimal"
 import { formatTimecode } from "@/lib/timecode"
 import {
@@ -51,6 +52,15 @@ import { applyTextPreset } from "@/lib/text-presets"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import { InsertStyleFields } from "@/components/insert-style-panel"
 import { StyleCustomizePanel, type PresetLibraryHandlers } from "@/components/style-customize-panel"
+import {
+  BrandKitPicker,
+  ContentRecipeList,
+  ReadingMeter,
+  StylePresetGallery,
+  VariableChips,
+} from "@/components/insert-content"
+import { retentionZones } from "@/lib/insert-ops"
+import type { ContentNiche, ContentSlot } from "@/lib/content/presets"
 import { BlockToolbar } from "@/components/collapsible-block"
 import type { PanelBlockController } from "@/components/use-panel-blocks"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
@@ -90,6 +100,15 @@ interface InsertCardProps {
   styleBlocks: PanelBlockController
   motionBlocks: PanelBlockController
   onHookVariations?: () => void
+  getPlayhead?: () => number
+  onPlayRange?: (start: number, end: number) => void
+  retentionCuts?: RetentionCuts | null
+  productData?: import("@/lib/content/runs").ProductData
+  niche?: ContentNiche
+  brandKitId?: string
+  projectSeed?: string
+  onNiche?: (niche: ContentNiche) => void
+  onBrandKit?: (id: string) => void
 }
 
 type CardTab = "content" | "style" | "motion"
@@ -238,12 +257,29 @@ export function InsertCard({
   styleBlocks,
   motionBlocks,
   onHookVariations,
+  getPlayhead,
+  onPlayRange,
+  retentionCuts,
+  productData,
+  niche = "shopee",
+  brandKitId = "shopee",
+  projectSeed = "projeto",
+  onNiche,
+  onBrandKit,
 }: InsertCardProps) {
   const meta = INSERT_TYPE_MAP[insert.type]
   const kind = insertKind(insert)
   const rootRef = useRef<HTMLDivElement>(null)
   const [durationNote, setDurationNote] = useState(false)
   const [tab, setTab] = useState<CardTab>("content")
+  const marker = (() => {
+    const zones = retentionZones(videoDuration, retentionCuts)
+    const mid = insert.start + insert.duration / 2
+    return zones.find((zone, index) => (index === zones.length - 1 ? mid >= zone.from : mid >= zone.from && mid < zone.to))?.id ?? "gancho"
+  })()
+  const [moment, setMoment] = useState<ContentSlot | "todos">(marker)
+  const [styleMoment, setStyleMoment] = useState(marker)
+  const [styleNiche, setStyleNiche] = useState(niche)
   const [textOverflow, setTextOverflow] = useState(false)
   const label = insertLabel(insert)
   const range = `${formatTimecode(insert.start)}–${formatTimecode(insert.start + insert.duration)}`
@@ -488,6 +524,30 @@ export function InsertCard({
                   />
                 </Field>
               ) : null}
+              {kind === "text" ? (
+                <>
+                  <VariableChips
+                    onInsert={(token) => {
+                      const field = document.getElementById(`text-${insert.id}`)
+                      const cursor = field instanceof HTMLTextAreaElement ? field.selectionStart : (insert.text ?? "").length
+                      const text = insert.text ?? ""
+                      onChange(insert.id, { text: `${text.slice(0, cursor)}${token}${text.slice(cursor)}` })
+                    }}
+                  />
+                  <p className="text-[0.65rem] text-muted-foreground">*destaque* marca a palavra. ~~riscado~~ corta o preço. \* e \~ escrevem o símbolo.</p>
+                  <ReadingMeter text={insert.text ?? ""} duration={insert.duration} />
+                  <ContentRecipeList
+                    insert={insert}
+                    niche={niche}
+                    moment={moment}
+                    seed={projectSeed}
+                    productData={productData}
+                    onMoment={setMoment}
+                    onNiche={(next) => onNiche?.(next)}
+                    onChange={(patch) => onChange(insert.id, patch)}
+                  />
+                </>
+              ) : null}
 
               {kind === "chip" && meta.hasText ? (
                 <Field>
@@ -533,6 +593,19 @@ export function InsertCard({
 
           {tab === "style" ? (
             <div className="flex flex-col gap-2" role="tabpanel">
+              {kind === "text" ? (
+                <>
+                  <BrandKitPicker kitId={brandKitId} onChange={(id) => onBrandKit?.(id)} />
+                  <StylePresetGallery
+                    kitId={brandKitId}
+                    moment={styleMoment}
+                    niche={styleNiche}
+                    onMoment={setStyleMoment}
+                    onNiche={setStyleNiche}
+                    onApply={(presetId) => onApplyStylePreset?.(presetId, "preserve")}
+                  />
+                </>
+              ) : null}
               {kind !== "sticker" && onPatchStyle && onResetStyleField && onResetStyleOverrides && onResetPosition && onApplyStylePreset && onApplyStyleToTrack ? (
                 <StyleCustomizePanel
                   insert={insert}
@@ -593,6 +666,9 @@ export function InsertCard({
                     onBeginGesture={onBeginInsertGesture}
                     onEndGesture={onEndInsertGesture}
                     presetLibrary={presetLibrary}
+                    getPlayhead={getPlayhead}
+                    onPlayRange={onPlayRange}
+                    retentionCuts={retentionCuts}
                   />
                   </>
                 ) : null
