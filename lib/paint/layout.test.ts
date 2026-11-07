@@ -69,6 +69,22 @@ test("caixa alta vale para o destaque, exceto com fonte de script", () => {
   assert.equal(script.pieces[0]?.text, "ACHEI")
 })
 
+test("preço gigante alinha R$ e centavos pelo tamanho pequeno", () => {
+  const layout = layoutInsert("~~R$ 89,90~~ *R$ 49,90*", getPresetStyle("preco-gigante"))
+  const accent = layout.pieces.filter((piece) => piece.accent)
+  const symbol = accent.find((piece) => piece.text === "R$")
+  const cents = accent.find((piece) => piece.text === ",90")
+  const whole = accent.find((piece) => piece.text === "49")
+  assert.ok(symbol && cents && whole)
+  assert.ok(Math.abs(symbol.rise - symbol.font.size * 1.05) < 0.5)
+  assert.ok(Math.abs(cents.rise - cents.font.size * 0.95) < 0.5)
+  assert.equal(whole.rise, 0)
+  const struck = layout.pieces.find((piece) => piece.strike)
+  assert.ok(struck)
+  assert.ok(Math.abs(struck.font.size - getPresetStyle("preco-gigante").text.fontSize * 0.5) < 0.5)
+  assert.ok(struck.rise > 0)
+})
+
 test("variável vazia não entra em caixa alta", () => {
   const layout = layoutMarkedText({
     text: "por {preco}",
