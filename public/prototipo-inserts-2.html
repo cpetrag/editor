@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Inserts 2.0</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: grid;
+      place-items: center;
+      background: linear-gradient(160deg, #6b5646, #2a211b);
+      font-family: sans-serif;
+    }
+    #box { max-width: 92%; text-align: center; line-height: 1.12; }
+  </style>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Fredoka:wght@700&family=Montserrat:wght@500;700;800&family=Oswald:wght@700&family=Pacifico&family=Permanent+Marker&family=Playfair+Display:ital,wght@1,700&family=Poppins:wght@700;800;900&family=Caveat:wght@700&display=block" />
+</head>
+<body>
+  <div id="box"></div>
+  <script>
+    const kits = {
+      shopee: { primary: "#EE4D2D", onPrimary: "#FFFFFF", accent: "#FFD400", ink: "#111111", paper: "#FFFFFF" },
+      beleza: { primary: "#E0569B", onPrimary: "#FFFFFF", accent: "#FFD1E6", ink: "#2A0F1D", paper: "#FFF4F8" },
+      bebe: { primary: "#5DB7EA", onPrimary: "#FFFFFF", accent: "#FFC4D6", ink: "#2F3A63", paper: "#FFFBEA" },
+      moda: { primary: "#1A1A1A", onPrimary: "#F4ECE2", accent: "#C79A6B", ink: "#111111", paper: "#F4ECE2" },
+      contraste: { primary: "#FFE600", onPrimary: "#000000", accent: "#FF2D55", ink: "#000000", paper: "#FFFFFF" },
+    }
+    const fonts = {
+      poppins: "Poppins", anton: "Anton", archivo: "Archivo Black", playfair: "Playfair Display",
+      montserrat: "Montserrat", pacifico: "Pacifico", fredoka: "Fredoka", oswald: "Oswald",
+      "permanent-marker": "Permanent Marker", caveat: "Caveat",
+    }
+    const params = new URLSearchParams(location.search)
+    const preset = params.get("preset") || "sticker"
+    const kit = kits[params.get("kit") || "shopee"]
+    function slot(color) {
+      return String(color).startsWith("slot:") ? kit[color.slice(5)] : color
+    }
+    const box = document.getElementById("box")
+    const text = params.get("text") || "Achei o *melhor*"
+    box.textContent = text.replace(/~~([^~]+)~~/g, "$1").replace(/\*([^*]+)\*/g, "$1")
+    box.style.color = slot("slot:ink")
+    box.style.fontFamily = fonts[preset === "bolha" ? "fredoka" : "poppins"]
+    box.style.fontWeight = "800"
+    box.style.fontSize = "42px"
+    if (preset === "pilula-marca") {
+      box.style.background = slot("slot:primary")
+      box.style.color = slot("slot:onPrimary")
+      box.style.borderRadius = "999px"
+      box.style.padding = "0.3em 0.7em"
+    }
+    if (preset === "duplo" || preset === "vazado" || preset === "preco-gigante") {
+      box.style.fontFamily = "Anton"
+      box.style.textTransform = "uppercase"
+      box.style.webkitTextStroke = preset === "duplo" ? "4px " + slot("slot:ink") : "3px #fff"
+      box.style.color = preset === "duplo" ? slot("slot:accent") : "#fff"
+    }
+  </script>
+</body>
+</html>
