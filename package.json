@@ -1,6 +1,6 @@
 {
   "name": "my-project",
-  "version": "1.2.0-b.2",
+  "version": "1.2.0-b.3",
   "private": true,
   "scripts": {
     "dev": "next dev -p 4013",
@@ -33,6 +33,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@remotion/bundler": "^4.0.514",
     "@remotion/cli": "^4.0.514",
     "@remotion/renderer": "^4.0.514",
@@ -40,6 +41,8 @@
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "pixelmatch": "^8.0.0",
+    "pngjs": "^7.0.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
     "typescript": "5.7.3"

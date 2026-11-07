@@ -4,57 +4,156 @@
   <meta charset="utf-8" />
   <title>Inserts 2.0</title>
   <style>
+    @font-face { font-family: "Anton"; src: url("/fonts/Anton-Regular.woff2") format("woff2"); font-weight: 400; font-display: block; }
+    @font-face { font-family: "Archivo Black"; src: url("/fonts/ArchivoBlack-Regular.woff2") format("woff2"); font-weight: 400; font-display: block; }
+    @font-face { font-family: "Poppins"; src: url("/fonts/Poppins-Bold.woff2") format("woff2"); font-weight: 700 900; font-display: block; }
+    @font-face { font-family: "Playfair Display"; src: url("/fonts/PlayfairDisplay-BoldItalic.woff2") format("woff2"); font-weight: 700; font-style: italic; font-display: block; }
+    @font-face { font-family: "Pacifico"; src: url("/fonts/Pacifico-Regular.woff2") format("woff2"); font-weight: 400; font-display: block; }
+    @font-face { font-family: "Fredoka"; src: url("/fonts/Fredoka-Bold.woff2") format("woff2"); font-weight: 700; font-display: block; }
+    @font-face { font-family: "Oswald"; src: url("/fonts/Oswald-Bold.woff2") format("woff2"); font-weight: 700; font-display: block; }
+    @font-face { font-family: "Permanent Marker"; src: url("/fonts/PermanentMarker-Regular.woff2") format("woff2"); font-weight: 400; font-display: block; }
+    @font-face { font-family: "Caveat"; src: url("/fonts/Caveat-Bold.woff2") format("woff2"); font-weight: 700; font-display: block; }
     html, body { margin: 0; height: 100%; }
-    body {
-      display: grid;
-      place-items: center;
-      background: linear-gradient(160deg, #6b5646, #2a211b);
-      font-family: sans-serif;
-    }
-    #box { max-width: 92%; text-align: center; line-height: 1.12; }
+    body { display: grid; place-items: center; background: linear-gradient(160deg,#6b5646,#2a211b); overflow: hidden; }
+    #stage { position: relative; }
   </style>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Fredoka:wght@700&family=Montserrat:wght@500;700;800&family=Oswald:wght@700&family=Pacifico&family=Permanent+Marker&family=Playfair+Display:ital,wght@1,700&family=Poppins:wght@700;800;900&family=Caveat:wght@700&display=block" />
 </head>
 <body>
-  <div id="box"></div>
+  <div id="stage"></div>
   <script>
-    const kits = {
-      shopee: { primary: "#EE4D2D", onPrimary: "#FFFFFF", accent: "#FFD400", ink: "#111111", paper: "#FFFFFF" },
-      beleza: { primary: "#E0569B", onPrimary: "#FFFFFF", accent: "#FFD1E6", ink: "#2A0F1D", paper: "#FFF4F8" },
-      bebe: { primary: "#5DB7EA", onPrimary: "#FFFFFF", accent: "#FFC4D6", ink: "#2F3A63", paper: "#FFFBEA" },
-      moda: { primary: "#1A1A1A", onPrimary: "#F4ECE2", accent: "#C79A6B", ink: "#111111", paper: "#F4ECE2" },
-      contraste: { primary: "#FFE600", onPrimary: "#000000", accent: "#FF2D55", ink: "#000000", paper: "#FFFFFF" },
+    const KITS = {
+      shopee: { primary:"#EE4D2D", onPrimary:"#FFFFFF", accent:"#FFD400", ink:"#111111", paper:"#FFFFFF" },
+      beleza: { primary:"#E0569B", onPrimary:"#FFFFFF", accent:"#FFD1E6", ink:"#2A0F1D", paper:"#FFF4F8" },
+      bebe: { primary:"#5DB7EA", onPrimary:"#FFFFFF", accent:"#FFC4D6", ink:"#2F3A63", paper:"#FFFBEA" },
+      moda: { primary:"#1A1A1A", onPrimary:"#F4ECE2", accent:"#C79A6B", ink:"#111111", paper:"#F4ECE2" },
+      contraste: { primary:"#FFE600", onPrimary:"#000000", accent:"#FF2D55", ink:"#000000", paper:"#FFFFFF" }
     }
-    const fonts = {
-      poppins: "Poppins", anton: "Anton", archivo: "Archivo Black", playfair: "Playfair Display",
-      montserrat: "Montserrat", pacifico: "Pacifico", fredoka: "Fredoka", oswald: "Oswald",
-      "permanent-marker": "Permanent Marker", caveat: "Caveat",
+    const FAM = { poppins:"Poppins", anton:"Anton", archivo:"Archivo Black", playfair:"Playfair Display", montserrat:"Montserrat", pacifico:"Pacifico", fredoka:"Fredoka", oswald:"Oswald", "permanent-marker":"Permanent Marker", caveat:"Caveat" }
+    function slot(color, kit) { return String(color).startsWith("slot:") ? kit[color.slice(5)] : color }
+    function toWords(text) {
+      const parts = String(text).split(/(\*[^*]+\*|~~[^~]+~~)/g).filter(Boolean)
+      const words = []
+      for (const part of parts) {
+        let accent = false, strike = false, raw = part
+        if (part.startsWith("*") && part.endsWith("*")) { accent = true; raw = part.slice(1, -1) }
+        else if (part.startsWith("~~") && part.endsWith("~~")) { strike = true; raw = part.slice(2, -2) }
+        for (const word of raw.split(/\s+/).filter(Boolean)) words.push({ word, accent, strike })
+      }
+      return words
     }
-    const params = new URLSearchParams(location.search)
-    const preset = params.get("preset") || "sticker"
-    const kit = kits[params.get("kit") || "shopee"]
-    function slot(color) {
-      return String(color).startsWith("slot:") ? kit[color.slice(5)] : color
+    function styleBox(def, kit) {
+      const c = (value) => slot(value, kit)
+      const size = Math.round(def.size * 0.42)
+      const css = {
+        fontFamily: FAM[def.font] || "sans-serif",
+        fontWeight: def.weight || 400,
+        fontSize: size + "px",
+        lineHeight: def.case === "upper" ? "1.04" : "1.12",
+        color: c(def.color),
+        textAlign: "center",
+        position: "relative",
+        display: "inline-block",
+        transform: def.rotation ? `rotate(${def.rotation}deg)` : "",
+        fontStyle: def.italic ? "italic" : "normal",
+        letterSpacing: def.tracking ? def.tracking + "em" : "",
+        textTransform: def.case === "upper" ? "uppercase" : "none"
+      }
+      if (def.bg) {
+        css.background = c(def.bg.color)
+        css.padding = `${def.bg.padY}em ${def.bg.padX}em`
+        css.borderRadius = def.bg.radius >= 999 ? "999px" : def.bg.radius + "px"
+      }
+      if (def.stroke) css.webkitTextStroke = `${Math.max(1, def.stroke.width * 0.42)}px ${c(def.stroke.color)}`
+      if (def.gradient) {
+        css.backgroundImage = `linear-gradient(${def.gradient[2]}deg, ${def.gradient[0]}, ${def.gradient[1]})`
+        css.webkitBackgroundClip = "text"
+        css.color = "transparent"
+      }
+      const shadows = []
+      if (def.longShadow) {
+        for (let i = def.longShadow.length; i >= 1; i -= 1) shadows.push(`${i * 1.4 * 0.42}px ${i * 1.4 * 0.42}px 0 ${c(def.longShadow.color)}`)
+      }
+      for (const shadow of def.shadows || []) shadows.push(`${shadow.x * 0.42}px ${shadow.y * 0.42}px ${shadow.blur * 0.42}px ${c(shadow.color)}`)
+      if (shadows.length && !def.boxShadow) css.textShadow = shadows.join(", ")
+      if (def.boxShadow && def.shadows) css.boxShadow = def.shadows.map((shadow) => `${shadow.x}px ${shadow.y}px ${shadow.blur}px ${c(shadow.color)}`).join(", ")
+      return css
     }
-    const box = document.getElementById("box")
-    const text = params.get("text") || "Achei o *melhor*"
-    box.textContent = text.replace(/~~([^~]+)~~/g, "$1").replace(/\*([^*]+)\*/g, "$1")
-    box.style.color = slot("slot:ink")
-    box.style.fontFamily = fonts[preset === "bolha" ? "fredoka" : "poppins"]
-    box.style.fontWeight = "800"
-    box.style.fontSize = "42px"
-    if (preset === "pilula-marca") {
-      box.style.background = slot("slot:primary")
-      box.style.color = slot("slot:onPrimary")
-      box.style.borderRadius = "999px"
-      box.style.padding = "0.3em 0.7em"
+    const STYLES = {
+      sticker: { font:"poppins", weight:900, size:72, color:"slot:ink", accent:"slot:primary", bg:{color:"slot:paper", padX:0.45, padY:0.2, radius:28}, shadows:[{x:0,y:10,blur:0,color:"rgba(0,0,0,.28)"}], rotation:-3 },
+      fita: { font:"permanent-marker", weight:400, size:64, color:"slot:ink", accent:"slot:primary", shape:"fita", bg:{color:"slot:accent", padX:0.5, padY:0.18, radius:2}, rotation:2 },
+      vazado: { font:"anton", weight:400, size:120, case:"upper", color:"transparent", accent:"slot:primary", stroke:{width:5, color:"#FFFFFF"} },
+      "sombra-longa": { font:"archivo", weight:400, size:96, case:"upper", color:"#FFFFFF", accent:"slot:accent", longShadow:{length:16, color:"slot:primary"} },
+      duplo: { font:"anton", weight:400, size:104, case:"upper", color:"slot:accent", accent:"slot:primary", stroke:{width:9, color:"slot:ink"}, outerStroke:{width:9, color:"#FFFFFF"} },
+      vidro: { font:"montserrat", weight:700, size:58, color:"#FFFFFF", accent:"slot:accent", glass:true, bg:{color:"rgba(255,255,255,.2)", padX:0.6, padY:0.35, radius:30} },
+      "marca-texto": { font:"poppins", weight:800, size:70, color:"slot:ink", accent:"slot:ink", highlightBar:{color:"slot:accent", skew:-6} },
+      "preco-gigante": { font:"anton", weight:400, size:150, color:"#FFFFFF", accent:"slot:accent", priceLayout:true, stroke:{width:8, color:"slot:ink"}, shadows:[{x:0,y:8,blur:0,color:"slot:primary"}] },
+      balao: { font:"poppins", weight:700, size:56, color:"slot:ink", accent:"slot:primary", shape:"balao", bg:{color:"#FFFFFF", padX:0.6, padY:0.38, radius:34} },
+      etiqueta: { font:"archivo", weight:400, size:70, case:"upper", color:"slot:onPrimary", accent:"slot:accent", shape:"etiqueta", bg:{color:"slot:primary", padX:0.8, padY:0.3, radius:10} },
+      "por-do-sol": { font:"anton", weight:400, size:110, case:"upper", gradient:["#FFC400","#FF3D7F",180], accent:"#FFFFFF", shadows:[{x:0,y:7,blur:0,color:"rgba(0,0,0,.35)"}] },
+      cromado: { font:"archivo", weight:400, size:96, case:"upper", gradient:["#FFFFFF","#8E99A6",180], accent:"slot:accent", stroke:{width:2, color:"#2B2F35"}, shadows:[{x:0,y:6,blur:14,color:"rgba(0,0,0,.45)"}] },
+      editorial: { font:"playfair", weight:700, italic:true, size:84, color:"slot:paper", accent:"slot:accent", shadows:[{x:0,y:4,blur:18,color:"rgba(0,0,0,.45)"}] },
+      "script-caps": { font:"montserrat", weight:800, size:64, case:"upper", tracking:0.04, color:"#FFFFFF", accent:"slot:accent", accentFont:"pacifico", shadows:[{x:0,y:4,blur:12,color:"rgba(0,0,0,.5)"}] },
+      "neon-rosa": { font:"montserrat", weight:800, size:80, color:"#FFFFFF", accent:"#FFFFFF", shadows:[{x:0,y:0,blur:8,color:"slot:primary"},{x:0,y:0,blur:22,color:"slot:primary"},{x:0,y:0,blur:44,color:"slot:primary"}] },
+      bolha: { font:"fredoka", weight:700, size:86, color:"#FFFFFF", accent:"slot:accent", stroke:{width:11, color:"slot:primary"}, shadows:[{x:0,y:8,blur:0,color:"slot:ink"}] },
+      "pilula-marca": { font:"poppins", weight:800, size:60, color:"slot:onPrimary", accent:"slot:accent", bg:{color:"slot:primary", padX:0.7, padY:0.3, radius:999} },
+      selo: { font:"anton", weight:400, size:64, case:"upper", color:"slot:onPrimary", accent:"slot:accent", shape:"selo", bg:{color:"slot:primary", padX:0.9, padY:0.9, radius:0} },
+      bilhete: { font:"caveat", weight:700, size:72, color:"slot:ink", accent:"slot:primary", bg:{color:"slot:paper", padX:0.6, padY:0.3, radius:4}, shadows:[{x:0,y:12,blur:24,color:"rgba(0,0,0,.28)"}], rotation:2, boxShadow:true },
+      tarja: { font:"archivo", weight:400, size:72, case:"upper", color:"slot:onPrimary", accent:"slot:accent", shape:"tarja", bg:{color:"slot:primary", padX:2, padY:0.25, radius:0}, rotation:-6 },
+      grife: { font:"montserrat", weight:500, size:44, case:"upper", tracking:0.32, color:"#FFFFFF", accent:"slot:accent", underline:true, shadows:[{x:0,y:2,blur:10,color:"rgba(0,0,0,.45)"}] },
+      "contador-bold": { font:"oswald", weight:700, size:88, case:"upper", color:"slot:paper", accent:"slot:primary", bg:{color:"slot:ink", padX:0.4, padY:0.12, radius:0, mode:"linha"} }
     }
-    if (preset === "duplo" || preset === "vazado" || preset === "preco-gigante") {
-      box.style.fontFamily = "Anton"
-      box.style.textTransform = "uppercase"
-      box.style.webkitTextStroke = preset === "duplo" ? "4px " + slot("slot:ink") : "3px #fff"
-      box.style.color = preset === "duplo" ? slot("slot:accent") : "#fff"
+    function buildInsert(presetId, kitId, text) {
+      const def = STYLES[presetId] || STYLES.sticker
+      const kit = KITS[kitId] || KITS.shopee
+      const root = document.createElement("div")
+      const css = styleBox(def, kit)
+      Object.assign(root.style, css)
+      if (def.outerStroke) root.style.paintOrder = "stroke fill"
+      const words = toWords(text)
+      words.forEach((item, index) => {
+        if (index) root.append(" ")
+        const span = document.createElement("span")
+        let value = item.word
+        const upper = def.case === "upper" && !(item.accent && def.accentFont)
+        if (upper) value = value.toLocaleUpperCase("pt-BR")
+        span.textContent = value
+        if (item.accent) {
+          span.style.color = slot(def.accent, kit)
+          if (def.accentFont) {
+            span.style.fontFamily = FAM[def.accentFont]
+            span.style.fontSize = "1.12em"
+            span.style.textTransform = "none"
+            span.style.fontWeight = "400"
+          }
+        }
+        if (item.strike) {
+          span.style.fontSize = ".5em"
+          span.style.opacity = ".9"
+          span.style.textDecoration = "line-through"
+          span.style.verticalAlign = ".55em"
+        }
+        root.append(span)
+      })
+      if (def.underline) {
+        root.style.borderBottom = `3px solid ${slot(def.accent, kit)}`
+        root.style.paddingBottom = "6px"
+      }
+      if (def.highlightBar) {
+        root.style.backgroundImage = "none"
+        root.style.boxDecorationBreak = "clone"
+        root.style.background = `linear-gradient(${slot(def.highlightBar.color, kit)}, ${slot(def.highlightBar.color, kit)}) 0 92% / 100% 40% no-repeat`
+      }
+      return root
     }
+    function renderEst() {
+      const params = new URLSearchParams(location.search)
+      const preset = params.get("preset") || "sticker"
+      const kit = params.get("kit") || "shopee"
+      const text = params.get("text") || "Achei o *melhor*"
+      const stage = document.getElementById("stage")
+      stage.replaceChildren(buildInsert(preset, kit, text))
+    }
+    renderEst()
   </script>
 </body>
 </html>
