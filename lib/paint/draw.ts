@@ -122,6 +122,19 @@ function fontOf(piece: PaintPiece): string {
   return `${italic}${piece.font.weight} ${piece.font.size}px "${piece.font.family}"`
 }
 
+export function highlightBarRect(
+  line: { y: number; height: number; pieces: Array<{ x: number; width: number }> },
+  fontSize: number,
+): { cx: number; cy: number; w: number; h: number } | null {
+  if (line.pieces.length === 0) return null
+  const pad = fontSize * 0.15
+  const minX = Math.min(...line.pieces.map((piece) => piece.x)) - pad
+  const maxX = Math.max(...line.pieces.map((piece) => piece.x + piece.width)) + pad
+  const top = line.y - line.height / 2 + line.height * 0.52
+  const height = line.height * 0.4
+  return { cx: (minX + maxX) / 2, cy: top + height / 2, w: maxX - minX, h: height }
+}
+
 export function deviceScaleOf(ctx: CanvasRenderingContext2D): number {
   if (typeof ctx.getTransform !== "function") return 1
   const matrix = ctx.getTransform()
@@ -254,15 +267,12 @@ export function paintInsertLayout(
     ctx.save()
     ctx.fillStyle = style.text.highlightBar.color
     for (const line of layout.lines) {
-      if (line.pieces.length === 0) continue
-      const minX = Math.min(...line.pieces.map((piece) => piece.x))
-      const maxX = Math.max(...line.pieces.map((piece) => piece.x + piece.width))
-      const top = line.y - line.height * 0.5 + line.height * 0.52
-      const height = line.height * 0.4
+      const bar = highlightBarRect(line, style.text.fontSize)
+      if (!bar) continue
       ctx.save()
-      ctx.translate((minX + maxX) / 2, line.y)
+      ctx.translate(bar.cx, bar.cy)
       ctx.rotate((style.text.highlightBar.skew * Math.PI) / 180)
-      ctx.fillRect(minX - (minX + maxX) / 2, top - line.y, maxX - minX, height)
+      ctx.fillRect(-bar.w / 2, -bar.h / 2, bar.w, bar.h)
       ctx.restore()
     }
     ctx.restore()

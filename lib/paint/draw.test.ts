@@ -2,7 +2,19 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import { getPresetStyle } from "../style/presets.ts"
-import { deviceScaleOf, paintMarkedInsert } from "./draw.ts"
+import { deviceScaleOf, highlightBarRect, paintMarkedInsert } from "./draw.ts"
+
+test("marca-texto cobre a linha com folga e fica entre 52% e 92%", () => {
+  const bar = highlightBarRect(
+    { y: 0, height: 100, pieces: [{ x: 10, width: 80 }] },
+    50,
+  )
+  assert.ok(bar)
+  assert.equal(bar.w, 80 + 50 * 0.15 * 2)
+  assert.equal(bar.h, 40)
+  assert.ok(Math.abs(bar.cy - ( -50 + 52 + 20)) < 0.01)
+  assert.equal(bar.cx, 10 - 7.5 + bar.w / 2)
+})
 
 test("neon rosa pinta uma passada para cada sombra", () => {
   const shadows: number[] = []
