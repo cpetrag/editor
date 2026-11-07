@@ -1,6 +1,6 @@
 import { insertKind, type CompositionInsert } from "../composition.ts"
 import type { ExportWarning } from "../export-checklist.ts"
-import { fillVars, type ProductData } from "./runs.ts"
+import { fillVars, plainMarkedText, type ProductData } from "./runs.ts"
 
 export function emptyVariableWarnings(
   inserts: CompositionInsert[],
@@ -11,7 +11,7 @@ export function emptyVariableWarnings(
     return fillVars(insert.text ?? "", data).empty.length > 0
   })
   if (hits.length === 0) return []
-  const names = hits.map((insert) => `“${(insert.text ?? "").slice(0, 42)}”`).join(", ")
+  const names = hits.map((insert) => `“${plainMarkedText(insert.text ?? "", data).slice(0, 42)}”`).join(", ")
   return [
     {
       id: "empty-var",

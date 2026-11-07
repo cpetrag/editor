@@ -676,7 +676,7 @@ export function StyleCustomizePanel({
             >
               <ColorField
                 id={`color-${insert.id}`}
-                label="Cor"
+                label="Hex"
                 value={resolved.text.color}
                 onChange={(color) => {
                   if (color) onPatchStyle("text.color", color)
@@ -966,7 +966,7 @@ export function StyleCustomizePanel({
               />
             </OriginField>
             <OriginField
-              label="Backdrop blur"
+              label="Vidro (sem desfoque)"
               origin={originOf("text.background.backdropBlur")}
               htmlFor={`bb-${insert.id}`}
               onReset={() => onResetField("text.background.backdropBlur")}

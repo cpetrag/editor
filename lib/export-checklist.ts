@@ -132,7 +132,14 @@ export function contrastRatio(foreground: string, background: string): number | 
 
 function insertLabel(insert: CompositionInsert): string {
   const text = insert.text?.trim()
-  if (text) return text
+  if (text) {
+    return text
+      .replace(/\\([*~])/g, "$1")
+      .replace(/~~([^~]*)~~/g, "$1")
+      .replace(/\*([^*]*)\*/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim()
+  }
   return INSERT_TYPES.find((meta) => meta.value === insert.type)?.label ?? "Insert"
 }
 

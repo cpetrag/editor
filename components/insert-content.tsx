@@ -2,8 +2,7 @@
 
 import { useEffect, useRef } from "react"
 
-import { BRAND_KITS, brandKitOf } from "@/lib/brand/kits"
-import { resolveStyleColors } from "@/lib/brand/resolve-style-colors"
+import { BRAND_KITS } from "@/lib/brand/kits"
 import {
   CONTENT_PRESETS,
   contentPresetsFor,
@@ -11,10 +10,9 @@ import {
   type ContentNiche,
   type ContentSlot,
 } from "@/lib/content/presets"
-import type { ProductData } from "@/lib/content/runs"
 import { applyContentRecipe, rerollContentRecipe } from "@/lib/content/recipes"
-import { PRODUCT_FIELDS, formatPrice, readingSeconds, type ProductData } from "@/lib/content/runs"
-import { drawResolvedInsertText } from "@/lib/compose/draw-insert-style"
+import { PRODUCT_FIELDS, formatPrice, priceError, readingSeconds, type ProductData } from "@/lib/content/runs"
+import { paintMarkedInsert } from "@/lib/paint/draw"
 import { ensureComposeFontsReady } from "@/lib/compose/fonts"
 import { getPresetStyle } from "@/lib/style/presets"
 import { listOfferPresets } from "@/lib/style/offer-styles"
@@ -30,11 +28,23 @@ const MOMENTS: Array<{ id: ContentSlot | "todos"; label: string }> = [
 ]
 
 const NICHES: Array<{ id: ContentNiche; label: string }> = [
-  { id: "shopee", label: "Shopee" },
+  { id: "shopee", label: "Geral" },
   { id: "moda", label: "Moda" },
   { id: "beleza", label: "Beleza" },
   { id: "bebe", label: "Bebê" },
 ]
+
+const FIELD_LABELS: Record<string, { label: string; placeholder: string }> = {
+  produto: { label: "Produto", placeholder: "calça flare" },
+  preco: { label: "Preço", placeholder: "49,90" },
+  preco_de: { label: "Preço de", placeholder: "89,90" },
+  desconto: { label: "Desconto %", placeholder: "44" },
+  cupom: { label: "Cupom", placeholder: "FLARE10" },
+  nota: { label: "Nota", placeholder: "4,9" },
+  vendidos: { label: "Vendidos", placeholder: "12 mil" },
+  tamanhos: { label: "Tamanhos", placeholder: "36 ao 48" },
+  qtd: { label: "Quantidade", placeholder: "60" },
+}
 
 export function ReadingMeter({ text, duration }: { text: string; duration: number }) {
   const needed = readingSeconds(text)
@@ -98,21 +108,28 @@ export function ProductDataFields({
           ))}
         </select>
       </label>
-      {PRODUCT_FIELDS.map((field) => (
-        <label key={field} className="flex flex-col gap-1 text-[0.7rem] text-muted-foreground">
-          {field}
-          <input
-            className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
-            value={data[field] ?? ""}
-            onChange={(event) => onChange({ ...data, [field]: event.target.value })}
-            onBlur={(event) => {
-              if (field !== "preco" && field !== "preco_de") return
-              const formatted = formatPrice(event.target.value)
-              if (formatted) onChange({ ...data, [field]: formatted })
-            }}
-          />
-        </label>
-      ))}
+      {PRODUCT_FIELDS.map((field) => {
+        const meta = FIELD_LABELS[field]
+        const invalid = (field === "preco" || field === "preco_de") ? priceError(data[field] ?? "") : null
+        return (
+          <label key={field} className="flex flex-col gap-1 text-[0.7rem] text-muted-foreground">
+            {meta?.label ?? field}
+            <input
+              className={`h-8 rounded-md border bg-background px-2 text-sm text-foreground ${invalid ? "border-red-500" : "border-border"}`}
+              placeholder={meta?.placeholder}
+              value={data[field] ?? ""}
+              onChange={(event) => onChange({ ...data, [field]: event.target.value })}
+              onBlur={(event) => {
+                if (field !== "preco" && field !== "preco_de") return
+                if (priceError(event.target.value)) return
+                const formatted = formatPrice(event.target.value)
+                if (formatted) onChange({ ...data, [field]: formatted })
+              }}
+            />
+            {invalid ? <span className="text-red-600">{invalid}</span> : null}
+          </label>
+        )
+      })}
     </div>
   )
 }
@@ -241,6 +258,14 @@ export function ContentRecipeList({
   )
 }
 
+export function sampleTextForPreset(presetId: string): string {
+  const style = getPresetStyle(presetId)
+  if (style.text.priceLayout) return "~~R$ 89,90~~ *R$ 49,90*"
+  const meta = listOfferPresets().find((preset) => preset.id === presetId)
+  if (meta?.slots.includes("oferta")) return "-44% *hoje*"
+  return "Achei o *melhor*"
+}
+
 function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
@@ -248,45 +273,43 @@ function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
     if (!canvas) return
     let cancelled = false
     const style = getPresetStyle(presetId)
+    const cssW = canvas.clientWidth || 199
+    const cssH = 72
     void ensureComposeFontsReady([style.text.fontFamily, style.text.accentFont ?? ""].filter(Boolean)).then(() => {
       if (cancelled || !ref.current) return
-      const scale = 0.11
-      ref.current.width = Math.round(1080 * scale)
-      ref.current.height = Math.round(420 * scale)
+      const dpr = window.devicePixelRatio || 1
+      ref.current.width = Math.round(cssW * dpr)
+      ref.current.height = Math.round(cssH * dpr)
       const ctx = ref.current.getContext("2d")
       if (!ctx) return
-      ctx.setTransform(scale, 0, 0, scale, 0, 40)
-      ctx.clearRect(-200, -200, 1400, 800)
-      const painted = resolveStyleColors(style, brandKitOf(kitId))
-      drawResolvedInsertText(
-        ctx,
-        {
-          id: presetId,
-          type: "texto-livre",
-          kind: "text",
-          start: 0,
-          duration: 2,
-          text: "Oferta",
-          anchor: "center",
-          animIn: "none",
-          animOut: "none",
-          x: 50,
-          y: 8,
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const backdrop = ctx.createLinearGradient(0, 0, cssW, cssH)
+      backdrop.addColorStop(0, "#6b5646")
+      backdrop.addColorStop(1, "#2a211b")
+      ctx.fillStyle = backdrop
+      ctx.fillRect(0, 0, cssW, cssH)
+      const scale = (cssH / 1920) * 4
+      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0)
+      paintMarkedInsert(ctx, {
+        text: sampleTextForPreset(presetId),
+        style: { ...style, text: { ...style.text, rotation: 0 } },
+        maxWidth: cssW / scale - 8,
+        measure: (text, font) => {
+          const italic = font.italic ? "italic " : ""
+          ctx.font = `${italic}${font.weight} ${font.size}px "${font.family}"`
+          return ctx.measureText(text).width
         },
-        { ...painted, text: { ...painted.text, y: 8, fontSize: Math.min(painted.text.fontSize, 90) } },
-        1.2,
-        { width: 1080, height: 1920 },
-        "geist",
-        30,
-        true,
-        { brandKitId: kitId, editPreview: false },
-      )
+        origin: { cx: cssW / 2 / scale, cy: cssH / 2 / scale },
+        brandKitId: kitId,
+        editPreview: false,
+        productData: { preco: "R$ 49,90", preco_de: "R$ 89,90" },
+      })
     })
     return () => {
       cancelled = true
     }
   }, [kitId, presetId])
-  return <canvas ref={ref} className="h-14 w-full bg-zinc-900" />
+  return <canvas ref={ref} className="h-[72px] w-full" />
 }
 
 export function StylePresetGallery({
@@ -334,8 +357,8 @@ export function StylePresetGallery({
         {presets.map((preset) => (
           <button key={preset.id} type="button" className="overflow-hidden rounded-md border border-border text-left" onClick={() => onApply(preset.id)}>
             <StyleThumb presetId={preset.id} kitId={kitId} />
-            <span className="flex items-center justify-between px-1.5 py-1 text-[0.65rem]">
-              {preset.label}
+            <span className="flex h-6 items-center justify-between px-1.5 text-[0.65rem]">
+              {preset.label} · {preset.slots.map((slot) => slot[0]?.toUpperCase() + slot.slice(1)).join(" · ")}
               <span className="rounded bg-amber-400 px-1 text-[0.6rem] font-semibold text-black">NOVO</span>
             </span>
           </button>

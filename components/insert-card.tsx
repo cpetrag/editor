@@ -59,6 +59,7 @@ import {
   StylePresetGallery,
   VariableChips,
 } from "@/components/insert-content"
+import { markupIssues } from "@/lib/content/runs"
 import { retentionZones } from "@/lib/insert-ops"
 import type { ContentNiche, ContentSlot } from "@/lib/content/presets"
 import { BlockToolbar } from "@/components/collapsible-block"
@@ -524,6 +525,9 @@ export function InsertCard({
                   />
                 </Field>
               ) : null}
+              {kind === "text" && markupIssues(insert.text ?? "").map((issue) => (
+                <p key={issue} className="text-[0.65rem] text-amber-700">{issue}</p>
+              ))}
               {kind === "text" ? (
                 <>
                   <VariableChips
@@ -534,7 +538,6 @@ export function InsertCard({
                       onChange(insert.id, { text: `${text.slice(0, cursor)}${token}${text.slice(cursor)}` })
                     }}
                   />
-                  <p className="text-[0.65rem] text-muted-foreground">*destaque* marca a palavra. ~~riscado~~ corta o preço. \* e \~ escrevem o símbolo.</p>
                   <ReadingMeter text={insert.text ?? ""} duration={insert.duration} />
                   <ContentRecipeList
                     insert={insert}

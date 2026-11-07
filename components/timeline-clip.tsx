@@ -107,7 +107,7 @@ export function TimelineClipBar({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(diamond.ratio * 100)}
-          className="absolute top-1/2 z-[2] size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-ew-resize border border-black/40 bg-white shadow"
+          className="absolute top-0 z-[2] size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-ew-resize border border-black/40 bg-white shadow"
           style={{ left: `${diamond.ratio * 100}%` }}
           onPointerDown={(event) => {
             event.stopPropagation()

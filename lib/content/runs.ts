@@ -211,6 +211,37 @@ export function tagToken(
   }
 }
 
+export function priceError(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const body = trimmed.replace(/^r\$\s*/i, "")
+  if (!body || !/^[\d.,]+$/.test(body)) return "Use 49,90"
+  return null
+}
+
+export function markupIssues(text: string): string[] {
+  const stars: number[] = []
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\\" && (text[index + 1] === "*" || text[index + 1] === "~")) {
+      index += 1
+      continue
+    }
+    if (text[index] === "*") stars.push(index)
+  }
+  if (stars.length % 2 === 0) return []
+  const at = stars[stars.length - 1] ?? 0
+  return [`Marcação ignorada: * sem par na posição ${at}`]
+}
+
+export function plainMarkedText(text: string, data?: ProductData): string {
+  const filled = fillVars(text, data, { stripEmpty: true })
+  return parseRuns(filled.text)
+    .map((run) => run.text)
+    .join("")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim()
+}
+
 export function readingSeconds(text: string): number {
   const words = text
     .replace(/[{}*~\\]/g, " ")
