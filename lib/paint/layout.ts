@@ -151,7 +151,8 @@ function chunksForRun(
       })
       continue
     }
-    const visible = caseOf(part, upper && !flags.accent)
+    const scriptAccent = Boolean(flags.accent && style.text.accentFont)
+    const visible = caseOf(part, upper && !scriptAccent)
     if (style.text.priceLayout && flags.accent) {
       const priced = priceChunks(visible, { ...base, size: style.text.fontSize }, color, true)
       if (priced) {

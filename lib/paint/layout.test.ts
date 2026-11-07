@@ -58,6 +58,17 @@ test("os 22 estilos novos e os 16 de fábrica preservam o espaço", () => {
   }
 })
 
+test("caixa alta vale para o destaque, exceto com fonte de script", () => {
+  const vazado = layoutInsert("Achei o *melhor*", getPresetStyle("vazado"))
+  assert.deepEqual(
+    vazado.pieces.map((piece) => piece.text),
+    ["ACHEI", "O", "MELHOR"],
+  )
+  const script = layoutInsert("Achei o *melhor*", getPresetStyle("script-caps"))
+  assert.equal(script.pieces.find((piece) => piece.accent)?.text, "melhor")
+  assert.equal(script.pieces[0]?.text, "ACHEI")
+})
+
 test("variável vazia não entra em caixa alta", () => {
   const layout = layoutMarkedText({
     text: "por {preco}",
