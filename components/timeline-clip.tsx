@@ -15,6 +15,7 @@ export function TimelineClipBar({
   selected,
   primary,
   showHandles,
+  pending = false,
   disabled,
   onPointerDown,
   onContextMenu,
@@ -27,6 +28,7 @@ export function TimelineClipBar({
   selected: boolean
   primary: boolean
   showHandles: boolean
+  pending?: boolean
   disabled: boolean
   onPointerDown: (event: React.PointerEvent, handle: TimelineHandle) => void
   onContextMenu?: (event: React.MouseEvent) => void
@@ -43,12 +45,17 @@ export function TimelineClipBar({
       aria-pressed={selected}
       data-timeline-clip
       className={cn(
-        "absolute flex items-center overflow-hidden rounded-[4px] opacity-90 ring-1 ring-black/40",
+        "absolute flex items-center overflow-hidden rounded-[4px] opacity-90",
+        !pending && "ring-1 ring-black/40",
         selected &&
           !primary &&
+          !pending &&
           "z-10 opacity-100 ring-2 ring-brand/80 shadow-[0_0_8px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
         primary &&
+          !pending &&
           "z-10 opacity-100 ring-[3px] ring-brand shadow-[0_0_12px_color-mix(in_oklch,var(--brand)_75%,transparent)]",
+        pending &&
+          "z-30 border-2 border-dashed border-amber-300 opacity-100 outline outline-2 outline-dashed outline-amber-300 outline-offset-1 ring-0",
         disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing",
       )}
       style={{

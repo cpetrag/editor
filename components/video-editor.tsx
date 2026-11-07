@@ -7,7 +7,23 @@ import { PreviewPanel, type PreviewHandle } from "@/components/preview-panel"
 import { EditorNav, type EditorTab } from "@/components/editor-nav"
 import { LibraryPanel } from "@/components/library-panel"
 import { projectHasArtInserts } from "@/lib/library-combo"
+import {
+  FACTORY_CTA_TEXT,
+  FACTORY_HOOK_TEXT,
+  FACTORY_PROOF_TEXT,
+  buildChampionStructure,
+  hookVariationFiles,
+  hookVariationManifest,
+  runHookVariationQueue,
+  type HookJobState,
+} from "@/lib/structure-preset"
+import {
+  listStructurePresets,
+  saveStructurePreset,
+  type StructurePresetRecord,
+} from "@/lib/structure-preset-store"
 import { BatchPanel } from "@/components/batch-panel"
+import { HookVariationsDialog } from "@/components/hook-variations-dialog"
 import { EditorHeaderActions, type SaveStatus } from "@/components/editor-header-actions"
 import { ExportMenu, type ExportMenuActions } from "@/components/export-menu"
 import { Button } from "@/components/ui/button"
@@ -72,11 +88,13 @@ import { normalizeWatermarkPrefs, watermarkPaintInput } from "@/lib/watermark"
 import { resolveExportSize } from "@/lib/export/compositor"
 import { exportComposition } from "@/lib/export/encoder"
 import { saveExportBlob, BLOB_REVOKE_DELAY_MS } from "@/lib/export/save"
+import { startFinalRender, watchJobUntilDone } from "@/lib/export/final-client"
 import { resolveExportVideoBlob } from "@/lib/export/source-blob"
 import { cancelFinalRender, readRenderHealth, type ExportMode, type ExportPhase } from "@/lib/export/final-client"
 import { finalExportTask } from "@/lib/export/final-task"
 import { loadLastExportJob } from "@/lib/export/last-job"
 import { useFinalExportTask } from "@/hooks/use-final-export-task"
+import { useExportController } from "@/hooks/useExportController"
 import {
   applyCapcutCopy,
   shouldCopyBrowserExportToCapcut,
@@ -256,6 +274,7 @@ function historyPresent(composition: Composition): HistorySnapshot {
     ...(composition.source.cuts ? { sourceCuts: composition.source.cuts } : {}),
     ...(composition.source.trim ? { sourceTrim: composition.source.trim } : {}),
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
+    ...(composition.retention ? { retention: composition.retention } : {}),
   }
 }
 
@@ -346,6 +365,7 @@ export function VideoEditor() {
   const [saveToCapcut, setSaveToCapcut] = useState(() => loadExportPrefs().saveToCapcut)
   const [exportFileName, setExportFileName] = useState("")
   const [finalNamePrompt, setFinalNamePrompt] = useState<string | null>(null)
+  const [pendingExportOpen, setPendingExportOpen] = useState(false)
   const lastSourceNameRef = useRef("")
   const [activeTab, setActiveTab] = useState<EditorTab>("editor")
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null)
@@ -371,6 +391,11 @@ export function VideoEditor() {
   const [comboChoice, setComboChoice] = useState(false)
   const [selection, setSelection] = useState<PreviewSelection>(null)
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
+  const [structurePresets, setStructurePresets] = useState<StructurePresetRecord[]>([])
+  const [structureChoice, setStructureChoice] = useState<{ hook: string; proof: string; cta: string } | null>(null)
+  const [hookDialogId, setHookDialogId] = useState<string | null>(null)
+  const [hookJobs, setHookJobs] = useState<HookJobState[]>([])
+  const [hookRunning, setHookRunning] = useState(false)
   const selectedInsertId = insertIdOf(selection)
   const [stickerBlobUrls, setStickerBlobUrls] = useState<Record<string, string>>({})
   const [batchPreview, setBatchPreview] = useState<Variation | null>(null)
@@ -878,6 +903,7 @@ export function VideoEditor() {
         ...(snapshot.sourceTrim ? { trim: snapshot.sourceTrim } : {}),
       },
       watermarkEnabled: snapshot.watermarkEnabled === true ? true : undefined,
+      retention: snapshot.retention,
     })
     compositionRef.current = next
     setComposition(next)
@@ -2137,6 +2163,7 @@ export function VideoEditor() {
 
   const startFinalExport = useCallback(
     async (stemName: string) => {
+      const composition = compositionRef.current
       try {
         const stored = composition.source.fileId
           ? await fileStoreRef.current.load(composition.source.fileId)
@@ -2145,6 +2172,11 @@ export function VideoEditor() {
           memoryBlob: sourceBlobRef.current,
           storedBlob: stored?.blob ?? null,
           objectUrl: backgroundUrl,
+          fileId: composition.source.fileId,
+          loadByFileId: async (fileId) => {
+            const record = await fileStoreRef.current.load(fileId)
+            return record?.blob ?? null
+          },
         })
         const chosenName = sanitizeCapcutFileName(stemName)
         setExportFileName(sanitizeExportStem(stemName))
@@ -2174,6 +2206,128 @@ export function VideoEditor() {
     [backgroundUrl, composition, stickerBlobUrls, watermarkPrefs],
   )
 
+  const commitStructure = useCallback((mode: "replace" | "add", copy: { hook: string; proof: string; cta: string }) => {
+    applyComposition((prev) => {
+      const built = buildChampionStructure(prev.source.duration, copy)
+      const kept = mode === "replace" ? prev.inserts.filter((insert) => insertKind(insert) === "caption") : prev.inserts
+      return {
+        ...prev,
+        inserts: [...kept, ...built.inserts],
+        retention: built.retention,
+        watermarkEnabled: true,
+      }
+    }, "discrete")
+  }, [applyComposition])
+
+  const requestStructure = useCallback((copy: { hook: string; proof: string; cta: string }) => {
+    const hasArt = compositionRef.current.inserts.some((insert) => insertKind(insert) !== "caption")
+    if (!hasArt) {
+      commitStructure("replace", copy)
+      return
+    }
+    setStructureChoice(copy)
+  }, [commitStructure])
+
+  const saveCurrentStructure = useCallback(() => {
+    const name = window.prompt("Nome da estrutura")
+    if (!name?.trim()) return
+    const current = compositionRef.current
+    const textOf = (role: "gancho" | "prova" | "cta", fallback: string) =>
+      current.inserts.find((insert) => insert.role === role)?.text?.trim() || fallback
+    const preset: StructurePresetRecord = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      hook: textOf("gancho", FACTORY_HOOK_TEXT),
+      proof: textOf("prova", FACTORY_PROOF_TEXT),
+      cta: textOf("cta", FACTORY_CTA_TEXT),
+    }
+    void saveStructurePreset(preset)
+      .then(() => setStructurePresets((items) => [...items, preset]))
+      .catch((error) => {
+        console.error("[editor] falha ao salvar estrutura", error)
+        setLiveMessage("Não foi possível salvar a estrutura.")
+      })
+  }, [])
+
+  const exportHookVariations = useCallback(async (hooks: string[]) => {
+    if (hookRunning || !hookDialogId) return
+    const stem = sanitizeExportStem(exportFileName) || "video"
+    const plan = hookVariationFiles(stem, hooks)
+    setHookRunning(true)
+    setHookJobs(plan.map((item) => ({ fileName: item.fileName, hook: item.hook, status: "queued", error: null })))
+    try {
+      const composition = compositionRef.current
+      const stored = composition.source.fileId ? await fileStoreRef.current.load(composition.source.fileId) : null
+      const videoBlob = await resolveExportVideoBlob({
+        memoryBlob: sourceBlobRef.current,
+        storedBlob: stored?.blob ?? null,
+        objectUrl: backgroundUrl,
+        fileId: composition.source.fileId,
+        loadByFileId: async (fileId) => {
+          const record = await fileStoreRef.current.load(fileId)
+          return record?.blob ?? null
+        },
+      })
+      await runHookVariationQueue({
+        jobs: plan.map((item) => ({
+          fileName: item.fileName,
+          hook: item.hook,
+          run: async () => {
+            const base = compositionRef.current
+            const next = {
+              ...base,
+              inserts: base.inserts.map((insert) =>
+                insert.id === hookDialogId ? { ...insert, text: item.hook } : insert,
+              ),
+            }
+            const jobId = await startFinalRender({
+              video: videoBlob,
+              props: toCliRenderProps(
+                toRenderProps({
+                  composition: clampComposition({
+                    ...next,
+                    output: outputFromQuality("1080", next.source),
+                  }),
+                  videoSrc: "",
+                  stickerSrcs: stickerBlobUrls,
+                  watermark: watermarkPaintInput(next.watermarkEnabled, watermarkPrefs),
+                }),
+              ),
+              fileName: item.fileName,
+              saveToCapcut,
+            })
+            await watchJobUntilDone({
+              jobId,
+              shouldContinue: () => true,
+              onProgress: () => {},
+            })
+          },
+        })),
+        onUpdate: setHookJobs,
+      })
+      const manifest = hookVariationManifest(stem, hooks)
+      const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `${manifest.baseName}_manifest.json`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao preparar as variações"
+      setLiveMessage(message)
+      setHookJobs((current) =>
+        current.map((job) => (job.status === "queued" || job.status === "running" ? { ...job, status: "error", error: message } : job)),
+      )
+    } finally {
+      setHookRunning(false)
+    }
+  }, [backgroundUrl, exportFileName, hookDialogId, hookRunning, saveToCapcut, stickerBlobUrls, watermarkPrefs])
+
+  useEffect(() => {
+    void listStructurePresets().then(setStructurePresets)
+  }, [])
+
   const handleExport = useCallback(async () => {
     if (finalExport.running) {
       finalExportTask.cancel()
@@ -2187,6 +2341,7 @@ export function VideoEditor() {
     }
     if (exportStartedRef.current) return
     if (!canExport) return
+    const composition = compositionRef.current
 
     if (exportMode === "final") {
       setFinalNamePrompt(sanitizeExportStem(exportFileName) || "video")
@@ -2352,10 +2507,42 @@ export function VideoEditor() {
     ],
   )
 
+  const requestExport = useCallback(() => {
+    if (finalExport.running || draftExporting) {
+      void handleExport()
+      return
+    }
+    if (textEditRef.current) {
+      setPendingExportOpen(true)
+      return
+    }
+    void handleExport()
+  }, [draftExporting, finalExport.running, handleExport])
+
+  function resolvePendingExport(choice: "apply" | "discard" | "back") {
+    setPendingExportOpen(false)
+    if (choice === "back") return
+    const session = textEditRef.current
+    if (choice === "discard" && session?.created) {
+      textEditRef.current = null
+      setEditingTextId(null)
+      const baseline = gestureRef.current.baseline
+      if (baseline) applyHistoryPresent(baseline)
+      else {
+        applyInserts((inserts) => inserts.filter((insert) => insert.id !== session.id), "discrete")
+      }
+      gestureRef.current = emptyGesture()
+      setSelection((selected) => (insertIdOf(selected) === session.id ? null : selected))
+    } else {
+      finishTextEdit(choice === "apply" ? "commit" : "cancel")
+    }
+    void handleExport()
+  }
+
   const exportActionsRef = useRef<ExportMenuActions>(null!)
   exportActionsRef.current = {
     onExport: () => {
-      void handleExport()
+      requestExport()
     },
     onInterruptMacRender: () => {
       void handleInterruptMacRender()
@@ -2389,6 +2576,16 @@ export function VideoEditor() {
   const finalExportError = exportMode === "final" ? finalExport.error : null
   const canRecoverLastExport = exportMode === "final" && !exporting && hasLastExportJob
   const emptyComposition = composition.inserts.length === 0
+  const exportUi = useExportController({
+    exporting,
+    exportMode,
+    progress: exportProgress,
+    error: finalExportError,
+    fileName: exportFileName,
+  })
+  const pendingExportNote = editingTextId
+    ? "Há um texto em edição. Ele entra no vídeo só se for aplicado."
+    : null
   const headerActions = useMemo(
     () => (
       <EditorHeaderActions
@@ -2399,6 +2596,9 @@ export function VideoEditor() {
         saveStatus={saveStatus}
         exportMenu={
           <ExportMenu
+            placement="header"
+            ui={exportUi}
+            pendingNote={pendingExportNote}
             actionsRef={exportActionsRef}
             hasSource={hasSourceForExport}
             canExport={canExport}
@@ -2450,11 +2650,150 @@ export function VideoEditor() {
       saveToCapcut,
       undoLast,
       webmWarning,
+      exportUi,
+      pendingExportNote,
     ],
+  )
+
+  const videoExport = (
+    <ExportMenu
+      placement="footer"
+      ui={exportUi}
+      pendingNote={pendingExportNote}
+      actionsRef={exportActionsRef}
+      hasSource={hasSourceForExport}
+      canExport={canExport}
+      exportDisabledReason={exportDisabledReason}
+      exporting={exporting}
+      exportProgress={exportProgress}
+      exportStatus={exportStatus}
+      macRenderBusy={macRenderBusy}
+      finalExportError={finalExportError}
+      canRetryFinalExport={finalExport.canRetry}
+      canRecoverLastExport={canRecoverLastExport}
+      saveToCapcut={saveToCapcut}
+      exportFileName={exportFileName}
+      exportMode={exportMode}
+      exportSpec={exportSpec}
+      emptyComposition={emptyComposition}
+      outputQuality={outputQuality}
+      sourceWidth={composition.source.width}
+      sourceHeight={composition.source.height}
+      webmWarning={webmWarning}
+      warnings={exportWarnings}
+    />
   )
 
   return (
     <main className="relative flex h-screen flex-col overflow-clip lg:flex-row">
+      {structureChoice ? (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="presentation"
+          onClick={() => setStructureChoice(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="structure-choice-title"
+            className="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="structure-choice-title" className="text-sm font-semibold text-foreground">
+              Já existem inserts neste projeto
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Substituir tira os inserts atuais e mantém as legendas. Adicionar coloca a estrutura junto.
+            </p>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setStructureChoice(null)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const copy = structureChoice
+                  setStructureChoice(null)
+                  commitStructure("add", copy)
+                }}
+              >
+                Adicionar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  const copy = structureChoice
+                  setStructureChoice(null)
+                  commitStructure("replace", copy)
+                }}
+              >
+                Substituir
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {hookDialogId ? (
+        <HookVariationsDialog
+          key={hookDialogId}
+          open
+          initialHook={composition.inserts.find((insert) => insert.id === hookDialogId)?.text ?? ""}
+          jobs={hookJobs}
+          running={hookRunning}
+          onClose={() => {
+            if (hookRunning) return
+            setHookDialogId(null)
+            setHookJobs([])
+          }}
+          onExport={(hooks) => {
+            void exportHookVariations(hooks)
+          }}
+        />
+      ) : null}
+      {pendingExportOpen ? (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="presentation"
+          onClick={() => resolvePendingExport("back")}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pending-export-title"
+            className="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return
+              event.preventDefault()
+              event.stopPropagation()
+              resolvePendingExport("back")
+            }}
+          >
+            <h2 id="pending-export-title" className="text-sm font-semibold text-foreground">
+              Aplicar texto pendente antes de exportar?
+            </h2>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={() => resolvePendingExport("back")}>
+                Voltar
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => resolvePendingExport("discard")}>
+                Descartar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="bg-brand text-brand-foreground hover:bg-brand/90"
+                onClick={() => resolvePendingExport("apply")}
+              >
+                Aplicar e exportar
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {finalNamePrompt !== null ? (
         <div
           className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -2556,6 +2895,7 @@ export function VideoEditor() {
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-clip lg:grid-cols-[minmax(340px,30%)_1fr] lg:grid-rows-1">
         {activeTab === "editor" ? (
           <ControlPanel
+            videoExport={videoExport}
             source={composition.source}
             importState={importState}
             draftUrl={draftUrl}
@@ -2623,7 +2963,15 @@ export function VideoEditor() {
             onClearCaptions={clearCaptions}
             onRevealCaption={revealCaption}
             panelSelectionTick={panelSelectionTick}
+            editingTextId={editingTextId}
+            editingTextCreated={Boolean(
+              editingTextId && textEditRef.current?.id === editingTextId && textEditRef.current.created,
+            )}
             onAddText={addTextInsert}
+            onApplyStructure={requestStructure}
+            onSaveStructure={saveCurrentStructure}
+            structurePresets={structurePresets}
+            onOpenHookVariations={setHookDialogId}
             onAddElement={addElement}
             onApplyTemplate={applyTemplate}
             activeTemplateId={activeTemplateId}
@@ -2771,6 +3119,7 @@ export function VideoEditor() {
           onPatchCaptionStyle={handlePreviewCaptionStyle}
           timelineDuration={composition.source.duration}
           showTimeline={hasPlayableSource(composition.source)}
+          retentionCuts={composition.retention ?? null}
           exporting={exporting}
           onMediaInfo={handleMediaInfo}
           onPlayheadChange={handlePlayheadChange}
@@ -2789,6 +3138,10 @@ export function VideoEditor() {
           editingTextId={editingTextId}
           onEditingTextId={handleEditingTextId}
           onCancelTextEdit={cancelTextEdit}
+          onUndo={undoLast}
+          onRedo={redoLast}
+          onOpenExport={() => exportUi.open("header")}
+          suspendShortcuts={pendingExportOpen || finalNamePrompt !== null}
           onBeginInsertGesture={beginInsertHistory}
           onEndInsertGesture={endInsertHistory}
           headerActions={headerActions}

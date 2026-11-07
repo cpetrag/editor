@@ -12,6 +12,26 @@ export function nonCaptionInserts(inserts: CompositionInsert[]): CompositionInse
   return inserts.filter((insert) => insertKind(insert) !== "caption")
 }
 
+export type InsertsTabBadge = "pending" | "editing" | null
+
+/**
+ * Inserts já aplicados continuam no contador. "pending" é só texto novo
+ * ainda não aplicado. Reeditar um texto existente vira "editing".
+ * Legenda em edição não entra nesta aba.
+ */
+export function insertsTabSummary(
+  inserts: readonly CompositionInsert[],
+  editing: { id: string; created: boolean } | null,
+): { applied: number; badge: InsertsTabBadge } {
+  const visible = inserts.filter((insert) => insertKind(insert) !== "caption")
+  const target = editing
+    ? visible.find((insert) => insert.id === editing.id && insertKind(insert) === "text")
+    : undefined
+  if (!target || !editing) return { applied: visible.length, badge: null }
+  if (editing.created) return { applied: visible.length - 1, badge: "pending" }
+  return { applied: visible.length, badge: "editing" }
+}
+
 export function countCaptionInserts(inserts: CompositionInsert[]): number {
   let count = 0
   for (const insert of inserts) {

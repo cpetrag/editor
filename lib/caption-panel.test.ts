@@ -10,6 +10,7 @@ import {
   captionStylePatchFromTransform,
   captionTextEditorState,
   countCaptionInserts,
+  insertsTabSummary,
   nonCaptionInserts,
   stampCaptionVisual,
 } from "./caption-panel.ts"
@@ -106,6 +107,26 @@ test("stampCaptionVisual copies host look onto every caption line", () => {
   assert.equal(next[2]?.styleRef?.overrides.text?.fontSize, 90)
   assert.equal(next[2]?.styleRef?.overrides.text?.color, "#FF00AA")
   assert.equal(next[1]?.id, "k1")
+})
+
+test("insertsTabSummary keeps applied inserts and separates pending from editing", () => {
+  const text = { ...chip("t1"), type: "texto-livre" as const, kind: "text" as const, text: "Gancho" }
+  const other = chip("k1")
+  const line = caption("c1", 0, "fala")
+  assert.deepEqual(insertsTabSummary([text, other, line], null), { applied: 2, badge: null })
+  assert.deepEqual(insertsTabSummary([text], { id: "t1", created: true }), { applied: 0, badge: "pending" })
+  assert.deepEqual(insertsTabSummary([text, other], { id: "t1", created: true }), {
+    applied: 1,
+    badge: "pending",
+  })
+  assert.deepEqual(insertsTabSummary([text, other], { id: "t1", created: false }), {
+    applied: 2,
+    badge: "editing",
+  })
+  assert.deepEqual(insertsTabSummary([text, line], { id: "c1", created: false }), {
+    applied: 1,
+    badge: null,
+  })
 })
 
 test("applySharedCaptionVisual copies the host transform onto every line", () => {

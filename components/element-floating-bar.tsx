@@ -37,9 +37,9 @@ export function ElementFloatingBar({
   return (
     <div
       className={cn(
-        "pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md",
-        docked ? (multiline ? "top-0" : "top-1/2 -translate-y-1/2") : "bottom-3",
-        multiline ? "max-w-[min(92%,22rem)] flex-col rounded-2xl items-stretch" : "rounded-full",
+        "pointer-events-auto z-30 flex items-center gap-1 border border-white/10 bg-zinc-950/85 px-2 py-1.5 text-zinc-100 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md",
+        docked ? "relative max-w-full" : "absolute bottom-3 left-1/2 -translate-x-1/2",
+        multiline ? "max-w-[min(92%,22rem)] flex-col items-stretch rounded-2xl" : "rounded-full",
       )}
       onPointerDown={(event) => event.stopPropagation()}
     >

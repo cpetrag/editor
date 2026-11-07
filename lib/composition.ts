@@ -167,6 +167,7 @@ export interface CompositionInsert {
   rotation?: number
   maxWidthPct?: number
   textAlign?: OverlayTextAlign
+  role?: "gancho" | "prova" | "cta"
   scale?: number
   fillColor?: string
   accentColor?: string
@@ -310,6 +311,7 @@ export interface Composition {
   tracks?: Partial<Record<TrackId, TrackStyle>>
   customPresets?: Record<string, UserPreset>
   watermarkEnabled?: boolean
+  retention?: { ganchoEnd: number; ctaStart: number }
 }
 
 const INSERT_TYPES: readonly InsertType[] = [
@@ -825,6 +827,7 @@ function parseInsert(raw: unknown): CompositionInsert | null {
         textAlign: isTextAlign(raw.textAlign) ? raw.textAlign : "center",
         ...(asStoredString(raw.fontFamily) ? { fontFamily: asStoredString(raw.fontFamily) } : {}),
         ...(asNumber(raw.rotation) !== null ? { rotation: asNumber(raw.rotation)! } : {}),
+        ...(raw.role === "gancho" || raw.role === "prova" || raw.role === "cta" ? { role: raw.role } : {}),
       },
       raw,
     )
@@ -973,6 +976,14 @@ function isSupportedVersion(value: unknown): boolean {
   )
 }
 
+function parseRetention(raw: unknown): { ganchoEnd: number; ctaStart: number } | undefined {
+  if (!isRecord(raw)) return undefined
+  const ganchoEnd = asNumber(raw.ganchoEnd)
+  const ctaStart = asNumber(raw.ctaStart)
+  if (ganchoEnd === null || ctaStart === null) return undefined
+  return { ganchoEnd, ctaStart }
+}
+
 export function parseComposition(input: unknown): Composition {
   if (!isRecord(input)) {
     throw new Error("versão de composição inválida")
@@ -1003,6 +1014,7 @@ export function parseComposition(input: unknown): Composition {
   const styleRef = parseStyleRef(input.styleRef)
   const tracks = parseTracks(input.tracks)
   const customPresets = parseCustomPresets(input.customPresets)
+  const retention = parseRetention(input.retention)
   return clampComposition({
     version: COMPOSITION_VERSION,
     source,
@@ -1026,6 +1038,7 @@ export function parseComposition(input: unknown): Composition {
     ...(tracks ? { tracks } : {}),
     ...(customPresets ? { customPresets } : {}),
     ...(input.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
+    ...(retention ? { retention } : {}),
   })
 }
 
@@ -1070,6 +1083,7 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
       ...(typeof insert.rotation === "number" && Number.isFinite(insert.rotation)
         ? { rotation: insert.rotation }
         : {}),
+      ...(insert.role ? { role: insert.role } : {}),
     }
   }
   if (kind === "caption") {
@@ -1155,6 +1169,7 @@ export function serializeComposition(composition: Composition): string {
     ...(composition.tracks ? { tracks: composition.tracks } : {}),
     ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
+    ...(composition.retention ? { retention: composition.retention } : {}),
   }
   return JSON.stringify(payload)
 }

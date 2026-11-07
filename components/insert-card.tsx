@@ -34,14 +34,14 @@ import {
   type CaptionPreset,
   type CaptionStyle,
 } from "@/lib/composition"
-import { formatSeconds, formatTimecode, parseDecimal } from "@/lib/parse-decimal"
+import { formatSeconds, formatTimecode as formatFieldTimecode, parseDecimal } from "@/lib/parse-decimal"
+import { formatTimecode } from "@/lib/timecode"
 import {
   INSERT_TYPES,
   INSERT_TYPE_MAP,
   ANIM_PRESETS,
   ANIM_MAP,
   POSITION_LABELS,
-  formatTime,
   type Insert,
   type InsertType,
   type InsertPosition,
@@ -89,6 +89,7 @@ interface InsertCardProps {
   presetLibrary?: PresetLibraryHandlers
   styleBlocks: PanelBlockController
   motionBlocks: PanelBlockController
+  onHookVariations?: () => void
 }
 
 type CardTab = "content" | "style" | "motion"
@@ -149,7 +150,7 @@ function TimeField({
         }}
       />
       <p className="font-mono text-[0.7rem] tabular-nums text-muted-foreground">
-        {formatTimecode(value)}
+        {formatFieldTimecode(value)}
       </p>
     </Field>
   )
@@ -236,6 +237,7 @@ export function InsertCard({
   presetLibrary,
   styleBlocks,
   motionBlocks,
+  onHookVariations,
 }: InsertCardProps) {
   const meta = INSERT_TYPE_MAP[insert.type]
   const kind = insertKind(insert)
@@ -244,7 +246,7 @@ export function InsertCard({
   const [tab, setTab] = useState<CardTab>("content")
   const [textOverflow, setTextOverflow] = useState(false)
   const label = insertLabel(insert)
-  const range = `${formatTime(insert.start)}–${formatTime(insert.start + insert.duration)}`
+  const range = `${formatTimecode(insert.start)}–${formatTimecode(insert.start + insert.duration)}`
 
   useEffect(() => {
     if (selected) scrollIntoPanelViewport(rootRef.current)
@@ -344,6 +346,15 @@ export function InsertCard({
             </span>
           ) : null}
         </button>
+        {insert.role === "gancho" && onHookVariations ? (
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-1.5 py-1 text-[0.65rem] font-medium text-brand hover:bg-muted"
+            onClick={onHookVariations}
+          >
+            Variações
+          </button>
+        ) : null}
         <Button
           variant="destructive"
           size="icon-sm"

@@ -12,6 +12,67 @@ export type EditorShortcutAction =
   | "toggle-play"
   | "seek-forward"
 
+export type TransportShortcut =
+  | "help"
+  | "toggle-play"
+  | "split"
+  | "mark-in"
+  | "mark-out"
+  | "step-back-frame"
+  | "step-forward-frame"
+  | "step-back-second"
+  | "step-forward-second"
+  | "seek-start"
+  | "seek-end"
+  | "delete-selection"
+  | "undo"
+  | "redo"
+  | "export"
+
+/**
+ * Atalhos de transporte do editor. Ignora campo de texto e atalho já tratado.
+ * Setas com Shift andam 1 segundo; sem Shift, 1 quadro.
+ */
+export function transportShortcut(event: ShortcutKeyEvent): TransportShortcut | null {
+  if (event.defaultPrevented || isEditableTarget(event.target)) return null
+  const command = Boolean(event.ctrlKey || event.metaKey)
+  const key = event.key
+  if (command && !event.altKey && key.toLowerCase() === "z") {
+    return event.shiftKey ? "redo" : "undo"
+  }
+  if (command && !event.altKey && !event.shiftKey && key.toLowerCase() === "y") return "redo"
+  if (command && !event.altKey && !event.shiftKey && key.toLowerCase() === "e") return "export"
+  if (command || event.altKey) return null
+  if (key === "?") return "help"
+  if (key === " " && !event.shiftKey) return "toggle-play"
+  if (event.shiftKey) {
+    if (key === "ArrowLeft") return "step-back-second"
+    if (key === "ArrowRight") return "step-forward-second"
+    return null
+  }
+  switch (key.toLowerCase()) {
+    case "s":
+      return "split"
+    case "i":
+      return "mark-in"
+    case "o":
+      return "mark-out"
+    case "home":
+      return "seek-start"
+    case "end":
+      return "seek-end"
+    case "delete":
+    case "backspace":
+      return "delete-selection"
+    case "arrowleft":
+      return "step-back-frame"
+    case "arrowright":
+      return "step-forward-frame"
+    default:
+      return null
+  }
+}
+
 export type ShortcutKeyEvent = {
   key: string
   target: EventTarget | null
@@ -83,10 +144,11 @@ export const SHORTCUT_HELP: ShortcutHelpGroup[] = [
   {
     title: "Reprodução",
     entries: [
-      { keys: ["K"], description: "Reproduzir / pausar (Espaço no preview)" },
+      { keys: ["Espaço", "K"], description: "Reproduzir / pausar" },
       { keys: ["J"], description: `Voltar ${JKL_SEEK_SECONDS} s` },
       { keys: ["L"], description: `Avançar ${JKL_SEEK_SECONDS} s` },
-      { keys: ["←", "→"], description: "Andar 1 quadro (Shift = 10)" },
+      { keys: ["←", "→"], description: "Andar 1 quadro" },
+      { keys: ["Shift", "←", "→"], description: "Andar 1 segundo" },
       { keys: [",", "."], description: "Andar 1 quadro" },
       { keys: ["Home"], description: "Ir para o início" },
       { keys: ["End"], description: "Ir para o fim" },
@@ -123,6 +185,7 @@ export const SHORTCUT_HELP: ShortcutHelpGroup[] = [
     entries: [
       { keys: ["Ctrl", "Z"], description: "Desfazer" },
       { keys: ["Ctrl", "Shift", "Z"], description: "Refazer (ou Ctrl+Y)" },
+      { keys: ["Ctrl", "E"], description: "Abrir exportar" },
       { keys: ["?"], description: "Mostrar esta ajuda" },
     ],
   },

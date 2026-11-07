@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Plus, Film, Sparkles, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -17,8 +17,14 @@ import { StyleCustomizePanel } from "@/components/style-customize-panel"
 import { usePanelBlocks, usePanelTab } from "@/components/use-panel-blocks"
 import type { PresetLibraryHandlers } from "@/components/style-customize-panel"
 import { AIGenerateButton } from "@/components/ai-generate-button"
+import {
+  FACTORY_CTA_TEXT,
+  FACTORY_HOOK_TEXT,
+  FACTORY_PROOF_TEXT,
+  FACTORY_STRUCTURE_NAME,
+} from "@/lib/structure-preset"
 import { GenerateCaptionsButton } from "@/components/generate-captions-button"
-import { formatTimecode } from "@/lib/parse-decimal"
+import { formatTimecode } from "@/lib/timecode"
 import { formatTime, type Insert, type InsertType, type Template } from "@/lib/inserts"
 import { insertKind } from "@/lib/composition"
 import type { GeneratePipelineResult } from "@/lib/ai-generate"
@@ -34,6 +40,7 @@ import type { StyleLayer, TrackId } from "@/lib/style/types"
 import {
   captionStyleHost,
   countCaptionInserts,
+  insertsTabSummary,
   nonCaptionInserts,
 } from "@/lib/caption-panel"
 import { describeSelection, selectableItems, selectionKindCounts } from "@/lib/timeline-selection"
@@ -94,7 +101,15 @@ interface ControlPanelProps {
   onClearCaptions: () => void
   onRevealCaption: (id: string) => void
   panelSelectionTick?: number
+  editingTextId?: string | null
+  /** Texto novo, ainda não aplicado. Reedição de um insert existente fica false. */
+  editingTextCreated?: boolean
   onAddText: () => void
+  onApplyStructure: (copy: { hook: string; proof: string; cta: string }) => void
+  onSaveStructure: () => void
+  structurePresets: { id: string; name: string; hook: string; proof: string; cta: string }[]
+  onOpenHookVariations: (insertId: string) => void
+  videoExport?: ReactNode
   onAddElement: (type: InsertType) => void
   onApplyTemplate: (template: Template) => void
   activeTemplateId: string | null
@@ -172,7 +187,14 @@ export function ControlPanel({
   onClearCaptions,
   onRevealCaption,
   panelSelectionTick = 0,
+  editingTextId = null,
+  editingTextCreated = false,
   onAddText,
+  onApplyStructure,
+  onSaveStructure,
+  structurePresets,
+  onOpenHookVariations,
+  videoExport,
   onAddElement,
   onApplyTemplate,
   activeTemplateId,
@@ -233,6 +255,14 @@ export function ControlPanel({
     [inserts],
   )
   const captionCount = useMemo(() => countCaptionInserts(inserts), [inserts])
+  const insertSummary = useMemo(
+    () =>
+      insertsTabSummary(
+        inserts,
+        editingTextId ? { id: editingTextId, created: editingTextCreated } : null,
+      ),
+    [editingTextCreated, editingTextId, inserts],
+  )
   const hasCaptions = captionCount > 0
   const orderedInserts = useMemo(
     () => sortInsertsByStart(nonCaptionInserts(inserts)),
@@ -277,9 +307,16 @@ export function ControlPanel({
           </h1>
           <p className="truncate text-xs text-muted-foreground">
             Composição vertical · 9:16
-            {videoDuration > 0
-              ? ` · ${formatTime(videoDuration)} (${formatTimecode(videoDuration)})`
-              : ""}
+            {videoDuration > 0 ? (
+              <>
+                {" · "}
+                <span title={formatTimecode(videoDuration, source.fps, "frame")}>
+                  {formatTimecode(videoDuration, source.fps)}
+                </span>
+              </>
+            ) : (
+              ""
+            )}
           </p>
         </div>
         {newProjectArmed ? (
@@ -323,7 +360,12 @@ export function ControlPanel({
           const disabled = section.id !== "video" && !hasSource
           const selected = visibleTab === section.id
           const count =
-            section.id === "captions" ? captionCount : section.id === "inserts" ? orderedInserts.length : null
+            section.id === "captions"
+              ? captionCount
+              : section.id === "inserts"
+                ? insertSummary.applied
+                : null
+          const pending = section.id === "inserts" ? insertSummary.badge : null
           const label = count == null ? section.label : `${section.label} (${count})`
           return (
             <button
@@ -340,7 +382,19 @@ export function ControlPanel({
               )}
               onClick={() => setTab(section.id)}
             >
-              {label}
+              <span className="inline-flex items-center justify-center gap-1">
+                <span>{label}</span>
+                {pending === "pending" ? (
+                  <span className="rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[0.6rem] font-semibold text-amber-800 dark:text-amber-200">
+                    1 pendente
+                  </span>
+                ) : null}
+                {pending === "editing" ? (
+                  <span className="rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[0.6rem] font-semibold text-amber-800 dark:text-amber-200">
+                    editando
+                  </span>
+                ) : null}
+              </span>
             </button>
           )
         })}
@@ -469,11 +523,43 @@ export function ControlPanel({
             onGenerate={onGenerateAI}
             onStatus={onAiStatus}
           />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!(videoDuration > 0)}
+            title={FACTORY_STRUCTURE_NAME}
+            onClick={() =>
+              onApplyStructure({
+                hook: FACTORY_HOOK_TEXT,
+                proof: FACTORY_PROOF_TEXT,
+                cta: FACTORY_CTA_TEXT,
+              })
+            }
+          >
+            Aplicar estrutura
+          </Button>
+          <PanelOverflowMenu
+            label="Presets de estrutura"
+            items={[
+              {
+                id: "save-structure",
+                label: "Salvar estrutura atual como preset",
+                disabled: orderedInserts.length === 0,
+                onSelect: onSaveStructure,
+              },
+              ...structurePresets.map((preset) => ({
+                id: preset.id,
+                label: `Aplicar ${preset.name}`,
+                onSelect: () =>
+                  onApplyStructure({ hook: preset.hook, proof: preset.proof, cta: preset.cta }),
+              })),
+            ]}
+          />
         </div>
       ) : null}
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 px-4 py-3">
+        <div className={cn("flex flex-col gap-3 px-4 py-3", visibleTab === "video" && "pb-6")}>
           {selectedIds.length >= 2 ? (
             <SelectionSummaryCard
               inserts={inserts}
@@ -657,6 +743,21 @@ export function ControlPanel({
                     <p className="text-xs text-muted-foreground">
                       Comece pelo gancho — os 2 primeiros segundos.
                     </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-2"
+                      disabled={!(videoDuration > 0)}
+                      onClick={() =>
+                        onApplyStructure({
+                          hook: FACTORY_HOOK_TEXT,
+                          proof: FACTORY_PROOF_TEXT,
+                          cta: FACTORY_CTA_TEXT,
+                        })
+                      }
+                    >
+                      Aplicar estrutura
+                    </Button>
                   </div>
                 )
               ) : (
@@ -686,6 +787,9 @@ export function ControlPanel({
                       onResetStyleField={(path) => onResetInsertStyleField(insert.id, path)}
                       onResetStyleOverrides={() => onResetInsertStyleOverrides(insert.id)}
                       onResetPosition={() => onResetInsertPosition(insert.id)}
+                      onHookVariations={
+                        insert.role === "gancho" ? () => onOpenHookVariations(insert.id) : undefined
+                      }
                       onApplyStylePreset={onApplyStylePreset}
                       onApplyStyleToTrack={() => onApplyStyleToTrack(insert.id)}
                       presetLibrary={presetLibrary}
@@ -700,7 +804,8 @@ export function ControlPanel({
         </div>
       </ScrollArea>
 
-      <footer className="flex shrink-0 flex-col gap-1.5 border-t border-border px-4 py-2.5">
+      <footer className="flex shrink-0 flex-col border-t border-border bg-background">
+        <div className="flex flex-col gap-1.5 px-4 py-2.5">
         {exporting ? (
           <div className="flex items-center gap-2">
             <div
@@ -737,7 +842,11 @@ export function ControlPanel({
             {finalExportError || liveMessage}
           </p>
         )}
+        {visibleTab === "video" && videoExport ? (
+          <div className="pt-1">{videoExport}</div>
+        ) : null}
         <AppVersionBadge />
+        </div>
       </footer>
     </aside>
   )

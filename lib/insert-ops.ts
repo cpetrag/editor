@@ -66,9 +66,21 @@ export interface RetentionSpan {
   color: string
 }
 
+/** Cortes gravados por "Aplicar estrutura". Sem isso, as faixas seguem 15% / 70%. */
+export type RetentionCuts = { ganchoEnd: number; ctaStart: number }
+
 /** Contiguous Gancho / Prova / CTA covering 100% of the video. */
-export function retentionZones(total: number): RetentionSpan[] {
+export function retentionZones(total: number, cuts?: RetentionCuts | null): RetentionSpan[] {
   const duration = Math.max(0, total)
+  if (cuts && duration > 0) {
+    const ganchoEnd = Math.min(duration, Math.max(0, cuts.ganchoEnd))
+    const ctaStart = Math.min(duration, Math.max(ganchoEnd, cuts.ctaStart))
+    return [
+      { id: "gancho", label: ZONE_LABELS.gancho, from: 0, to: ganchoEnd, color: ZONE_COLORS.gancho },
+      { id: "prova", label: ZONE_LABELS.prova, from: ganchoEnd, to: ctaStart, color: ZONE_COLORS.prova },
+      { id: "cta", label: ZONE_LABELS.cta, from: ctaStart, to: duration, color: ZONE_COLORS.cta },
+    ]
+  }
   const ganchoEnd = duration * 0.15
   const provaEnd = duration * 0.7
   return [

@@ -5,7 +5,7 @@ import { Scissors } from "lucide-react"
 
 import { TimelineClipBar } from "@/components/timeline-clip"
 import { formatTime, type Insert } from "@/lib/inserts"
-import { retentionZones } from "@/lib/insert-ops"
+import { retentionZones, type RetentionCuts } from "@/lib/insert-ops"
 import { sourceZoomPercent } from "@/lib/source-transform"
 import type { SourceCut, listSourceSegments } from "@/lib/source-segments"
 import { clientXToTime, type TimelineHandle } from "@/lib/timeline-clip"
@@ -44,8 +44,10 @@ export interface EditorTimelineProps {
   playing: boolean
   inserts: Insert[]
   selectedInsertId: string | null
+  pendingInsertId?: string | null
   exporting: boolean
   showRetention: boolean
+  retentionCuts?: RetentionCuts | null
   segments: SourceSegment[]
   activeSegmentIndex: number
   sourceCuts?: SourceCut[]
@@ -77,8 +79,10 @@ export function EditorTimeline({
   playing,
   inserts,
   selectedInsertId,
+  pendingInsertId = null,
   exporting,
   showRetention,
+  retentionCuts = null,
   segments,
   activeSegmentIndex,
   sourceCuts,
@@ -118,8 +122,8 @@ export function EditorTimeline({
 
   const layout = useMemo(() => layoutTimelineTracks(inserts), [inserts])
   const zones = useMemo(
-    () => (showRetention && totalDuration > 0 ? retentionZones(totalDuration) : []),
-    [showRetention, totalDuration],
+    () => (showRetention && totalDuration > 0 ? retentionZones(totalDuration, retentionCuts) : []),
+    [retentionCuts, showRetention, totalDuration],
   )
   const rulerHeight = TICKS_HEIGHT + (zones.length > 0 ? RETENTION_STRIP_HEIGHT : 0)
   const contentWidth = viewportWidth * zoom
@@ -450,7 +454,7 @@ export function EditorTimeline({
                         aria-hidden
                       >
                         {clipShowsLabel(widthPx) ? (
-                          <span className="truncate px-2 font-mono text-[0.58rem] leading-none tabular-nums text-sky-200">
+                          <span className="truncate px-2 font-mono text-[0.58rem] leading-none tabular-nums text-blue-900 dark:text-sky-200">
                             {segments.length > 1 ? `Trecho ${segment.index + 1} · ` : "Vídeo · "}
                             {sourceZoomPercent(segment.transform)}%
                           </span>
@@ -497,6 +501,7 @@ export function EditorTimeline({
                     selected={selected}
                     primary={selected && insert.id === selectedInsertId}
                     showHandles={singleSelection && insert.id === selectedInsertId}
+                    pending={insert.id === pendingInsertId}
                     disabled={exporting}
                     onPointerDown={(event, handle) => onClipPointerDown(event, insert, handle)}
                     onContextMenu={(event) => openClipMenu(event, insert)}

@@ -859,12 +859,8 @@ export function OverlayCanvas({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (editingTextId) return
-      if (
-        event.altKey &&
-        (event.key === "ArrowLeft" || event.key === "ArrowRight")
-      ) {
-        return
-      }
+      if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) return
+      if (event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) return
       if (!canHandlePreviewNudge(event, selection)) return
       if (
         event.key !== "ArrowLeft" &&

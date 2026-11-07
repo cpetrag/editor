@@ -54,6 +54,33 @@ test("resolveExportVideoBlob busca a object URL só como último recurso", async
   assert.equal(await blob.text(), "from-url")
 })
 
+test("resolveExportVideoBlob carrega do IndexedDB pelo fileId quando não há blob local", async () => {
+  const fromDb = new Blob(["db"], { type: "video/mp4" })
+  const blob = await resolveExportVideoBlob({
+    memoryBlob: null,
+    storedBlob: null,
+    fileId: "file-1",
+    loadByFileId: async (fileId) => {
+      assert.equal(fileId, "file-1")
+      return fromDb
+    },
+  })
+  assert.equal(await blob.text(), "db")
+})
+
+test("resolveExportVideoBlob falha se não houver memória, armazenado nem IndexedDB", async () => {
+  await assert.rejects(
+    () =>
+      resolveExportVideoBlob({
+        memoryBlob: null,
+        storedBlob: null,
+        fileId: "missing",
+        loadByFileId: async () => null,
+      }),
+    /Vídeo de origem não encontrado/i,
+  )
+})
+
 test("resolveExportVideoBlob falha com mensagem clara se o blob: estiver morto", async () => {
   await assert.rejects(
     () =>
@@ -65,6 +92,6 @@ test("resolveExportVideoBlob falha com mensagem clara se o blob: estiver morto",
           throw new TypeError("Failed to fetch")
         },
       }),
-    /Reimporte o arquivo/i,
+    /reabra o arquivo/i,
   )
 })

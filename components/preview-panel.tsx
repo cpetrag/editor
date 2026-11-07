@@ -1,6 +1,6 @@
 "use client"
 
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Play,
   Pause,
@@ -27,6 +27,10 @@ import { Spinner } from "@/components/ui/spinner"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
 import { formatTime, type Insert, type InsertType } from "@/lib/inserts"
+import { formatTimecode } from "@/lib/timecode"
+import { fitPreviewFrame } from "@/lib/preview-frame"
+import { TextCommitBar } from "@/components/text-commit-bar"
+import { useEditorShortcuts } from "@/hooks/useEditorShortcuts"
 import { DEFAULT_CAPTION_STYLE, FONT_SIZE_MAX, FONT_SIZE_MIN, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { rgbToHex } from "@/lib/canvas/eyedrop"
@@ -37,7 +41,6 @@ import { EditorTimeline } from "@/components/editor-timeline"
 import { ShortcutHelpDialog } from "@/components/shortcut-help-dialog"
 import {
   clientXToTime,
-  formatTimecode,
   moveInsertTiming,
   stepFrameIndex,
   trimInsertIn,
@@ -58,12 +61,10 @@ import {
 import { cycleIndex, editorShortcutAction, JKL_SEEK_SECONDS } from "@/lib/editor-shortcuts"
 import {
   cycleOverlayMode,
-  FRAME_STEP_HINT,
   frameStepKeyAction,
   isTimelineOrPreviewTarget,
   SPLIT_HINT,
   TRIM_HINT,
-  timelineKeyAction,
   timelineSelectionKey,
   type OverlayModeId,
 } from "@/lib/compose/keyboard-scope"
@@ -87,6 +88,9 @@ import {
 import type { WatermarkPaint } from "@/lib/watermark"
 import { scrollIntoPanelViewport } from "@/lib/scroll-panel"
 
+/** Uma linha da barra de estilo: size-7 (28) + py-1.5 (12) + borda (2) + folga. */
+const STYLE_BAR_SLOT_PX = 44
+
 function isPlayableBackgroundUrl(url: string): boolean {
   const value = url.trim()
   return value.startsWith("blob:") || value.startsWith("data:")
@@ -98,6 +102,7 @@ interface PreviewPanelProps {
   fontFamily: string
   timelineDuration: number
   showTimeline?: boolean
+  retentionCuts?: { ganchoEnd: number; ctaStart: number } | null
   exporting: boolean
   selection?: PreviewSelection
   sourceWidth: number
@@ -136,6 +141,11 @@ interface PreviewPanelProps {
   editingTextId?: string | null
   onEditingTextId?: (id: string | null) => void
   onCancelTextEdit?: () => void
+  onUndo?: () => void
+  onRedo?: () => void
+  onOpenExport?: () => void
+  /** Diálogos do editor (export, nome) em que Espaço e setas não devem agir. */
+  suspendShortcuts?: boolean
   onBeginInsertGesture?: () => void
   onEndInsertGesture?: () => void
   /** Desfazer/Refazer, estado do salvamento e Exportar, à direita da barra superior. */
@@ -168,6 +178,7 @@ export const PreviewPanel = memo(
       fontFamily,
       timelineDuration,
       showTimeline = true,
+      retentionCuts = null,
       exporting,
       selection = null,
       sourceWidth,
@@ -204,6 +215,10 @@ export const PreviewPanel = memo(
       editingTextId = null,
       onEditingTextId,
       onCancelTextEdit,
+      onUndo,
+      onRedo,
+      onOpenExport,
+      suspendShortcuts = false,
       onBeginInsertGesture,
       onEndInsertGesture,
       headerActions,
@@ -224,6 +239,12 @@ export const PreviewPanel = memo(
   const [showRetention, setShowRetention] = useState(true)
   const [timelineZoom, setTimelineZoom] = useState(TIMELINE_ZOOM_MIN)
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
+  const [shiftHeld, setShiftHeld] = useState(false)
+  const [framePx, setFramePx] = useState({ width: 0, height: 0 })
+  const stageRef = useRef<HTMLDivElement>(null)
+  const leftRailRef = useRef<HTMLDivElement>(null)
+  const rightRailRef = useRef<HTMLDivElement>(null)
+  const chromeRef = useRef<HTMLDivElement>(null)
   const [snapGuideTime, setSnapGuideTime] = useState<number | null>(null)
   const [floatingBarHost, setFloatingBarHost] = useState<HTMLDivElement | null>(null)
   const [videoDuration, setVideoDuration] = useState<number | null>(null)
@@ -505,6 +526,7 @@ export const PreviewPanel = memo(
   useEffect(() => {
     if (exporting || !playableUrl || !(totalDuration > 0)) return
     function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "," && event.key !== ".") return
       const frames = frameStepKeyAction(event, selection)
       if (frames === null) return
       event.preventDefault()
@@ -520,26 +542,6 @@ export const PreviewPanel = memo(
     if (!canSplitSourceAt(framing, time, timelineDuration)) return
     onSplitSource(time)
   }, [framing, onSplitSource, timelineDuration])
-
-  useEffect(() => {
-    if (exporting || !playableUrl || !(timelineDuration > 0)) return
-    if (!onChangeTrim && !onSplitSource) return
-    function onKeyDown(event: KeyboardEvent) {
-      const action = timelineKeyAction(event)
-      if (!action) return
-      if (action === "split") {
-        if (!onSplitSource) return
-        event.preventDefault()
-        splitAtPlayhead()
-        return
-      }
-      if (!onChangeTrim) return
-      event.preventDefault()
-      markTrim(action)
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [exporting, markTrim, onChangeTrim, onSplitSource, playableUrl, splitAtPlayhead, timelineDuration])
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
@@ -589,13 +591,7 @@ export const PreviewPanel = memo(
         return
       }
       if (ids.length === 0) return
-      if (action === "delete") {
-        event.preventDefault()
-        event.stopPropagation()
-        if (onDeleteSelection) onDeleteSelection(ids)
-        else if (ids[0]) onRemoveInsert?.(ids[0])
-        return
-      }
+      if (action === "delete") return
       if (action === "duplicate") {
         event.preventDefault()
         onDuplicateSelection?.(ids)
@@ -608,7 +604,7 @@ export const PreviewPanel = memo(
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [onDeleteSelection, onDuplicateSelection, onNudgeSelection, onRemoveInsert, onSelect, selection])
+  }, [onDuplicateSelection, onNudgeSelection, onSelect, selection])
 
   async function togglePlay() {
     const player = playerRef.current
@@ -647,26 +643,11 @@ export const PreviewPanel = memo(
 
   function handleShortcut(event: KeyboardEvent) {
     const action = editorShortcutAction(event)
-    if (!action) return
-    if (action === "help") {
-      event.preventDefault()
-      setShortcutHelpOpen((open) => !open)
+    if (!action || action === "help" || action === "toggle-play" || action === "seek-start" || action === "seek-end") {
       return
     }
     if (exporting || shortcutHelpOpen) return
     switch (action) {
-      case "toggle-play":
-        if (!playableUrl) return
-        event.preventDefault()
-        void togglePlay()
-        return
-      case "seek-start":
-      case "seek-end":
-        if (!(totalDuration > 0)) return
-        event.preventDefault()
-        pauseForScrub()
-        seekTo(action === "seek-start" ? trimWindow.start : trimWindow.end)
-        return
       case "seek-back":
       case "seek-forward":
         if (!(totalDuration > 0)) return
@@ -709,6 +690,63 @@ export const PreviewPanel = memo(
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
+
+  useEditorShortcuts({
+    blocked: exporting || shortcutHelpOpen || suspendShortcuts,
+    onHelp: () => setShortcutHelpOpen((open) => !open),
+    onTogglePlay: () => {
+      if (exporting || !playableUrl) return false
+      void togglePlay()
+    },
+    onSplit: () => {
+      if (exporting || !playableUrl) return false
+      splitAtPlayhead()
+    },
+    onMarkIn: () => {
+      if (exporting || !playableUrl) return false
+      markTrim("in")
+    },
+    onMarkOut: () => {
+      if (exporting || !playableUrl) return false
+      markTrim("out")
+    },
+    onStepFrames: (frames) => {
+      if (exporting || !playableUrl || !(totalDuration > 0)) return false
+      stepFrames(frames)
+    },
+    onSeekSeconds: (delta) => {
+      if (exporting || !(totalDuration > 0)) return false
+      pauseForScrub()
+      seekTo(currentTimeRef.current + delta)
+    },
+    onSeekStart: () => {
+      if (exporting || !(totalDuration > 0)) return false
+      pauseForScrub()
+      seekTo(trimWindow.start)
+    },
+    onSeekEnd: () => {
+      if (exporting || !(totalDuration > 0)) return false
+      pauseForScrub()
+      seekTo(trimWindow.end)
+    },
+    onDeleteSelection: () => {
+      const ids = selectedIdsOf(selection)
+      if (ids.length === 0) return false
+      if (onDeleteSelection) onDeleteSelection(ids)
+      else if (ids[0]) onRemoveInsert?.(ids[0])
+    },
+    onUndo: () => {
+      if (exporting) return false
+      onUndo?.()
+    },
+    onRedo: () => {
+      if (exporting) return false
+      onRedo?.()
+    },
+    onExport: () => {
+      onOpenExport?.()
+    },
+  })
 
   const onTimelineClipPointerDown = useCallback(
     (event: React.PointerEvent, insert: Insert, handle: TimelineHandle) => {
@@ -765,6 +803,60 @@ export const PreviewPanel = memo(
     { id: "safe", label: "Safe area", icon: Crop },
     { id: "feed", label: "Feed", icon: LayoutGrid },
   ]
+  const editingInsert = editingTextId
+    ? (inserts.find((insert) => insert.id === editingTextId) ?? null)
+    : null
+  const showZoom = Boolean(
+    playableUrl && !videoError && sourceWidth > 0 && sourceHeight > 0 && patchActiveSourceTransform,
+  )
+  const frameTimecode = `${formatTimecode(currentTime, renderFps, "frame")} / ${formatTimecode(totalDuration, renderFps, "frame")}`
+  const shownTimecode = shiftHeld
+    ? frameTimecode
+    : `${formatTimecode(currentTime, renderFps)} / ${formatTimecode(totalDuration, renderFps)}`
+
+  useEffect(() => {
+    function down(event: KeyboardEvent) {
+      if (event.key === "Shift") setShiftHeld(true)
+    }
+    function up(event: KeyboardEvent) {
+      if (event.key === "Shift") setShiftHeld(false)
+    }
+    function blur() {
+      setShiftHeld(false)
+    }
+    window.addEventListener("keydown", down)
+    window.addEventListener("keyup", up)
+    window.addEventListener("blur", blur)
+    return () => {
+      window.removeEventListener("keydown", down)
+      window.removeEventListener("keyup", up)
+      window.removeEventListener("blur", blur)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const measure = () => {
+      const left = leftRailRef.current?.offsetWidth ?? 0
+      const right = rightRailRef.current?.offsetWidth ?? 0
+      const styles = getComputedStyle(stage)
+      const gapX = Number.parseFloat(styles.columnGap) || 0
+      const gapsX = gapX * 2
+      const next = fitPreviewFrame(
+        stage.clientWidth - left - right - gapsX,
+        stage.clientHeight,
+      )
+      setFramePx((prev) => (prev.width === next.width && prev.height === next.height ? prev : next))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage)
+    for (const node of [leftRailRef.current, rightRailRef.current, chromeRef.current]) {
+      if (node) observer.observe(node)
+    }
+    measure()
+    return () => observer.disconnect()
+  }, [showZoom, editingInsert, comboPreviewLabel])
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-muted/30">
@@ -828,13 +920,57 @@ export const PreviewPanel = memo(
         </div>
       </div>
 
-      {/* Stage */}
-      <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-hidden px-4 pb-3 pt-2">
-        {/* Faixa reservada para a barra de estilo: fica fora do vídeo e não empurra o palco. */}
-        <div ref={setFloatingBarHost} data-floating-bar-host className="relative z-30 h-15 w-full shrink-0" />
-        <div className="flex min-h-0 w-full flex-1 items-stretch justify-center gap-3">
-          {/* Coluna sempre reservada: sem ela o palco centralizado anda ao selecionar um texto. */}
-          <div className="flex w-6 shrink-0 items-center justify-center">
+      {/* Stage: o frame 9:16 ocupa a altura entre o topo e a timeline. */}
+      <div className="flex min-h-0 flex-1 flex-col px-2">
+        <div
+          ref={chromeRef}
+          className="relative z-40 w-full shrink-0"
+          style={{ height: STYLE_BAR_SLOT_PX }}
+        >
+          <div
+            ref={setFloatingBarHost}
+            data-floating-bar-host
+            className="absolute inset-0 flex items-center justify-center overflow-visible"
+          >
+            {editingInsert ? (
+              <TextCommitBar
+                insert={editingInsert}
+                onApply={() => onEditingTextId?.(null)}
+                onCancel={() => onCancelTextEdit?.()}
+              />
+            ) : null}
+            {!editingInsert && comboPreviewLabel ? (
+              <div className="flex max-w-full items-center justify-between gap-2 rounded-lg border border-border bg-card px-2 py-1.5 text-xs text-card-foreground shadow-lg">
+                <span className="min-w-0 truncate">{comboPreviewLabel}</span>
+                <span className="flex shrink-0 gap-1">
+                  {comboConfirming ? (
+                    <>
+                      <Button type="button" size="xs" variant="outline" onClick={() => onConfirmComboPreview?.("add")}>
+                        Adicionar aos atuais
+                      </Button>
+                      <Button type="button" size="xs" onClick={() => onConfirmComboPreview?.("replace")}>
+                        Substituir
+                      </Button>
+                    </>
+                  ) : (
+                    <Button type="button" size="xs" onClick={onApplyComboPreview}>
+                      Aplicar
+                    </Button>
+                  )}
+                  <Button type="button" size="xs" variant="ghost" onClick={onCancelComboPreview}>
+                    Cancelar
+                  </Button>
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div
+          ref={stageRef}
+          className="grid min-h-0 w-full flex-1 items-center justify-center gap-x-2 overflow-hidden"
+          style={{ gridTemplateColumns: "1.5rem auto auto" }}
+        >
+          <div ref={leftRailRef} className="col-start-1 row-start-1 flex w-6 items-center justify-center">
           {selectedText ? (
             <label className="flex flex-col items-center justify-center gap-2 text-[0.65rem] text-muted-foreground">
               <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">Tamanho</span>
@@ -859,7 +995,9 @@ export const PreviewPanel = memo(
           ) : null}
           </div>
         <div
-          className="relative aspect-[9/16] h-full max-h-full w-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50"
+          data-preview-frame
+          className="relative col-start-2 row-start-1 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/50"
+          style={{ width: framePx.width, height: framePx.height }}
           onDragOver={(event) => {
             if (!event.dataTransfer.types.includes("application/x-editor-element")) return
             event.preventDefault()
@@ -874,30 +1012,6 @@ export const PreviewPanel = memo(
             onDropElement(type as InsertType, x, y)
           }}
         >
-          {comboPreviewLabel ? (
-            <div className="absolute inset-x-2 top-2 z-30 flex items-center justify-between gap-2 rounded-lg bg-zinc-950/90 px-2 py-1.5 text-xs text-zinc-100 shadow-lg">
-              <span className="min-w-0 truncate">{comboPreviewLabel}</span>
-              <span className="flex shrink-0 gap-1">
-                {comboConfirming ? (
-                  <>
-                    <Button type="button" size="xs" variant="outline" onClick={() => onConfirmComboPreview?.("add")}>
-                      Adicionar aos atuais
-                    </Button>
-                    <Button type="button" size="xs" onClick={() => onConfirmComboPreview?.("replace")}>
-                      Substituir
-                    </Button>
-                  </>
-                ) : (
-                  <Button type="button" size="xs" onClick={onApplyComboPreview}>
-                    Aplicar
-                  </Button>
-                )}
-                <Button type="button" size="xs" variant="ghost" onClick={onCancelComboPreview}>
-                  Cancelar
-                </Button>
-              </span>
-            </div>
-          ) : null}
           <div
             className="absolute inset-0 opacity-[0.06]"
             style={{
@@ -1026,13 +1140,9 @@ export const PreviewPanel = memo(
           {/* Overlays */}
           {(overlay === "safe" || sourceFramingActive) && <SafeAreaOverlay />}
           {overlay === "feed" && <FeedMockup />}
-
-          {/* Time HUD */}
-          <div className="absolute bottom-3 left-3 z-20 rounded-md bg-black/60 px-2 py-1 font-mono text-xs tabular-nums text-zinc-300 backdrop-blur-sm">
-            {formatTimecode(currentTime, renderFps)} / {formatTime(totalDuration)}
-          </div>
         </div>
-          {playableUrl && !videoError && sourceWidth > 0 && sourceHeight > 0 && patchActiveSourceTransform ? (
+          <div ref={rightRailRef} className="col-start-3 row-start-1 flex items-center justify-center">
+          {showZoom && patchActiveSourceTransform ? (
             <SourceZoomSlider
               sourceTransform={activeSourceTransform}
               sourceWidth={sourceWidth}
@@ -1047,11 +1157,12 @@ export const PreviewPanel = memo(
               onEndGesture={onEndInsertGesture}
             />
           ) : null}
+          </div>
         </div>
       </div>
 
       {/* Controls bar */}
-      <div className="shrink-0 border-t border-border bg-card px-4 py-2.5">
+      <div className="shrink-0 border-t border-border bg-card px-3 py-1">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <div className="flex items-center gap-1">
             <Button
@@ -1127,11 +1238,9 @@ export const PreviewPanel = memo(
 
           <span
             className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
-            title={FRAME_STEP_HINT}
+            title={frameTimecode}
           >
-            <span className="text-foreground">{formatTimecode(currentTime, renderFps)}</span>
-            {" / "}
-            {formatTime(totalDuration)}
+            {shownTimecode}
           </span>
 
           {showTimeline && totalDuration > 0 && onChangeTrim ? (
@@ -1252,6 +1361,9 @@ export const PreviewPanel = memo(
               playing={playing}
               inserts={inserts}
               selectedInsertId={typeof selectedInsertId === "string" ? selectedInsertId : null}
+              pendingInsertId={
+                editingInsert && insertKind(editingInsert) === "text" ? editingInsert.id : null
+              }
               selectedIds={selectedIdsOf(selection)}
               snapGuideTime={snapGuideTime}
               onChangeSelection={(ids, primaryId) => {
@@ -1270,6 +1382,7 @@ export const PreviewPanel = memo(
               }}
               exporting={exporting}
               showRetention={showRetention}
+              retentionCuts={retentionCuts}
               segments={segments}
               activeSegmentIndex={activeSegmentIndex}
               sourceCuts={sourceCuts}

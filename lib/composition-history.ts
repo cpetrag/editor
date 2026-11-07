@@ -14,6 +14,7 @@ export interface HistorySnapshot {
   sourceCuts?: SourceCut[]
   sourceTrim?: SourceTrim
   watermarkEnabled?: boolean
+  retention?: { ganchoEnd: number; ctaStart: number }
 }
 
 export interface InsertHistory {

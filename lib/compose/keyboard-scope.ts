@@ -71,7 +71,7 @@ export function timelineKeyAction(event: {
   return null
 }
 
-export const FRAME_STEP_HINT = "← → anda 1 quadro · Shift + seta anda 10 · , e . também"
+export const FRAME_STEP_HINT = "← → anda 1 quadro · Shift + seta anda 1 segundo · , e . também"
 
 const TIMELINE_PREVIEW_SELECTOR = "[data-preview-stage], [data-editor-timeline]"
 

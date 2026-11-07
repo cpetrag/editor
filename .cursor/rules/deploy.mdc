@@ -1,0 +1,16 @@
+---
+description: Publicar o editor no Mac ao terminar uma alteração
+alwaysApply: true
+---
+
+Ao terminar uma alteração de código neste projeto, publique antes de encerrar o turno. Não espere o usuário pedir o deploy.
+
+Use o script do HD, sem `npm version`:
+
+```powershell
+ssh mac 'bash /Volumes/HD\ 1Tb/Vibecoding/Editor\ Video/scripts/_deploy-ui.sh'
+```
+
+Confirme `https://editor.macmini-capture.cc/api/version`. O script só reinicia `editor-video`. Não reinicie `editor-render` se `remotion/` e `render-server/` não mudaram.
+
+Não publique se o usuário pediu para não subir, ou se a mudança é só conversa, sem código.
