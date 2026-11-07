@@ -51,8 +51,7 @@ export function rerollContentRecipe(
 function zoneHasText(inserts: CompositionInsert[], from: number, to: number): boolean {
   return inserts.some((insert) => {
     if (insertKind(insert) !== "text") return false
-    const end = insert.start + insert.duration
-    return insert.start < to && from < end
+    return insert.start >= from && insert.start < to
   })
 }
 

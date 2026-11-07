@@ -36,7 +36,7 @@ import type { RecentSource } from "@/lib/recent-sources"
 import { DEFAULT_WATERMARK_PREFS, type WatermarkPrefs } from "@/lib/watermark"
 import { ProductDataFields } from "@/components/insert-content"
 import type { ProductData } from "@/lib/content/runs"
-import type { ContentNiche } from "@/lib/content/presets"
+import { recipeGapMessage, type ContentNiche } from "@/lib/content/presets"
 import { hasAnySegmentTransform } from "@/lib/source-segments"
 import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
@@ -745,6 +745,16 @@ export function ControlPanel({
 
           {visibleTab === "inserts" ? (
             <>
+              {(["gancho", "prova", "oferta", "cta"] as const).map((slot) => {
+                const message = recipeGapMessage(slot, niche, productData)
+                if (!message) return null
+                return (
+                  <p key={slot} className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {message}
+                  </p>
+                )
+              })}
+
               {overflowing.length > 0 ? (
                 <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {overflowing.length} insert

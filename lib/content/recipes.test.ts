@@ -45,6 +45,33 @@ test("não cria texto em marcador que já tem texto", () => {
   assert.equal(inserts.length, 3)
 })
 
+test("gancho que invade a prova não ocupa a prova", () => {
+  const inserts = recipeInsertsForEmptyMarkers({
+    duration: 15,
+    niche: "shopee",
+    inserts: [
+      {
+        id: "novo",
+        type: "texto-livre",
+        kind: "text",
+        start: 0,
+        duration: 3,
+        text: "NOVO",
+        anchor: "center",
+        animIn: "none",
+        animOut: "none",
+      },
+    ],
+    cuts: { ganchoEnd: 2, ctaStart: 12 },
+    productData: { nota: "4,9", vendidos: "12 mil", preco: "R$ 49,90", preco_de: "R$ 89,90" },
+    idFor: (index) => `n-${index}`,
+  })
+  assert.equal(inserts.some((insert) => insert.contentId?.startsWith("gancho")), false)
+  assert.equal(inserts.some((insert) => insert.contentId?.startsWith("prova")), true)
+  assert.equal(inserts.some((insert) => insert.contentId?.startsWith("oferta")), true)
+  assert.equal(inserts.some((insert) => insert.id === "novo"), false)
+})
+
 test("sorteio sem preço não usa a receita do preço vazio", () => {
   const inserts = recipeInsertsForEmptyMarkers({
     duration: 20,
