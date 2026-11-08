@@ -26,30 +26,7 @@ export function resolveStyleForEditor(
   track: StyleLayer | null,
   project: StyleLayer,
 ): InsertStyle {
-  const resolved = resolveInsertStyle(insert, { project, track })
-  const withTransform = insert.transform?.touchedByUser
-    ? {
-        ...resolved,
-        text: {
-          ...resolved.text,
-          x: insert.transform.x,
-          y: insert.transform.y,
-          rotation: insert.transform.rotation,
-          maxWidth: insert.transform.maxWidth,
-        },
-      }
-    : resolved
-  if (usesFactoryPaint(insert, track, project)) return withTransform
-  return {
-    ...withTransform,
-    text: {
-      ...withTransform.text,
-      ...(typeof insert.fontSize === "number" ? { fontSize: insert.fontSize } : {}),
-      ...(typeof insert.x === "number" ? { x: insert.x } : {}),
-      ...(typeof insert.y === "number" ? { y: insert.y } : {}),
-      ...(typeof insert.rotation === "number" ? { rotation: insert.rotation } : {}),
-    },
-  }
+  return resolveInsertStyle(insert, { project, track })
 }
 
 export function activeAnimRecipe(

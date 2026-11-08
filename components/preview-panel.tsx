@@ -31,7 +31,8 @@ import { formatTimecode } from "@/lib/timecode"
 import { fitPreviewFrame } from "@/lib/preview-frame"
 import { TextCommitBar } from "@/components/text-commit-bar"
 import { useEditorShortcuts } from "@/hooks/useEditorShortcuts"
-import { DEFAULT_CAPTION_STYLE, FONT_SIZE_MAX, FONT_SIZE_MIN, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
+import { DEFAULT_CAPTION_STYLE, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
+import { INSERT_SIZE_PERCENT_MAX, INSERT_SIZE_PERCENT_MIN, insertWithSize, sizePercentOf } from "@/lib/content/gallery"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
 import { rgbToHex } from "@/lib/canvas/eyedrop"
 import { ExportCompareLayer, type ExportCompareMode } from "@/components/export-compare-layer"
@@ -1058,20 +1059,21 @@ export const PreviewPanel = memo(
               <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">Tamanho</span>
               <input
                 type="range"
-                min={FONT_SIZE_MIN}
-                max={FONT_SIZE_MAX}
-                value={selectedText.fontSize ?? FONT_SIZE_MIN}
+                min={INSERT_SIZE_PERCENT_MIN}
+                max={INSERT_SIZE_PERCENT_MAX}
+                step={5}
+                value={sizePercentOf(selectedText)}
                 aria-label="Tamanho do texto"
                 className="h-40 w-6 cursor-pointer accent-sky-400"
                 style={{ writingMode: "vertical-lr", direction: "rtl" }}
                 onPointerDown={() => onBeginInsertGesture?.()}
                 onPointerUp={() => onEndInsertGesture?.()}
                 onChange={(event) =>
-                  onPatchInsert?.(selectedText.id, { fontSize: Number(event.target.value) })
+                  onPatchInsert?.(selectedText.id, insertWithSize(selectedText, Number(event.target.value)))
                 }
               />
               <span className="font-mono text-[0.65rem] tabular-nums text-zinc-300">
-                {Math.round(selectedText.fontSize ?? FONT_SIZE_MIN)}
+                {sizePercentOf(selectedText)}%
               </span>
             </label>
           ) : null}

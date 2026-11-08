@@ -8,6 +8,7 @@ import { layoutTransform } from "../insert-transform.ts"
 import { parseFontId, type FontWeight } from "./insert-style.ts"
 import { resolveCaptionInsertStyle } from "../style/caption-map.ts"
 import { patchStyleRef } from "../style/edit-style.ts"
+import { offerStylePatch } from "../style/offer-styles.ts"
 import { usesFactoryPaint } from "../style/editor-style.ts"
 import { LEGADO_PRESET_ID } from "../style/presets.ts"
 import { resolveStyle } from "../style/resolve-style.ts"
@@ -88,8 +89,19 @@ export function layoutOverlayInsertForPlay(
   if (insertKind(insert) === "caption") {
     return layoutCaptionInsertForPlay(insert, captionStyle, captionPreset, track, project)
   }
-  if (insertKind(insert) === "text" && usesFactoryPaint(insert, track, project)) {
-    return stampPaintedLayout(insert, resolveStyle(insert, track, project))
+  if (
+    insertKind(insert) === "text" &&
+    usesFactoryPaint(insert, track, project) &&
+    !offerStylePatch(insert.styleRef?.presetId)
+  ) {
+    const stamped = stampPaintedLayout(insert, resolveStyle(insert, track, project))
+    // A rotação gravada é o extra do usuário. O carimbo não pode substituí-la
+    // pelo ângulo visual, senão a inclinação do preset soma duas vezes.
+    return {
+      ...stamped,
+      ...(typeof insert.rotation === "number" ? { rotation: insert.rotation } : { rotation: undefined }),
+      ...(typeof insert.scale === "number" ? { scale: insert.scale } : {}),
+    }
   }
   return insert
 }

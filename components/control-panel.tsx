@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { Plus, Film, Sparkles, X } from "lucide-react"
+import { Film, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -11,18 +11,12 @@ import { BackgroundSourceCard, WatermarkFields } from "@/components/background-s
 import { InsertCard } from "@/components/insert-card"
 import { CaptionLineList } from "@/components/caption-line-list"
 import { BlockToolbar, CollapsibleBlock, PanelSwitch } from "@/components/collapsible-block"
-import { ElementPicker } from "@/components/element-picker"
 import { PanelOverflowMenu } from "@/components/panel-overflow-menu"
 import { StyleCustomizePanel } from "@/components/style-customize-panel"
+import { InsertsGallery } from "@/components/inserts-gallery"
+import { InsertsEditor } from "@/components/inserts-editor"
 import { usePanelBlocks, usePanelTab } from "@/components/use-panel-blocks"
 import type { PresetLibraryHandlers } from "@/components/style-customize-panel"
-import { AIGenerateButton } from "@/components/ai-generate-button"
-import {
-  FACTORY_CTA_TEXT,
-  FACTORY_HOOK_TEXT,
-  FACTORY_PROOF_TEXT,
-  FACTORY_STRUCTURE_NAME,
-} from "@/lib/structure-preset"
 import { GenerateCaptionsButton } from "@/components/generate-captions-button"
 import { formatTimecode } from "@/lib/timecode"
 import { formatTime, type Insert, type InsertType, type Template } from "@/lib/inserts"
@@ -36,7 +30,8 @@ import type { RecentSource } from "@/lib/recent-sources"
 import { DEFAULT_WATERMARK_PREFS, type WatermarkPrefs } from "@/lib/watermark"
 import { ProductDataFields } from "@/components/insert-content"
 import type { ProductData } from "@/lib/content/runs"
-import { recipeGapMessage, type ContentNiche } from "@/lib/content/presets"
+import type { ContentNiche } from "@/lib/content/presets"
+import type { ReadySpec } from "@/lib/content/gallery"
 import { hasAnySegmentTransform } from "@/lib/source-segments"
 import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
@@ -108,9 +103,9 @@ interface ControlPanelProps {
   /** Texto novo, ainda não aplicado. Reedição de um insert existente fica false. */
   editingTextCreated?: boolean
   onAddText: () => void
-  onApplyStructure: (copy: { hook: string; proof: string; cta: string }) => void
-  onSaveStructure: () => void
-  structurePresets: { id: string; name: string; hook: string; proof: string; cta: string }[]
+  onAddReady: (spec: ReadySpec, selectMarked: boolean) => void
+  insertFocus?: { id: string; selectMarked: boolean } | null
+  onInsertFocusDone?: () => void
   onOpenHookVariations: (insertId: string) => void
   videoExport?: ReactNode
   onAddElement: (type: InsertType) => void
@@ -203,9 +198,9 @@ export function ControlPanel({
   editingTextId = null,
   editingTextCreated = false,
   onAddText,
-  onApplyStructure,
-  onSaveStructure,
-  structurePresets,
+  onAddReady,
+  insertFocus = null,
+  onInsertFocusDone,
   onOpenHookVariations,
   videoExport,
   onAddElement,
@@ -248,7 +243,6 @@ export function ControlPanel({
   productData,
   niche = "shopee",
   brandKitId = "shopee",
-  projectSeed = "projeto",
   onProductData,
   onNiche,
   onBrandKit,
@@ -291,6 +285,8 @@ export function ControlPanel({
     () => sortInsertsByStart(nonCaptionInserts(inserts)),
     [inserts],
   )
+  const selectedInsert =
+    selectedIds.length < 2 ? orderedInserts.find((item) => item.id === selectedId) ?? null : null
   const styleHost = useMemo(
     () => captionStyleHost(inserts, selectedId),
     [inserts, selectedId],
@@ -529,58 +525,6 @@ export function ControlPanel({
         </div>
       ) : null}
 
-      {visibleTab === "inserts" ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
-          <Button variant="outline" size="sm" onClick={onAddText}>
-            <Plus data-icon="inline-start" />
-            Texto
-          </Button>
-          <ElementPicker
-            activeTemplateId={activeTemplateId}
-            onAddElement={onAddElement}
-            onApplyTemplate={onApplyTemplate}
-          />
-          <AIGenerateButton
-            duration={videoDuration}
-            loadMedia={loadAiMedia}
-            onGenerate={onGenerateAI}
-            onStatus={onAiStatus}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!(videoDuration > 0)}
-            title={FACTORY_STRUCTURE_NAME}
-            onClick={() =>
-              onApplyStructure({
-                hook: FACTORY_HOOK_TEXT,
-                proof: FACTORY_PROOF_TEXT,
-                cta: FACTORY_CTA_TEXT,
-              })
-            }
-          >
-            Aplicar estrutura
-          </Button>
-          <PanelOverflowMenu
-            label="Presets de estrutura"
-            items={[
-              {
-                id: "save-structure",
-                label: "Salvar estrutura atual como preset",
-                disabled: orderedInserts.length === 0,
-                onSelect: onSaveStructure,
-              },
-              ...structurePresets.map((preset) => ({
-                id: preset.id,
-                label: `Aplicar ${preset.name}`,
-                onSelect: () =>
-                  onApplyStructure({ hook: preset.hook, proof: preset.proof, cta: preset.cta }),
-              })),
-            ]}
-          />
-        </div>
-      ) : null}
-
       <ScrollArea className="min-h-0 flex-1">
         <div className={cn("flex flex-col gap-3 px-4 py-3", visibleTab === "video" && "pb-6")}>
           {selectedIds.length >= 2 ? (
@@ -745,24 +689,6 @@ export function ControlPanel({
 
           {visibleTab === "inserts" ? (
             <>
-              {(["gancho", "prova", "oferta", "cta"] as const).map((slot) => {
-                const message = recipeGapMessage(slot, niche, productData)
-                if (!message) return null
-                return (
-                  <p key={slot} className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    {message}
-                  </p>
-                )
-              })}
-
-              {overflowing.length > 0 ? (
-                <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {overflowing.length} insert
-                  {overflowing.length === 1 ? " passa" : "s passam"} do fim do vídeo
-                  {videoDuration > 0 ? ` (${formatTime(videoDuration)})` : ""}.
-                </p>
-              ) : null}
-
               {duplicateGroups.map((group) => (
                 <div
                   key={group.ids.join("-")}
@@ -776,81 +702,103 @@ export function ControlPanel({
                   </Button>
                 </div>
               ))}
-
-              {orderedInserts.length === 0 ? (
-                hasCaptions ? (
-                  <p className="text-xs text-muted-foreground">Nenhum chip, texto ou PNG ainda.</p>
-                ) : (
-                  <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border px-4 py-8 text-center">
-                    <Sparkles className="mb-1 size-5 text-muted-foreground/70" />
-                    <p className="text-sm font-medium text-foreground">Nenhum insert ainda</p>
-                    <p className="text-xs text-muted-foreground">
-                      Comece pelo gancho — os 2 primeiros segundos.
-                    </p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="mt-2"
-                      disabled={!(videoDuration > 0)}
-                      onClick={() =>
-                        onApplyStructure({
-                          hook: FACTORY_HOOK_TEXT,
-                          proof: FACTORY_PROOF_TEXT,
-                          cta: FACTORY_CTA_TEXT,
-                        })
-                      }
-                    >
-                      Aplicar estrutura
-                    </Button>
-                  </div>
-                )
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {orderedInserts.map((insert, index) => (
-                    <InsertCard
-                      key={insert.id}
-                      insert={insert}
-                      index={index}
-                      videoDuration={videoDuration}
-                      expanded={selectedIds.length < 2 && selectedId === insert.id}
-                      selected={selectedIds.length < 2 && selectedId === insert.id}
-                      overflowing={overflowingIds.has(insert.id)}
-                      missingLogo={insert.type === "logo-shopee" && !brandLogo}
-                      brandFontId={brandFontId}
-                      onToggle={() => onSelectInsert(insert.id)}
-                      onChange={onChangeInsert}
-                      onRemove={onRemoveInsert}
-                      onBeginInsertGesture={onBeginInsertGesture}
-                      onEndInsertGesture={onEndInsertGesture}
-                      captionStyle={captionStyle}
-                      captionPreset={captionPreset}
-                      onChangeCaptionStyle={onChangeCaptionStyle}
-                      tracks={tracks}
-                      projectStyle={projectStyle}
-                      onPatchStyle={(path, value) => onPatchInsertStyle(insert.id, path, value)}
-                      onResetStyleField={(path) => onResetInsertStyleField(insert.id, path)}
-                      onResetStyleOverrides={() => onResetInsertStyleOverrides(insert.id)}
-                      onResetPosition={() => onResetInsertPosition(insert.id)}
-                      onHookVariations={
-                        insert.role === "gancho" ? () => onOpenHookVariations(insert.id) : undefined
-                      }
-                      onApplyStylePreset={onApplyStylePreset}
-                      onApplyStyleToTrack={() => onApplyStyleToTrack(insert.id)}
-                      presetLibrary={presetLibrary}
-                      styleBlocks={insertStyleBlocks}
-                      motionBlocks={insertMotionBlocks}
-                      getPlayhead={getPlayhead}
-                      onPlayRange={onPlayRange}
-                      retentionCuts={retentionCuts}
-                      niche={niche}
-                      productData={productData}
-                      brandKitId={brandKitId}
-                      projectSeed={projectSeed}
-                      onNiche={onNiche}
-                      onBrandKit={onBrandKit}
-                    />
-                  ))}
+              {selectedInsert && insertKind(selectedInsert) === "text" ? (
+                <InsertsEditor
+                  insert={selectedInsert}
+                  videoDuration={videoDuration}
+                  productData={productData}
+                  brandKitId={brandKitId}
+                  retentionCuts={retentionCuts}
+                  getPlayhead={getPlayhead}
+                  focus={insertFocus}
+                  onFocusDone={onInsertFocusDone}
+                  onBack={() => onClearSelection?.()}
+                  onChange={(patch) => onChangeInsert(selectedInsert.id, patch)}
+                  onDuplicate={() => onDuplicateSelection?.()}
+                  onRemove={() => onRemoveInsert(selectedInsert.id)}
+                  onHookVariations={
+                    selectedInsert.role === "gancho" ? () => onOpenHookVariations(selectedInsert.id) : undefined
+                  }
+                  onBrandKit={onBrandKit}
+                  onBeginGesture={onBeginInsertGesture}
+                  onEndGesture={onEndInsertGesture}
+                  tracks={tracks}
+                  projectStyle={projectStyle}
+                  captionStyle={captionStyle}
+                  captionPreset={captionPreset}
+                  onPatchStyle={(path, value) => onPatchInsertStyle(selectedInsert.id, path, value)}
+                  onResetStyleField={(path) => onResetInsertStyleField(selectedInsert.id, path)}
+                  onResetStyleOverrides={() => onResetInsertStyleOverrides(selectedInsert.id)}
+                  onResetPosition={() => onResetInsertPosition(selectedInsert.id)}
+                  onApplyStylePreset={onApplyStylePreset}
+                  onApplyStyleToTrack={() => onApplyStyleToTrack(selectedInsert.id)}
+                  presetLibrary={presetLibrary}
+                  styleBlocks={insertStyleBlocks}
+                  motionBlocks={insertMotionBlocks}
+                />
+              ) : selectedInsert ? (
+                <div className="flex flex-col gap-2">
+                  <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => onClearSelection?.()}>
+                    ← Prontos
+                  </Button>
+                  <InsertCard
+                    insert={selectedInsert}
+                    index={orderedInserts.findIndex((item) => item.id === selectedInsert.id)}
+                    videoDuration={videoDuration}
+                    expanded
+                    selected
+                    overflowing={overflowingIds.has(selectedInsert.id)}
+                    missingLogo={selectedInsert.type === "logo-shopee" && !brandLogo}
+                    brandFontId={brandFontId}
+                    onToggle={() => undefined}
+                    onChange={onChangeInsert}
+                    onRemove={onRemoveInsert}
+                    onBeginInsertGesture={onBeginInsertGesture}
+                    onEndInsertGesture={onEndInsertGesture}
+                    captionStyle={captionStyle}
+                    captionPreset={captionPreset}
+                    onChangeCaptionStyle={onChangeCaptionStyle}
+                    tracks={tracks}
+                    projectStyle={projectStyle}
+                    onPatchStyle={(path, value) => onPatchInsertStyle(selectedInsert.id, path, value)}
+                    onResetStyleField={(path) => onResetInsertStyleField(selectedInsert.id, path)}
+                    onResetStyleOverrides={() => onResetInsertStyleOverrides(selectedInsert.id)}
+                    onResetPosition={() => onResetInsertPosition(selectedInsert.id)}
+                    onApplyStylePreset={onApplyStylePreset}
+                    onApplyStyleToTrack={() => onApplyStyleToTrack(selectedInsert.id)}
+                    presetLibrary={presetLibrary}
+                    styleBlocks={insertStyleBlocks}
+                    motionBlocks={insertMotionBlocks}
+                    getPlayhead={getPlayhead}
+                    onPlayRange={onPlayRange}
+                    retentionCuts={retentionCuts}
+                    niche={niche}
+                    productData={productData}
+                    brandKitId={brandKitId}
+                    onNiche={onNiche}
+                    onBrandKit={onBrandKit}
+                  />
                 </div>
+              ) : (
+                <InsertsGallery
+                  videoDuration={videoDuration}
+                  niche={niche}
+                  productData={productData}
+                  brandKitId={brandKitId}
+                  retentionCuts={retentionCuts}
+                  getPlayhead={getPlayhead}
+                  activeTemplateId={activeTemplateId}
+                  loadAiMedia={loadAiMedia}
+                  onAddText={onAddText}
+                  onAddReady={onAddReady}
+                  onAddElement={onAddElement}
+                  onApplyTemplate={onApplyTemplate}
+                  onGenerate={onGenerateAI}
+                  onAiStatus={onAiStatus}
+                  onNiche={onNiche}
+                  onBrandKit={onBrandKit}
+                  onProductData={onProductData}
+                />
               )}
             </>
           ) : null}

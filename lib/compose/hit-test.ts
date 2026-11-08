@@ -12,7 +12,9 @@ import {
   type CompositionInsert,
 } from "../composition.ts"
 import { chipHasFreePosition, measureChipSize } from "../insert-layout.ts"
+import { getPresetStyle } from "../style/presets.ts"
 import { PLAY_H, PLAY_W } from "./layout.ts"
+import { scaleFromCornerDrag } from "./preview-handles.ts"
 import { SELECTION_PAD_PX, layoutInsertText, type TextLayout, type TextMeasure } from "./layout-text.ts"
 
 export interface PlayBox {
@@ -38,11 +40,12 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function textPlayBox(layout: TextLayout): PlayBox {
+  const pad = layout.exactBox ? 0 : SELECTION_PAD_PX * 2
   return {
     cx: layout.cx,
     cy: layout.cy,
-    w: layout.blockW + SELECTION_PAD_PX * 2,
-    h: layout.blockH + SELECTION_PAD_PX * 2,
+    w: layout.blockW + pad,
+    h: layout.blockH + pad,
     rotation: layout.rotation,
   }
 }
@@ -99,12 +102,22 @@ export function scaleFactorFromDrag(
   return Math.hypot(pointer.x - center.x, pointer.y - center.y) / startDist
 }
 
+export function textSizeScale(insert: CompositionInsert): number {
+  if (typeof insert.scale === "number" && insert.scale > 0) return insert.scale
+  const base = getPresetStyle(insert.styleRef?.presetId).text.fontSize
+  if (base > 0 && typeof insert.fontSize === "number") return insert.fontSize / base
+  return 1
+}
+
 export function resizePatchForTrack(
   insert: CompositionInsert,
   factor: number,
 ): Partial<CompositionInsert> {
   const kind = insertKind(insert)
-  if (kind === "text" || kind === "caption") {
+  if (kind === "text") {
+    return { scale: scaleFromCornerDrag(textSizeScale(insert), 1, factor) }
+  }
+  if (kind === "caption") {
     const base = insert.fontSize ?? DEFAULT_TEXT_FONT_SIZE
     return {
       fontSize: clamp(Math.round(base * factor), FONT_SIZE_MIN, FONT_SIZE_MAX),

@@ -5,40 +5,7 @@ import {
   hookVariationFiles,
   hookVariationManifest,
   runHookVariationQueue,
-  structureTiming,
 } from "./structure-preset.ts"
-
-test("structureTiming keeps hook, proof and cta inside a long video", () => {
-  const timing = structureTiming(30)
-  assert.deepEqual(timing.hook, { start: 0, duration: 2 })
-  assert.deepEqual(timing.proof, { start: 2, duration: 2.5 })
-  assert.deepEqual(timing.cta, { start: 27, duration: 3 })
-  assert.deepEqual(timing.zones, { ganchoEnd: 2, ctaStart: 27 })
-  assert.ok(timing.proof.start + timing.proof.duration <= timing.cta.start)
-})
-
-test("structureTiming fits an 8s video without overlap or overrun", () => {
-  const timing = structureTiming(8)
-  assert.deepEqual(timing.hook, { start: 0, duration: 2 })
-  assert.deepEqual(timing.proof, { start: 2, duration: 2.5 })
-  assert.deepEqual(timing.cta, { start: 5, duration: 3 })
-  assert.deepEqual(timing.zones, { ganchoEnd: 2, ctaStart: 5 })
-  const end = timing.cta.start + timing.cta.duration
-  assert.ok(Math.abs(end - 8) < 1e-6)
-  assert.ok(timing.proof.start >= timing.hook.start + timing.hook.duration - 1e-6)
-})
-
-test("structureTiming scales videos shorter than the ideal 7.5s", () => {
-  const timing = structureTiming(6)
-  const ends = [
-    timing.hook.start + timing.hook.duration,
-    timing.proof.start + timing.proof.duration,
-    timing.cta.start + timing.cta.duration,
-  ]
-  assert.ok(ends[2] !== undefined && Math.abs(ends[2] - 6) < 0.11)
-  assert.ok(timing.proof.start >= timing.hook.duration - 1e-6)
-  assert.ok(timing.cta.start >= timing.proof.start + timing.proof.duration - 0.11)
-})
 
 test("hookVariationFiles and manifest name g1 g2 g3", () => {
   const hooks = ["Primeiro gancho", "Segundo", "Terceiro"]

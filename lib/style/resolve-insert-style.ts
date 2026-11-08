@@ -10,6 +10,7 @@ import { getTextPreset, isTextPresetId } from "../text-presets/catalog.ts"
 import { textPresetToInsertStyle } from "../text-presets/to-insert-style.ts"
 import { deepMerge, isEmptyOverrides } from "./deep-merge.ts"
 import { styleRefFromLegacy } from "./migrate.ts"
+import { applyInsertLayout } from "../paint/insert-layout.ts"
 import { offerStylePatch } from "./offer-styles.ts"
 import { getPresetStyle, LEGADO_PRESET_ID, PRESETS } from "./presets.ts"
 import type { InsertStyle, StyleLayer } from "./types.ts"
@@ -35,19 +36,6 @@ function snapFontWeight(value: number): FontWeight {
     }
   }
   return best
-}
-
-function overlayLegadoLayout(style: InsertStyle, insert: CompositionInsert): InsertStyle {
-  return {
-    ...style,
-    text: {
-      ...style.text,
-      ...(typeof insert.fontSize === "number" ? { fontSize: insert.fontSize } : {}),
-      ...(typeof insert.x === "number" ? { x: insert.x } : {}),
-      ...(typeof insert.y === "number" ? { y: insert.y } : {}),
-      ...(typeof insert.rotation === "number" ? { rotation: insert.rotation } : {}),
-    },
-  }
 }
 
 function normalizeResolvedStyle(style: InsertStyle): InsertStyle {
@@ -76,7 +64,6 @@ export function resolveInsertStyle(
     Boolean(ref?.presetId) &&
     ref?.presetId !== LEGADO_PRESET_ID &&
     (Boolean(offerStylePatch(ref?.presetId)) || Boolean(PRESETS[ref?.presetId ?? ""]))
-  const factory = namedPreset
 
   const base = namedPreset
     ? getPresetStyle(ref?.presetId)
@@ -96,8 +83,14 @@ export function resolveInsertStyle(
     insert.styleRef?.overrides,
   )
   const normalized = normalizeResolvedStyle(merged)
-  if (isTextPresetId(insert.preset) || factory) return normalized
-  return overlayLegadoLayout(normalized, insert)
+  if (!isTextInsert(insert)) return normalized
+  const preset = namedPreset && ref?.presetId ? getPresetStyle(ref.presetId) : undefined
+  return applyInsertLayout(
+    normalized,
+    insert,
+    preset?.text.rotation ?? 0,
+    preset?.text.fontSize,
+  )
 }
 
 export function toComposeInsertStyle(resolved: InsertStyle): ComposeInsertStyle {

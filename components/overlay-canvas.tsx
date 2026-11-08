@@ -13,13 +13,14 @@ import { snapRotationDegrees } from "@/lib/canvas/keys"
 import { percentsFromCenter, playBoxToCss, playToClient } from "@/lib/compose/layout"
 import { drawPlayInserts } from "@/lib/compose/draw-play"
 import { ensureComposeFontsReady, fontIdsUsedInComposition } from "@/lib/compose/fonts"
-import { approxBox, hitTestOverlays, resizePatchForTrack, scaleFactorFromDrag } from "@/lib/compose/hit-test"
+import { approxBox, hitTestOverlays, resizePatchForTrack, scaleFactorFromDrag, textSizeScale } from "@/lib/compose/hit-test"
 import { canHandlePreviewNudge } from "@/lib/compose/keyboard-scope"
 import {
   PLAY_H,
   PLAY_W,
   SNAP_SCREEN_PX,
   clientToPlay,
+  playPointFromClient,
   getCanvasDisplayMetrics,
   type CanvasDisplayMetrics,
   type RectLike,
@@ -37,6 +38,7 @@ import {
   localPoint,
   maxWidthPctFromEdgeDrag,
   rotationFromDrag,
+  scaleFromCornerDrag,
 } from "@/lib/compose/preview-handles"
 import { nudgePercents, patchForMove } from "@/lib/compose/preview-snap"
 import { roundPanelNumber } from "@/lib/panel-number"
@@ -57,6 +59,7 @@ import { stickerMediaSrc } from "@/lib/compose/sticker-src"
 import { layoutOverlayInsertForPlay } from "@/lib/compose/caption-layout"
 import { chipHasFreePosition, chipPlayBox, layoutInserts } from "@/lib/insert-layout"
 import { trackStyleForInsert } from "@/lib/style-preset"
+import { presetTiltOf } from "@/lib/paint/insert-layout"
 import { resolveStyleForEditor } from "@/lib/style/editor-style"
 import type { StyleLayer, TrackId, UserPreset } from "@/lib/style/types"
 import {
@@ -103,12 +106,17 @@ function getEditorMeasureContext(): CanvasRenderingContext2D | null {
 }
 
 type DragState =
-  | { mode: "move"; id: string }
+  | { mode: "move"; id: string; axis: "x" | "y" | null; origin: { x: number; y: number } | null }
   | {
       mode: "resize"
       id: string
+      corner: ResizeCorner
       center: { x: number; y: number }
       startDist: number
+      scale0: number
+      startWidthPct: number
+      startLocalX: number
+      rotationDeg: number
       base: CompositionInsert
     }
   | {
@@ -191,6 +199,19 @@ function applySourceFramingDom(
 
 function isActive(insert: CompositionInsert, time: number): boolean {
   return time >= insert.start && time < insert.start + insert.duration
+}
+
+function keptLayout(
+  insert: CompositionInsert,
+  options: { rotation?: boolean } = {},
+): Partial<CompositionInsert> {
+  return {
+    ...(options.rotation === false || typeof insert.rotation !== "number"
+      ? {}
+      : { rotation: insert.rotation }),
+    ...(typeof insert.scale === "number" ? { scale: insert.scale } : {}),
+    ...(typeof insert.maxWidthPct === "number" ? { maxWidthPct: insert.maxWidthPct } : {}),
+  }
 }
 
 function layoutOverlayInsert(
@@ -701,14 +722,103 @@ export function OverlayCanvas({
         framingOpsRef.current.queueLiveFraming(next)
         return
       }
-      if (!play.inside) return
       const current = insertsRef.current.find((insert) => insert.id === drag.id)
       if (!current) return
+      const free = playPointFromClient(event.clientX, event.clientY, display)
+
+      if (drag.mode === "resize") {
+        if (!free) return
+        if (insertKind(current) === "caption") {
+          const nowDist = Math.hypot(free.x - drag.center.x, free.y - drag.center.y)
+          const factor = drag.startDist > 0 ? nowDist / drag.startDist : 1
+          const sizePatch = resizePatchForTrack(drag.base, factor)
+          if (typeof sizePatch.fontSize === "number") {
+            onPatchCaptionStyle?.({ fontSize: sizePatch.fontSize })
+          }
+          return
+        }
+        const keep = {
+          ...(typeof drag.base.x === "number" ? { x: drag.base.x } : {}),
+          ...(typeof drag.base.y === "number" ? { y: drag.base.y } : {}),
+          ...(typeof current.rotation === "number" ? { rotation: current.rotation } : {}),
+        }
+        if (event.altKey) {
+          const local = localPoint(drag.center, free, drag.rotationDeg)
+          const edge = drag.corner === "ne" || drag.corner === "se" ? "e" : "w"
+          onPatchInsert?.(drag.id, {
+            ...keep,
+            maxWidthPct: maxWidthPctFromEdgeDrag(
+              drag.startWidthPct,
+              local.x - drag.startLocalX,
+              PLAY_W,
+              edge,
+            ),
+          })
+          return
+        }
+        const nowDist = Math.hypot(free.x - drag.center.x, free.y - drag.center.y)
+        onPatchInsert?.(drag.id, {
+          ...keep,
+          scale: scaleFromCornerDrag(drag.scale0, drag.startDist, nowDist),
+        })
+        return
+      }
+
+      if (drag.mode === "rotate") {
+        if (!free) return
+        const nowDeg = angleDegFromCenter(drag.center, free)
+        const visual = snapRotationDegrees(
+          rotationFromDrag(drag.startRotation, drag.startPointerDeg, nowDeg),
+          event.shiftKey,
+        )
+        onPatchInsert?.(drag.id, {
+          ...(typeof drag.base.x === "number" ? { x: drag.base.x } : {}),
+          ...(typeof drag.base.y === "number" ? { y: drag.base.y } : {}),
+          rotation: visual - presetTiltOf(current),
+          ...(typeof current.scale === "number" ? { scale: current.scale } : {}),
+          ...(typeof current.maxWidthPct === "number" ? { maxWidthPct: current.maxWidthPct } : {}),
+        })
+        return
+      }
+
+      if (drag.mode === "ew") {
+        if (!free) return
+        const local = localPoint(drag.center, free, drag.rotationDeg)
+        onPatchInsert?.(drag.id, {
+          ...(typeof drag.base.x === "number" ? { x: drag.base.x } : {}),
+          ...(typeof drag.base.y === "number" ? { y: drag.base.y } : {}),
+          maxWidthPct: maxWidthPctFromEdgeDrag(
+            drag.startWidthPct,
+            local.x - drag.startLocalX,
+            PLAY_W,
+            drag.edge,
+          ),
+          ...(typeof current.rotation === "number" ? { rotation: current.rotation } : {}),
+          ...(typeof current.scale === "number" ? { scale: current.scale } : {}),
+        })
+        return
+      }
+
+      if (!play.inside) return
 
       if (drag.mode === "move") {
+        if (!drag.origin) drag.origin = { x: play.playX, y: play.playY }
         let cx = play.playX
         let cy = play.playY
+        if (event.shiftKey) {
+          const dx = play.playX - drag.origin.x
+          const dy = play.playY - drag.origin.y
+          if (!drag.axis && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+            drag.axis = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"
+          }
+          if (drag.axis === "x") cy = drag.origin.y
+          else if (drag.axis === "y") cx = drag.origin.x
+        } else {
+          drag.axis = null
+        }
         if (!event.altKey) {
+          const lockX = event.shiftKey && drag.axis === "y"
+          const lockY = event.shiftKey && drag.axis === "x"
           const others = insertsRef.current
             .filter((insert) => insert.id !== drag.id && isActive(insert, time))
             .map((insert) =>
@@ -731,93 +841,24 @@ export function OverlayCanvas({
             )
             .filter((box): box is NonNullable<typeof box> => box !== null)
           const snapped = snapMoveWithGuides(cx, cy, others, SNAP_SCREEN_PX / display.displayScale)
-          cx = snapped.cx
-          cy = snapped.cy
-          setMoveGuides(snapped.guides)
+          cx = lockX ? cx : snapped.cx
+          cy = lockY ? cy : snapped.cy
+          setMoveGuides({
+            x: lockX ? null : snapped.guides.x,
+            y: lockY ? null : snapped.guides.y,
+          })
         } else {
           setMoveGuides({ x: null, y: null })
         }
         const movePatch = patchForMove(cx, cy)
-        const laid = layoutOverlayInsert(
-          current,
-          captionStyleRef.current,
-          captionPreset,
-          tracksRef.current,
-          projectRef.current,
-          videoDurationRef.current,
-        )
         const moveCommit = {
           x: movePatch.x,
           y: movePatch.y,
-          rotation: laid.rotation ?? laid.style?.rotation,
-          maxWidthPct: laid.maxWidthPct,
-          scale: laid.scale,
+          ...keptLayout(current),
         }
         notePlacement(drag.id, moveCommit)
         onPatchInsert?.(drag.id, moveCommit)
-        return
       }
-
-      const pointer = pointerInPlay(event.clientX, event.clientY, display)
-      if (drag.mode === "rotate") {
-        if (!pointer) return
-        const nowDeg = angleDegFromCenter(drag.center, pointer)
-        const rotation = snapRotationDegrees(
-          rotationFromDrag(drag.startRotation, drag.startPointerDeg, nowDeg),
-          event.shiftKey,
-        )
-        const rotateCommit = {
-          x: drag.base.x,
-          y: drag.base.y,
-          rotation,
-          maxWidthPct: drag.base.maxWidthPct,
-          scale: drag.base.scale,
-        }
-        notePlacement(drag.id, rotateCommit)
-        onPatchInsert?.(drag.id, rotateCommit)
-        return
-      }
-
-      if (drag.mode === "ew") {
-        if (!pointer) return
-        const local = localPoint(drag.center, pointer, drag.rotationDeg)
-        const maxWidthPct = maxWidthPctFromEdgeDrag(
-          drag.startWidthPct,
-          local.x - drag.startLocalX,
-          PLAY_W,
-          drag.edge,
-        )
-        const widthCommit = {
-          x: drag.base.x,
-          y: drag.base.y,
-          rotation: drag.base.rotation ?? drag.base.style?.rotation,
-          maxWidthPct,
-          scale: drag.base.scale,
-        }
-        notePlacement(drag.id, widthCommit)
-        onPatchInsert?.(drag.id, widthCommit)
-        return
-      }
-
-      const factor = scaleFactorFromDrag(
-        drag.center,
-        { x: play.playX, y: play.playY },
-        drag.startDist,
-      )
-      const sizePatch = resizePatchForTrack(drag.base, factor)
-      if (insertKind(drag.base) === "caption") {
-        if (typeof sizePatch.fontSize === "number") {
-          onPatchCaptionStyle?.({ fontSize: sizePatch.fontSize })
-        }
-        return
-      }
-      const placePatch =
-        insertKind(drag.base) === "chip" && !chipHasFreePosition(drag.base)
-          ? patchForMove(drag.center.x, drag.center.y)
-          : {}
-      const resizeCommit = { ...placePatch, ...sizePatch }
-      notePlacement(drag.id, resizeCommit)
-      onPatchInsert?.(drag.id, resizeCommit)
     }
 
     function onUp() {
@@ -916,9 +957,7 @@ export function OverlayCanvas({
           : nudgePercents(current, event.key, event.shiftKey)
       onPatchInsert?.(selectedInsert.id, {
         ...next,
-        rotation: laid.rotation ?? laid.style?.rotation,
-        maxWidthPct: laid.maxWidthPct,
-        scale: laid.scale,
+        ...keptLayout(selectedInsert),
       })
     }
     window.addEventListener("keydown", onKeyDown)
@@ -928,7 +967,7 @@ export function OverlayCanvas({
   function beginMove(id: string) {
     hostRef.current?.focus({ preventScroll: true })
     onBeginInsertGesture?.()
-    dragRef.current = { mode: "move", id }
+    dragRef.current = { mode: "move", id, axis: null, origin: null }
     onSelect?.({ kind: "insert", id })
   }
 
@@ -962,24 +1001,30 @@ export function OverlayCanvas({
     )
   }
 
-  function beginResize(insert: CompositionInsert, event: React.PointerEvent, _corner: ResizeCorner) {
+  function beginResize(insert: CompositionInsert, event: React.PointerEvent, corner: ResizeCorner) {
     const host = hostRef.current
     if (!host) return
     const display = getCanvasDisplayMetrics(host.getBoundingClientRect())
-    const play = clientToPlay(event.clientX, event.clientY, display)
     const box = selectionBox(insert, display)
-    if (!box) return
-    const pointer = play.inside
-      ? { x: play.playX, y: play.playY }
-      : { x: box.cx, y: box.cy }
+    const pointer = playPointFromClient(event.clientX, event.clientY, display)
+    if (!box || !pointer) return
     const startDist = Math.hypot(pointer.x - box.cx, pointer.y - box.cy)
+    const rotationDeg = box.rotation ?? 0
+    const local = localPoint({ x: box.cx, y: box.cy }, pointer, rotationDeg)
+    const laid = laidOut(insert)
+    livePlacementRef.current = null
     onBeginInsertGesture?.()
     dragRef.current = {
       mode: "resize",
       id: insert.id,
+      corner,
       center: { x: box.cx, y: box.cy },
-      startDist,
-      base: laidOut(insert),
+      startDist: Math.max(startDist, 1),
+      scale0: textSizeScale(insert),
+      startWidthPct: laid.maxWidthPct ?? DEFAULT_MAX_WIDTH_PCT,
+      startLocalX: local.x,
+      rotationDeg,
+      base: laid,
     }
     onSelect?.({ kind: "insert", id: insert.id })
   }
@@ -1117,6 +1162,7 @@ export function OverlayCanvas({
 
   function onStagePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
+    if (event.target instanceof Element && event.target.closest("[data-handle]")) return
     const host = hostRef.current
     if (!host) return
     const display = getCanvasDisplayMetrics(host.getBoundingClientRect())
@@ -1136,6 +1182,11 @@ export function OverlayCanvas({
     hostRef.current?.focus({ preventScroll: true })
     if (!hit) {
       onEditingTextId?.(null)
+      if (insertIdOf(selection)) {
+        event.preventDefault()
+        onSelect?.(null)
+        return
+      }
       onSelect?.({ kind: "source" })
       event.preventDefault()
       const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : host
@@ -1447,8 +1498,10 @@ export function OverlayCanvas({
             box={selectedBox}
             metrics={metrics}
             host={hostBox}
+            dashed
             onMovePointerDown={(event) => {
               if (event.button !== 0) return
+              if (event.target instanceof Element && event.target.closest("[data-handle]")) return
               event.preventDefault()
               event.stopPropagation()
               beginMove(selectedVisible.id)

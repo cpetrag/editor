@@ -264,7 +264,6 @@ export function InsertCard({
   productData,
   niche = "shopee",
   brandKitId = "shopee",
-  projectSeed = "projeto",
   onNiche,
   onBrandKit,
 }: InsertCardProps) {
@@ -543,7 +542,6 @@ export function InsertCard({
                     insert={insert}
                     niche={niche}
                     moment={moment}
-                    seed={projectSeed}
                     productData={productData}
                     onMoment={setMoment}
                     onNiche={(next) => onNiche?.(next)}

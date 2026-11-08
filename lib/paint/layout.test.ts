@@ -1,8 +1,13 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { createDefaultComposition, parseComposition } from "../composition.ts"
+import type { CompositionInsert } from "../composition.ts"
 import { FACTORY_PRESET_IDS, getPresetStyle } from "../style/presets.ts"
 import { OFFER_PRESET_IDS } from "../style/offer-styles.ts"
+import { resolveInsertStyle } from "../style/resolve-insert-style.ts"
+import { scalePaintStyle } from "./draw.ts"
+import { applyInsertLayout } from "./insert-layout.ts"
 import { layoutInsert, layoutMarkedText, strikeLine, type MeasureFont } from "./layout.ts"
 
 function measure(text: string, font: MeasureFont): number {
@@ -35,6 +40,34 @@ function gaps(text: string, presetId: string) {
   return pieces
 }
 
+test("miniatura de Seu texto aqui tem três palavras separadas", () => {
+  const pieces = gaps("Seu texto *aqui*", "sticker")
+  assert.equal(pieces.length, 3)
+  assert.ok(pieces[1]!.x > pieces[0]!.x + pieces[0]!.width)
+  assert.ok(pieces[2]!.x > pieces[1]!.x + pieces[1]!.width)
+})
+
+test("sticker com escala 1.4 e rotação −3 mantém cada palavra separada", () => {
+  const styled = scalePaintStyle(getPresetStyle("sticker"), 1.4)
+  styled.text.rotation = -3
+  const layout = layoutInsert(
+    "Achei na Shopee e *não acreditei*",
+    styled,
+    20000,
+    (text, font) => (text.trim() ? text.length * font.size * 0.5 : 0),
+  )
+  const pieces = layout.pieces.filter((piece) => piece.text.trim().length > 0)
+  assert.deepEqual(
+    pieces.map((piece) => piece.text),
+    ["Achei", "na", "Shopee", "e", "não", "acreditei"],
+  )
+  for (let index = 1; index < pieces.length; index += 1) {
+    const previous = pieces[index - 1]
+    const piece = pieces[index]
+    assert.ok(previous && piece && piece.x > previous.x + previous.width, piece?.text)
+  }
+})
+
 test("espaço entre palavras avança o x", () => {
   const pieces = gaps("Achei o *melhor*", "sticker")
   assert.equal(pieces.length, 3)
@@ -50,7 +83,7 @@ test("espaço antes e depois do run riscado", () => {
   assert.ok(pieces[strike + 1]!.x > pieces[strike]!.x + pieces[strike]!.width)
 })
 
-test("os 22 estilos novos e os 16 de fábrica preservam o espaço", () => {
+test("os 35 estilos novos e os 16 de fábrica preservam o espaço", () => {
   for (const id of [...OFFER_PRESET_IDS, ...FACTORY_PRESET_IDS]) {
     const pieces = gaps("Achei o *melhor*", id)
     assert.equal(pieces.length, 3, id)
@@ -83,6 +116,118 @@ test("preço gigante alinha R$ e centavos pelo tamanho pequeno", () => {
   assert.ok(struck)
   assert.ok(Math.abs(struck.font.size - getPresetStyle("preco-gigante").text.fontSize * 0.5) < 0.5)
   assert.ok(struck.rise > 0)
+})
+
+function stageInsert(presetId: string, patch: Partial<CompositionInsert> = {}): CompositionInsert {
+  return {
+    id: "t",
+    type: "texto-livre",
+    kind: "text",
+    start: 0,
+    duration: 3,
+    text: "OLHA",
+    anchor: "center",
+    animIn: "none",
+    animOut: "none",
+    styleRef: { presetId, overrides: {} },
+    ...patch,
+  }
+}
+
+test("insert.y = 72 põe o centro do bloco em 72% da altura nos 35 estilos", () => {
+  const frameH = 1920
+  assert.equal(OFFER_PRESET_IDS.length, 35)
+  for (const id of OFFER_PRESET_IDS) {
+    const painted = resolveInsertStyle(stageInsert(id, { x: 50, y: 72 }))
+    const layout = layoutInsert("OLHA", painted)
+    const first = layout.lines[0]
+    const last = layout.lines[layout.lines.length - 1]
+    assert.ok(first && last, id)
+    const localCenter = (first.y + last.y) / 2
+    const center = (painted.text.y / 100) * frameH + localCenter
+    assert.ok(Math.abs(center - 0.72 * frameH) < 1, `${id} ${center}`)
+  }
+})
+
+test("insert.rotation = 15 soma com a inclinação −3 do sticker e desenha a 12°", () => {
+  const preset = getPresetStyle("sticker")
+  assert.equal(preset.text.rotation, -3)
+  const painted = resolveInsertStyle(stageInsert("sticker", { rotation: 15, y: 50 }))
+  assert.equal(painted.text.rotation, 12)
+  const direct = applyInsertLayout(preset, stageInsert("sticker", { rotation: 15 }), preset.text.rotation)
+  assert.equal(direct.text.rotation, 12)
+})
+
+test("insert.scale = 1.5 multiplica fonte, padding e contornos", () => {
+  const sticker = getPresetStyle("sticker")
+  const scaled = resolveInsertStyle(stageInsert("sticker", { scale: 1.5, y: 50 }))
+  assert.equal(scaled.text.fontSize, sticker.text.fontSize * 1.5)
+  assert.equal(scaled.text.background.paddingX, sticker.text.background.paddingX * 1.5)
+  assert.equal(scaled.text.background.paddingY, sticker.text.background.paddingY * 1.5)
+  const duplo = getPresetStyle("duplo")
+  const outlined = resolveInsertStyle(stageInsert("duplo", { scale: 1.5, y: 50 }))
+  assert.equal(outlined.text.fontSize, duplo.text.fontSize * 1.5)
+  assert.equal(outlined.text.stroke.width, duplo.text.stroke.width * 1.5)
+  assert.equal(outlined.text.outerStroke?.width, (duplo.text.outerStroke?.width ?? 0) * 1.5)
+})
+
+test("projeto salvo antes da b.3 abre na mesma posição, tamanho e rotação", () => {
+  const base = createDefaultComposition()
+  const parsed = parseComposition({
+    ...base,
+    version: 5,
+    inserts: [
+      {
+        id: "old",
+        type: "texto-livre",
+        kind: "text",
+        start: 0,
+        duration: 3,
+        text: "OLHA ISSO",
+        anchor: "center",
+        animIn: "none",
+        animOut: "none",
+        x: 40,
+        y: 72,
+        fontSize: 80,
+        rotation: -3,
+        styleRef: { presetId: "sticker", overrides: { text: { y: 20 } } },
+      },
+    ],
+  })
+  const insert = parsed.inserts[0]
+  assert.ok(insert)
+  assert.equal(insert.rotation, 0)
+  const painted = resolveInsertStyle(insert)
+  assert.equal(painted.text.x, 40)
+  assert.equal(painted.text.y, 72)
+  assert.equal(painted.text.fontSize, 80)
+  assert.equal(painted.text.rotation, -3)
+
+  const current = parseComposition({
+    ...base,
+    version: 6,
+    inserts: [
+      {
+        id: "now",
+        type: "texto-livre",
+        kind: "text",
+        start: 0,
+        duration: 3,
+        text: "OLHA",
+        anchor: "center",
+        animIn: "none",
+        animOut: "none",
+        x: 50,
+        y: 50,
+        fontSize: 72,
+        rotation: 15,
+        styleRef: { presetId: "sticker", overrides: {} },
+      },
+    ],
+  })
+  assert.equal(current.inserts[0]?.rotation, 15)
+  assert.equal(resolveInsertStyle(current.inserts[0]!).text.rotation, 12)
 })
 
 test("variável vazia não entra em caixa alta", () => {

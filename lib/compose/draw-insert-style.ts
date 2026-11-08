@@ -586,6 +586,9 @@ export function drawResolvedInsertText(
       measure: (text, font) => {
         const italic = font.italic ? "italic " : ""
         ctx.font = `${italic}${font.weight} ${font.size}px "${font.family}"`
+        if ("letterSpacing" in ctx) {
+          ctx.letterSpacing = font.letterSpacing ? `${font.letterSpacing * font.size}px` : "0px"
+        }
         return ctx.measureText(text).width
       },
       origin: {

@@ -198,7 +198,8 @@ export function layoutMarkedText(input: {
     size: main,
     italic: style.text.italic,
   }
-  const space = input.measure(" ", spaceFont)
+  // O canvas sem a fonte (ou com letterSpacing residual) mede o espaço como 0 e cola as palavras.
+  const space = Math.max(input.measure(" ", spaceFont), spaceFont.size * 0.25)
 
   const lines: PaintLine[] = []
   let current: Chunk[] = []
@@ -301,13 +302,23 @@ export function layoutMarkedText(input: {
   }
 }
 
+/** Largura estável: o canvas sem a fonte carregada mede o espaço como zero e cola as palavras. */
+export function spacedMeasure(text: string, font: MeasureFont): number {
+  return text.length * Math.max(0, font.size) * 0.5
+}
+
 /** Layout com espaços entre palavras. Usado pelo preview, pela miniatura e pelo teste. */
-export function layoutInsert(text: string, style: InsertStyle, maxWidth = 20000): InsertPaintLayout {
+export function layoutInsert(
+  text: string,
+  style: InsertStyle,
+  maxWidth = 20000,
+  measure: LayoutMeasure = spacedMeasure,
+): InsertPaintLayout {
   return layoutMarkedText({
     text,
     style,
     maxWidth,
-    measure: (value, font) => value.length * font.size * 0.5,
+    measure,
     editPreview: true,
   })
 }

@@ -8,21 +8,14 @@ import { EditorNav, type EditorTab } from "@/components/editor-nav"
 import { LibraryPanel } from "@/components/library-panel"
 import { projectHasArtInserts } from "@/lib/library-combo"
 import {
-  FACTORY_CTA_TEXT,
-  FACTORY_HOOK_TEXT,
-  FACTORY_PROOF_TEXT,
   hookVariationFiles,
   hookVariationManifest,
   runHookVariationQueue,
   type HookJobState,
 } from "@/lib/structure-preset"
-import { applyContentRecipe, recipeInsertsForEmptyMarkers } from "@/lib/content/recipes"
+import { applyContentRecipe } from "@/lib/content/recipes"
+import { buildReadyInsert, fitReadyWindow, formatClockTenths, type ReadySpec } from "@/lib/content/gallery"
 import { contentPresetById, contentPresetsFor, isContentNiche, type ContentNiche } from "@/lib/content/presets"
-import {
-  listStructurePresets,
-  saveStructurePreset,
-  type StructurePresetRecord,
-} from "@/lib/structure-preset-store"
 import { BatchPanel } from "@/components/batch-panel"
 import { HookVariationsDialog } from "@/components/hook-variations-dialog"
 import { EditorHeaderActions, type SaveStatus } from "@/components/editor-header-actions"
@@ -277,6 +270,9 @@ function historyPresent(composition: Composition): HistorySnapshot {
     ...(composition.source.trim ? { sourceTrim: composition.source.trim } : {}),
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(composition.retention ? { retention: composition.retention } : {}),
+    ...(composition.productData ? { productData: composition.productData } : {}),
+    ...(composition.niche ? { niche: composition.niche } : {}),
+    ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
   }
 }
 
@@ -393,8 +389,7 @@ export function VideoEditor() {
   const [comboChoice, setComboChoice] = useState(false)
   const [selection, setSelection] = useState<PreviewSelection>(null)
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
-  const [structurePresets, setStructurePresets] = useState<StructurePresetRecord[]>([])
-  const [structureChoice, setStructureChoice] = useState<{ hook: string; proof: string; cta: string } | null>(null)
+  const [insertFocus, setInsertFocus] = useState<{ id: string; selectMarked: boolean } | null>(null)
   const [hookDialogId, setHookDialogId] = useState<string | null>(null)
   const [hookJobs, setHookJobs] = useState<HookJobState[]>([])
   const [hookRunning, setHookRunning] = useState(false)
@@ -403,6 +398,8 @@ export function VideoEditor() {
   const [batchPreview, setBatchPreview] = useState<Variation | null>(null)
   const historyRef = useRef(emptyHistory())
   const gestureRef = useRef(emptyGesture())
+  const undoLastRef = useRef<() => void>(() => {})
+  const redoLastRef = useRef<() => void>(() => {})
   const textHistoryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false })
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved")
@@ -907,6 +904,9 @@ export function VideoEditor() {
       },
       watermarkEnabled: snapshot.watermarkEnabled === true ? true : undefined,
       retention: snapshot.retention,
+      productData: snapshot.productData,
+      niche: snapshot.niche,
+      brandKitId: snapshot.brandKitId,
     })
     compositionRef.current = next
     setComposition(next)
@@ -1108,37 +1108,55 @@ export function VideoEditor() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        const target = event.target
+        const insertField = target instanceof HTMLElement && target.dataset.insertText === "true"
+        if ((insertField || !isEditableTarget(target)) && insertIdOf(selectionRef.current)) {
+          event.preventDefault()
+          setSelection(null)
+          return
+        }
+      }
       if (isEditableTarget(event.target)) return
       if (event.defaultPrevented) return
-      if (gestureRef.current.active) return
       const action = historyShortcut(event)
       if (!action) return
-      if (action === "undo" && !canUndo(historyRef.current)) return
-      if (action === "redo" && !canRedo(historyRef.current)) return
       event.preventDefault()
-      const present = historyPresent(compositionRef.current)
-      const result =
-        action === "undo"
-          ? undo(historyRef.current, present)
-          : redo(historyRef.current, present)
-      historyRef.current = result.history
-      applyHistoryPresent(result.present)
+      if (action === "undo") undoLastRef.current()
+      else redoLastRef.current()
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [applyHistoryPresent])
+  }, [])
 
   useEffect(() => {
     if (activeTab !== "batch") setBatchPreview(null)
   }, [activeTab])
 
-  const addTextInsert = useCallback(() => {
-    finishTextEditRef.current("commit")
-    const created = createInsert("texto-livre")
-    created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+  const placeReady = useCallback((created: Insert, selectMarked: boolean, toast: boolean) => {
     applyInserts((inserts) => [...inserts, created], "discrete")
     setSelection({ kind: "insert", id: created.id })
+    setInsertFocus({ id: created.id, selectMarked })
+    if (toast) setUndoToast(`Adicionado em ${formatClockTenths(created.start)}`)
   }, [applyInserts])
+
+  const addTextInsert = useCallback(() => {
+    finishTextEditRef.current("commit")
+    const duration = compositionRef.current.source.duration
+    const created = createInsert("texto-livre")
+    const timing = fitReadyWindow(playheadRef.current, created.duration, duration)
+    created.start = timing.start
+    created.duration = timing.duration
+    created.text = ""
+    placeReady(created, true, false)
+  }, [placeReady])
+
+  const addReadyInsert = useCallback((spec: ReadySpec, selectMarked: boolean) => {
+    finishTextEditRef.current("commit")
+    const duration = compositionRef.current.source.duration
+    const created = buildReadyInsert(spec, playheadRef.current, duration)
+    placeReady(created, selectMarked, true)
+  }, [placeReady])
 
   const duplicateSelectedInsert = useCallback((id: string) => {
     finishTextEditRef.current("commit")
@@ -1588,21 +1606,25 @@ export function VideoEditor() {
 
   const undoLast = useCallback(() => {
     if (textEditRef.current) finishTextEditRef.current("commit")
+    if (gestureRef.current.active) closeOpenGesture()
     if (!canUndo(historyRef.current)) return
     const present = historyPresent(compositionRef.current)
     const result = undo(historyRef.current, present)
     historyRef.current = result.history
     applyHistoryPresent(result.present)
-  }, [applyHistoryPresent])
+  }, [applyHistoryPresent, closeOpenGesture])
 
   const redoLast = useCallback(() => {
     if (textEditRef.current) finishTextEditRef.current("commit")
+    if (gestureRef.current.active) closeOpenGesture()
     if (!canRedo(historyRef.current)) return
     const present = historyPresent(compositionRef.current)
     const result = redo(historyRef.current, present)
     historyRef.current = result.history
     applyHistoryPresent(result.present)
-  }, [applyHistoryPresent])
+  }, [applyHistoryPresent, closeOpenGesture])
+  undoLastRef.current = undoLast
+  redoLastRef.current = redoLast
 
   const seekPlayheadToInsert = useCallback((id: string) => {
     const insert = compositionRef.current.inserts.find((item) => item.id === id)
@@ -2231,73 +2253,6 @@ export function VideoEditor() {
     [backgroundUrl, composition, stickerBlobUrls, watermarkPrefs],
   )
 
-  const commitStructure = useCallback((_mode: "replace" | "add", _copy: { hook: string; proof: string; cta: string }) => {
-    applyComposition((prev) => {
-      const niche: ContentNiche = isContentNiche(prev.niche ?? "") ? prev.niche! : "shopee"
-      const added = recipeInsertsForEmptyMarkers({
-        duration: prev.source.duration,
-        niche,
-        inserts: prev.inserts,
-        cuts: prev.retention,
-        productData: prev.productData,
-      })
-      if (added.length === 0) return prev
-      return {
-        ...prev,
-        niche,
-        projectSeed: prev.projectSeed || prev.source.fileName || "projeto",
-        inserts: [...prev.inserts, ...added],
-      }
-    }, "discrete")
-  }, [applyComposition])
-
-  const requestStructure = useCallback((copy: { hook: string; proof: string; cta: string }) => {
-    const current = compositionRef.current
-    const niche: ContentNiche = isContentNiche(current.niche ?? "") ? current.niche ?? "shopee" : "shopee"
-    if (gestureRef.current.active) {
-      const closed = endInsertGesture(
-        historyRef.current,
-        gestureRef.current,
-        historyPresent(current),
-      )
-      historyRef.current = closed.history
-      gestureRef.current = closed.gesture
-    }
-    const added = recipeInsertsForEmptyMarkers({
-      duration: current.source.duration,
-      niche,
-      inserts: current.inserts,
-      cuts: current.retention,
-      productData: current.productData,
-    })
-    if (added.length === 0) {
-      setLiveMessage("Cada marcador já tem um texto. Nada foi sobreposto.")
-      return
-    }
-    commitStructure("add", copy)
-  }, [commitStructure])
-
-  const saveCurrentStructure = useCallback(() => {
-    const name = window.prompt("Nome da estrutura")
-    if (!name?.trim()) return
-    const current = compositionRef.current
-    const textOf = (role: "gancho" | "prova" | "cta", fallback: string) =>
-      current.inserts.find((insert) => insert.role === role)?.text?.trim() || fallback
-    const preset: StructurePresetRecord = {
-      id: crypto.randomUUID(),
-      name: name.trim(),
-      hook: textOf("gancho", FACTORY_HOOK_TEXT),
-      proof: textOf("prova", FACTORY_PROOF_TEXT),
-      cta: textOf("cta", FACTORY_CTA_TEXT),
-    }
-    void saveStructurePreset(preset)
-      .then(() => setStructurePresets((items) => [...items, preset]))
-      .catch((error) => {
-        console.error("[editor] falha ao salvar estrutura", error)
-        setLiveMessage("Não foi possível salvar a estrutura.")
-      })
-  }, [])
-
   const exportHookVariations = useCallback(async (input: { hooks: string[]; varyText: boolean; varyRecipes: boolean }) => {
     if (hookRunning || !hookDialogId) return
     const stem = sanitizeExportStem(exportFileName) || "video"
@@ -2391,10 +2346,6 @@ export function VideoEditor() {
       setHookRunning(false)
     }
   }, [backgroundUrl, exportFileName, hookDialogId, hookRunning, saveToCapcut, stickerBlobUrls, watermarkPrefs])
-
-  useEffect(() => {
-    void listStructurePresets().then(setStructurePresets)
-  }, [])
 
   const handleExport = useCallback(async () => {
     if (finalExport.running) {
@@ -2758,56 +2709,6 @@ export function VideoEditor() {
 
   return (
     <main className="relative flex h-screen flex-col overflow-clip lg:flex-row">
-      {structureChoice ? (
-        <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="presentation"
-          onClick={() => setStructureChoice(null)}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="structure-choice-title"
-            className="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-lg"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="structure-choice-title" className="text-sm font-semibold text-foreground">
-              Já existem inserts neste projeto
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Substituir tira os inserts atuais e mantém as legendas. Adicionar coloca a estrutura junto.
-            </p>
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setStructureChoice(null)}>
-                Cancelar
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const copy = structureChoice
-                  setStructureChoice(null)
-                  commitStructure("add", copy)
-                }}
-              >
-                Adicionar
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  const copy = structureChoice
-                  setStructureChoice(null)
-                  commitStructure("replace", copy)
-                }}
-              >
-                Substituir
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
       {hookDialogId ? (
         <HookVariationsDialog
           key={hookDialogId}
@@ -3040,9 +2941,9 @@ export function VideoEditor() {
               editingTextId && textEditRef.current?.id === editingTextId && textEditRef.current.created,
             )}
             onAddText={addTextInsert}
-            onApplyStructure={requestStructure}
-            onSaveStructure={saveCurrentStructure}
-            structurePresets={structurePresets}
+            onAddReady={addReadyInsert}
+            insertFocus={insertFocus}
+            onInsertFocusDone={() => setInsertFocus(null)}
             onOpenHookVariations={setHookDialogId}
             onAddElement={addElement}
             onApplyTemplate={applyTemplate}
@@ -3083,7 +2984,12 @@ export function VideoEditor() {
             niche={composition.niche ?? "shopee"}
             brandKitId={composition.brandKitId ?? "shopee"}
             projectSeed={composition.projectSeed || composition.source.fileName || "projeto"}
-            onProductData={(productData) => applyComposition((prev) => ({ ...prev, productData }), "discrete")}
+            onProductData={(productData) => {
+              if (!gestureRef.current.active) beginInsertHistory()
+              applyComposition((prev) => ({ ...prev, productData }), "gesture")
+              if (textHistoryTimer.current) clearTimeout(textHistoryTimer.current)
+              textHistoryTimer.current = setTimeout(() => endInsertHistory(), 800)
+            }}
             onNiche={(niche) => applyComposition((prev) => ({ ...prev, niche }), "discrete")}
             onBrandKit={(brandKitId) => applyComposition((prev) => ({ ...prev, brandKitId }), "discrete")}
             watermarkEnabled={composition.watermarkEnabled === true}

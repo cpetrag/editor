@@ -3,6 +3,7 @@
 import { INSERT_TYPE_MAP, formatTime, type Insert } from "@/lib/inserts"
 import type { ClipMotionMarks } from "@/lib/motion/select"
 import { insertLabel } from "@/lib/insert-ops"
+import { stripMarks } from "@/lib/content/gallery"
 import type { TimelineHandle } from "@/lib/timeline-clip"
 import { TIMELINE_CLIP_HEIGHT } from "@/lib/timeline-layout"
 import { cn } from "@/lib/utils"
@@ -41,7 +42,8 @@ export function TimelineClipBar({
   onEmphasisGesture?: (phase: "start" | "end") => void
 }) {
   const meta = INSERT_TYPE_MAP[insert.type]
-  const label = insertLabel(insert)
+  const marked = insert.text?.trim()
+  const label = marked ? stripMarks(marked) || insertLabel(insert) : insertLabel(insert)
   const range = `${formatTime(insert.start)} → ${formatTime(insert.start + insert.duration)}`
 
   return (
@@ -57,10 +59,10 @@ export function TimelineClipBar({
         selected &&
           !primary &&
           !pending &&
-          "z-10 opacity-100 ring-2 ring-brand/80 shadow-[0_0_8px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
+          "z-10 opacity-100 ring-2 ring-blue-500/80 shadow-[0_0_8px_rgba(59,130,246,0.4)]",
         primary &&
           !pending &&
-          "z-10 opacity-100 ring-[3px] ring-brand shadow-[0_0_12px_color-mix(in_oklch,var(--brand)_75%,transparent)]",
+          "z-10 opacity-100 ring-[3px] ring-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.55)]",
         pending &&
           "z-30 border-2 border-dashed border-amber-300 opacity-100 outline outline-2 outline-dashed outline-amber-300 outline-offset-1 ring-0",
         disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing",

@@ -6,11 +6,10 @@ import { BRAND_KITS } from "@/lib/brand/kits"
 import {
   CONTENT_PRESETS,
   contentPresetsFor,
-  recipeGapMessage,
   type ContentNiche,
   type ContentSlot,
 } from "@/lib/content/presets"
-import { applyContentRecipe, rerollContentRecipe } from "@/lib/content/recipes"
+import { applyContentRecipe } from "@/lib/content/recipes"
 import { PRODUCT_FIELDS, formatPrice, priceError, readingSeconds, type ProductData } from "@/lib/content/runs"
 import { paintMarkedInsert } from "@/lib/paint/draw"
 import { ensureComposeFontsReady } from "@/lib/compose/fonts"
@@ -88,14 +87,19 @@ export function ProductDataFields({
   niche,
   onChange,
   onNiche,
+  markEmpty = false,
+  hideNiche = false,
 }: {
   data: ProductData
   niche: ContentNiche
   onChange: (data: ProductData) => void
   onNiche: (niche: ContentNiche) => void
+  markEmpty?: boolean
+  hideNiche?: boolean
 }) {
   return (
     <div className="flex flex-col gap-2">
+      {hideNiche ? null : (
       <label className="flex items-center justify-between text-[0.7rem] text-muted-foreground">
         Nicho
         <select
@@ -108,14 +112,16 @@ export function ProductDataFields({
           ))}
         </select>
       </label>
+      )}
       {PRODUCT_FIELDS.map((field) => {
         const meta = FIELD_LABELS[field]
         const invalid = (field === "preco" || field === "preco_de") ? priceError(data[field] ?? "") : null
+        const empty = markEmpty && !(data[field] ?? "").trim()
         return (
           <label key={field} className="flex flex-col gap-1 text-[0.7rem] text-muted-foreground">
             {meta?.label ?? field}
             <input
-              className={`h-8 rounded-md border bg-background px-2 text-sm text-foreground ${invalid ? "border-red-500" : "border-border"}`}
+              className={`h-8 rounded-md border bg-background px-2 text-sm text-foreground ${invalid ? "border-red-500" : empty ? "border-amber-400 bg-amber-50" : "border-border"}`}
               placeholder={meta?.placeholder}
               value={data[field] ?? ""}
               onChange={(event) => onChange({ ...data, [field]: event.target.value })}
@@ -180,7 +186,6 @@ export function ContentRecipeList({
   insert,
   niche,
   moment,
-  seed,
   productData,
   onMoment,
   onNiche,
@@ -189,7 +194,6 @@ export function ContentRecipeList({
   insert: CompositionInsert
   niche: ContentNiche
   moment: ContentSlot | "todos"
-  seed: string
   productData?: ProductData
   onMoment: (moment: ContentSlot | "todos") => void
   onNiche: (niche: ContentNiche) => void
@@ -224,9 +228,6 @@ export function ContentRecipeList({
         </select>
       </div>
       <p className="text-[0.65rem] text-muted-foreground">*destaque* · ~~riscado~~ · \* e \~ escapam</p>
-      {moment !== "todos" && recipeGapMessage(moment, niche, productData) ? (
-        <p className="text-[0.65rem] text-amber-700">{recipeGapMessage(moment, niche, productData)}</p>
-      ) : null}
       {rows.map((preset) => (
         <article key={preset.id} className="rounded-md border border-border p-2">
           <MarkedLine text={preset.text} />
@@ -244,22 +245,13 @@ export function ContentRecipeList({
           </div>
         </article>
       ))}
-      {insert.contentId ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          onClick={() => onChange(rerollContentRecipe(insert, seed))}
-        >
-          Sortear outra
-        </Button>
-      ) : null}
     </div>
   )
 }
 
 export function sampleTextForPreset(presetId: string): string {
   const style = getPresetStyle(presetId)
+  if (presetId === "numero-gigante") return "*-44%*"
   if (style.text.priceLayout) return "~~R$ 89,90~~ *R$ 49,90*"
   const meta = listOfferPresets().find((preset) => preset.id === presetId)
   if (meta?.slots.includes("oferta")) return "-44% *hoje*"

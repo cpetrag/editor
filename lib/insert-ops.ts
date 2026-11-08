@@ -66,7 +66,7 @@ export interface RetentionSpan {
   color: string
 }
 
-/** Cortes gravados por "Aplicar estrutura". Sem isso, as faixas seguem 15% / 70%. */
+/** Cortes da régua. Sem isso, as faixas seguem 15% / 70%. */
 export type RetentionCuts = { ganchoEnd: number; ctaStart: number }
 
 /** Contiguous Gancho / Prova / CTA covering 100% of the video. */

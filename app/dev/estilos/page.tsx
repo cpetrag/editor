@@ -60,7 +60,7 @@ function CanvasCell({ presetId, kitId }: { presetId: string; kitId: string }) {
 export default function EstilosDevPage() {
   return (
     <main className="min-h-screen bg-zinc-950 p-4 text-zinc-100">
-      <h1 className="mb-4 text-lg font-semibold">Conferência dos 22 estilos</h1>
+      <h1 className="mb-4 text-lg font-semibold">Conferência dos 35 estilos</h1>
       {BRAND_KITS.map((kit) => (
         <section key={kit.id} className="mb-8">
           <h2 className="mb-2 text-sm">{kit.label}</h2>

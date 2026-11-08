@@ -176,7 +176,13 @@ export function applyFactoryPreset(
   const stamp = (insert: CompositionInsert): CompositionInsert => ({
     ...insert,
     styleRef: applyPresetToStyleRef(insert.styleRef, presetId, mode),
-    ...(painted.text.rotation ? { rotation: painted.text.rotation } : { rotation: undefined }),
+    // Legenda guarda o ângulo absoluto. No texto a inclinação do preset soma
+    // com a rotação do insert, então aplicar o preset não copia esse ângulo.
+    ...(insertKind(insert) === "caption"
+      ? painted.text.rotation
+        ? { rotation: painted.text.rotation }
+        : { rotation: undefined }
+      : {}),
   })
 
   if (preset.group === "legenda") {

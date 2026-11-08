@@ -28,6 +28,18 @@ export function localPoint(center: Point, pointer: Point, rotationDeg: number): 
   return { x: dx * cos - dy * sin, y: dx * sin + dy * cos }
 }
 
+export const CORNER_SCALE_MIN = 0.3
+export const CORNER_SCALE_MAX = 4
+
+/** scale = scale0 × (distância atual ao centro / distância inicial), entre 0,3 e 4. */
+export function scaleFromCornerDrag(scale0: number, startDist: number, nowDist: number): number {
+  const base = scale0 > 0 ? scale0 : 1
+  if (!(startDist > 0) || !(nowDist > 0)) return base
+  const next = base * (nowDist / startDist)
+  const clamped = Math.min(CORNER_SCALE_MAX, Math.max(CORNER_SCALE_MIN, next))
+  return Math.round(clamped * 1000) / 1000
+}
+
 export function maxWidthPctFromEdgeDrag(
   startWidthPct: number,
   localDxPx: number,

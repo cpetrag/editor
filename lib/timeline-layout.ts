@@ -39,7 +39,7 @@ export function timelineTrackFor(insert: Pick<CompositionInsert, "kind" | "type"
   return "elements"
 }
 
-/** Cada trilha empilha só os próprios clipes; trilha vazia ainda ocupa uma faixa. */
+/** Cada trilha empilha os próprios clipes. Texto e elemento vazios não ocupam faixa. */
 export function layoutTimelineTracks(inserts: readonly Insert[]): TimelineLayout {
   const byTrack = new Map<TimelineTrackId, Insert[]>()
   for (const insert of inserts) {
@@ -60,9 +60,11 @@ export function layoutTimelineTracks(inserts: readonly Insert[]): TimelineLayout
     }
     const members = byTrack.get(id) ?? []
     const lanes = stackLanes(members)
-    let laneCount = 1
+    // Legendas ficam na faixa delas. Textos e elementos só abrem outra faixa se um clipe sobrepõe outro.
+    let laneCount = members.length === 0 ? (id === "captions" ? 1 : 0) : 1
     for (const lane of lanes.values()) laneCount = Math.max(laneCount, lane + 1)
     const height = laneCount * TIMELINE_LANE_HEIGHT
+    if (height === 0) continue
     const clipOffset = (TIMELINE_LANE_HEIGHT - TIMELINE_CLIP_HEIGHT) / 2
     for (const [insertId, lane] of lanes) {
       clipTops.set(insertId, top + lane * TIMELINE_LANE_HEIGHT + clipOffset)

@@ -1,6 +1,7 @@
 import { brandKitOf } from "../brand/kits.ts"
 import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { PLAY_W } from "../compose/layout.ts"
+import { backgroundEnvelope } from "../motion/engine.ts"
 import { hashSeed } from "../motion/hash.ts"
 import { animatedPoseAt, IDENTITY_POSE } from "../style/anim-engine.ts"
 import type { InsertStyle } from "../style/types.ts"
@@ -232,6 +233,29 @@ export type PaintMotion = {
   start: number
   duration: number
   seed: string
+  /** Miniatura: deslocamentos do motor são px do quadro 1080 e precisam do mesmo `s`. */
+  unitScale?: number
+}
+
+/** Caixa do fundo quando a unidade é letra ou palavra. No bloco a caixa segue o texto inteiro. */
+export function insertBackgroundMotion(
+  style: InsertStyle,
+  motion: PaintMotion | undefined,
+  unitCount: number,
+): { opacity: number; scale: number } | null {
+  if (!motion || style.animation.unit === "bloco") return null
+  const hasBox = style.text.background.enabled || Boolean(style.text.highlightBar) || Boolean(style.text.shape)
+  if (!hasBox) return null
+  const fps = motion.fps > 0 ? motion.fps : 30
+  return backgroundEnvelope(
+    motion.time * fps,
+    {
+      animation: style.animation,
+      startFrame: (motion.start ?? 0) * fps,
+      durationInFrames: Math.max(0, (motion.duration ?? 0) * fps),
+    },
+    Math.max(1, unitCount),
+  )
 }
 
 export function paintInsertLayout(
@@ -246,7 +270,22 @@ export function paintInsertLayout(
   if (style.text.rotation) ctx.rotate((style.text.rotation * Math.PI) / 180)
   ctx.globalAlpha *= Math.max(0, Math.min(1, style.text.opacity / 100))
   const strokeScale = 1
-  if (style.text.background.enabled) {
+  const fps = motion && motion.fps > 0 ? motion.fps : 30
+  const frame = (motion?.time ?? 0) * fps
+  const unitCount = Math.max(1, layout.pieces.length)
+  const boxMotion = insertBackgroundMotion(style, motion, unitCount)
+  const unitScale = motion?.unitScale ?? 1
+  if (boxMotion && boxMotion.opacity > 0) {
+    const centerX = layout.bbox.x + layout.bbox.w / 2
+    const centerY = layout.bbox.y + layout.bbox.h / 2
+    ctx.save()
+    ctx.translate(centerX, centerY)
+    ctx.scale(boxMotion.scale, boxMotion.scale)
+    ctx.translate(-centerX, -centerY)
+    ctx.globalAlpha *= boxMotion.opacity
+  }
+  const paintBox = !boxMotion || boxMotion.opacity > 0
+  if (style.text.background.enabled && paintBox) {
     ctx.save()
     ctx.globalAlpha *= Math.max(0, Math.min(1, style.text.background.opacity / 100))
     ctx.fillStyle = style.text.background.color
@@ -263,7 +302,7 @@ export function paintInsertLayout(
     paintShape(ctx, layout.bbox, style)
     ctx.restore()
   }
-  if (style.text.highlightBar) {
+  if (style.text.highlightBar && paintBox) {
     ctx.save()
     ctx.fillStyle = style.text.highlightBar.color
     for (const line of layout.lines) {
@@ -277,9 +316,7 @@ export function paintInsertLayout(
     }
     ctx.restore()
   }
-  const fps = motion && motion.fps > 0 ? motion.fps : 30
-  const frame = (motion?.time ?? 0) * fps
-  const unitCount = Math.max(1, layout.pieces.length)
+  if (boxMotion && boxMotion.opacity > 0) ctx.restore()
   layout.pieces.forEach((piece, index) => {
     const pose =
       !motion || style.animation.unit === "bloco"
@@ -308,7 +345,7 @@ export function paintInsertLayout(
     ctx.save()
     const cx = piece.x + piece.width / 2
     ctx.translate(cx, piece.y)
-    ctx.translate(pose.x, pose.y)
+    ctx.translate(pose.x * unitScale, pose.y * unitScale)
     ctx.rotate((pose.rotate * Math.PI) / 180)
     ctx.scale(pose.scale * pose.scaleX, pose.scale * pose.scaleY)
     ctx.translate(-cx, -piece.y)
@@ -330,6 +367,38 @@ export function paintInsertLayout(
     }
   }
   ctx.restore()
+}
+
+/** Encolhe fonte, contorno, padding e sombra pelo `s` da miniatura. */
+export function scalePaintStyle(style: InsertStyle, factor: number): InsertStyle {
+  if (!(factor > 0) || Math.abs(factor - 1) < 1e-6) return style
+  const text = style.text
+  return {
+    ...style,
+    text: {
+      ...text,
+      fontSize: text.fontSize * factor,
+      stroke: { ...text.stroke, width: text.stroke.width * factor },
+      ...(text.outerStroke
+        ? { outerStroke: { ...text.outerStroke, width: text.outerStroke.width * factor } }
+        : {}),
+      background: {
+        ...text.background,
+        paddingX: text.background.paddingX * factor,
+        paddingY: text.background.paddingY * factor,
+        radius: text.background.radius >= 999 ? text.background.radius : text.background.radius * factor,
+      },
+      shadows: text.shadows.map((shadow) => ({
+        ...shadow,
+        x: shadow.x * factor,
+        y: shadow.y * factor,
+        blur: shadow.blur * factor,
+      })),
+      ...(text.longShadow
+        ? { longShadow: { ...text.longShadow, length: text.longShadow.length * factor } }
+        : {}),
+    },
+  }
 }
 
 export function paintMarkedInsert(

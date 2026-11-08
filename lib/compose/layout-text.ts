@@ -22,6 +22,8 @@ export interface TextLayout {
   cx: number
   cy: number
   rotation: number
+  /** Caixa igual ao bbox pintado, sem folga extra. */
+  exactBox?: boolean
 }
 
 export interface TextMeasure {
@@ -127,15 +129,18 @@ export function layoutInsertText(
       measure: (text, font) =>
         measureWidth ? measureWidth(font.size, text) : text.length * font.size * 0.55,
     })
+    const anchorX = (painted.text.x / 100) * frame.width
+    const anchorY = (painted.text.y / 100) * frame.height
     return {
       lines: laid.lines.map((line) => line.pieces.map((piece) => piece.text).join(" ")),
-      blockW: laid.blockW,
-      blockH: laid.blockH,
+      blockW: laid.bbox.w,
+      blockH: laid.bbox.h,
       effectiveFontSize: painted.text.fontSize,
       overflow: laid.blockW > maxW + 0.5,
-      cx: (painted.text.x / 100) * frame.width,
-      cy: (painted.text.y / 100) * frame.height,
-      rotation: painted.text.rotation || insert.rotation || 0,
+      cx: anchorX + laid.bbox.x + laid.bbox.w / 2,
+      cy: anchorY + laid.bbox.y + laid.bbox.h / 2,
+      rotation: painted.text.rotation,
+      exactBox: true,
     }
   }
   const style = resolveLayerStyle(insert, brandFontId)

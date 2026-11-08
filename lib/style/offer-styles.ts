@@ -7,7 +7,7 @@ export type OfferPresetMeta = {
   label: string
   slots: Array<"gancho" | "prova" | "oferta" | "cta">
   niche: OfferNiche[]
-  phase: "4a" | "4b"
+  phase: "4a" | "4b" | "4c"
 }
 
 type OfferDef = OfferPresetMeta & {
@@ -58,7 +58,23 @@ const OFFER_DEFS: OfferDef[] = [
   { id: "selo", label: "Selo estrela", slots: ["oferta"], niche: ["shopee", "bebe"], phase: "4b", font: "anton", weight: 400, size: 64, case: "upper", color: "slot:onPrimary", accent: "slot:accent", shape: "selo", bg: { color: "slot:primary", opacity: 100, padX: 0.9, padY: 0.9, radius: 0 } },
   { id: "bilhete", label: "Bilhete", slots: ["prova", "cta"], niche: ["moda", "beleza", "bebe"], phase: "4b", font: "caveat", weight: 700, size: 72, color: "slot:ink", accent: "slot:primary", bg: { color: "slot:paper", opacity: 100, padX: 0.6, padY: 0.3, radius: 4 }, shadows: [{ x: 0, y: 12, blur: 24, color: "rgba(0,0,0,.28)" }], rotation: 2, boxShadow: true },
   { id: "tarja", label: "Tarja diagonal", slots: ["oferta", "gancho"], niche: ["shopee"], phase: "4b", font: "archivo", weight: 400, size: 72, case: "upper", color: "slot:onPrimary", accent: "slot:accent", shape: "tarja", bg: { color: "slot:primary", opacity: 100, padX: 2, padY: 0.25, radius: 0 }, rotation: -6 },
+  { id: "quadrinho", label: "Quadrinho", slots: ["gancho", "oferta"], niche: ["shopee", "bebe"], phase: "4c", font: "luckiest", weight: 400, size: 96, color: "slot:accent", accent: "#FFFFFF", stroke: { width: 10, color: "slot:ink" }, shadows: [{ x: 6, y: 8, blur: 0, color: "slot:ink" }], rotation: -2 },
+  { id: "manchete", label: "Manchete", slots: ["gancho", "oferta"], niche: ["shopee", "moda"], phase: "4c", font: "bebas", weight: 400, size: 96, case: "upper", color: "slot:paper", accent: "slot:accent", bg: { color: "slot:primary", opacity: 100, padX: 0.3, padY: 0.06, radius: 0, mode: "linha" } },
+  { id: "fita-preta", label: "Faixa de aviso", slots: ["gancho", "oferta"], niche: ["shopee"], phase: "4c", font: "bebas", weight: 400, size: 84, case: "upper", color: "slot:accent", accent: "#FFFFFF", bg: { color: "slot:ink", opacity: 100, padX: 0.5, padY: 0.14, radius: 0 }, rotation: 4 },
+  { id: "retro", label: "Retrô slab", slots: ["gancho", "oferta"], niche: ["shopee", "moda"], phase: "4c", font: "alfa", weight: 400, size: 86, case: "upper", color: "slot:accent", accent: "#FFFFFF", longShadow: { length: 10, color: "slot:ink" } },
+  { id: "dourado", label: "Dourado", slots: ["gancho", "oferta", "cta"], niche: ["moda", "beleza"], phase: "4c", font: "playfair", weight: 700, italic: true, size: 80, gradient: ["#FFF1C1", "#C99A3B", 180], accent: "#FFFFFF", shadows: [{ x: 0, y: 4, blur: 14, color: "rgba(0,0,0,.5)" }] },
+  { id: "neon-azul", label: "Neon azul", slots: ["gancho", "cta"], niche: ["shopee", "beleza"], phase: "4c", font: "montserrat", weight: 800, size: 78, color: "#FFFFFF", accent: "#A5F3FC", shadows: [{ x: 0, y: 0, blur: 8, color: "#22D3EE" }, { x: 0, y: 0, blur: 22, color: "#22D3EE" }, { x: 0, y: 0, blur: 44, color: "#0EA5E9" }] },
+  { id: "gordinho", label: "Gordinho", slots: ["gancho", "prova", "cta"], niche: ["bebe"], phase: "4c", font: "lilita", weight: 400, size: 90, color: "#FFFFFF", accent: "slot:accent", stroke: { width: 8, color: "slot:primary" }, shadows: [{ x: 0, y: 6, blur: 0, color: "slot:ink" }] },
+  { id: "recibo", label: "Recibo", slots: ["prova"], niche: ["shopee", "moda", "beleza"], phase: "4c", font: "courier", weight: 700, size: 52, color: "slot:ink", accent: "slot:primary", bg: { color: "#FFFFFF", opacity: 100, padX: 0.55, padY: 0.32, radius: 2 }, shadows: [{ x: 0, y: 8, blur: 18, color: "rgba(0,0,0,.3)" }], boxShadow: true, rotation: -1 },
+  { id: "post-it", label: "Post-it", slots: ["prova", "cta"], niche: ["shopee", "moda", "beleza", "bebe"], phase: "4c", font: "caveat", weight: 700, size: 76, color: "#1F1A0A", accent: "slot:primary", bg: { color: "#FFE873", opacity: 100, padX: 0.55, padY: 0.32, radius: 2 }, shadows: [{ x: 0, y: 10, blur: 20, color: "rgba(0,0,0,.28)" }], boxShadow: true, rotation: -3 },
+  { id: "cartao", label: "Cartão clean", slots: ["prova", "oferta", "cta"], niche: ["shopee", "moda", "beleza", "bebe"], phase: "4c", font: "space", weight: 700, size: 56, color: "slot:ink", accent: "slot:primary", bg: { color: "slot:paper", opacity: 94, padX: 0.5, padY: 0.28, radius: 16 } },
+  { id: "botao", label: "Botão", slots: ["cta"], niche: ["shopee", "bebe"], phase: "4c", font: "titan", weight: 400, size: 62, color: "slot:primary", accent: "slot:ink", bg: { color: "#FFFFFF", opacity: 100, padX: 0.7, padY: 0.32, radius: 999 }, shadows: [{ x: 0, y: 7, blur: 0, color: "slot:primary" }], boxShadow: true },
+  { id: "sublinhado", label: "Sublinhado", slots: ["prova", "cta"], niche: ["shopee", "beleza"], phase: "4c", font: "nunito", weight: 800, size: 64, color: "#FFFFFF", accent: "slot:accent", underline: true, shadows: [{ x: 0, y: 3, blur: 12, color: "rgba(0,0,0,.5)" }] },
+  { id: "numero-gigante", label: "Número gigante", slots: ["oferta"], niche: ["shopee", "moda", "beleza", "bebe"], phase: "4c", font: "anton", weight: 400, size: 170, color: "#FFFFFF", accent: "slot:accent", stroke: { width: 10, color: "slot:ink" }, shadows: [{ x: 0, y: 10, blur: 0, color: "slot:primary" }] },
 ]
+
+/** Estilos da leva 4c. O selo NOVO some depois do primeiro uso. */
+export const FRESH_OFFER_IDS = OFFER_DEFS.filter((def) => def.phase === "4c").map((def) => def.id)
 
 const BY_ID = new Map(OFFER_DEFS.map((def) => [def.id, def]))
 

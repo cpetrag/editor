@@ -42,6 +42,17 @@ test("layoutTimelineTracks stacks overlapping clips only inside their own track"
   assert.ok((layout.clipTops.get("e1") ?? 0) >= (elements?.top ?? 0))
 })
 
+test("a segunda faixa de inserts só aparece quando um clipe sobrepõe outro", () => {
+  const alone = layoutTimelineTracks([insert("t1", "texto-livre", 0, 3)])
+  assert.equal(alone.tracks.some((track) => track.id === "elements"), false)
+  assert.equal(alone.tracks.find((track) => track.id === "texts")?.height, TIMELINE_LANE_HEIGHT)
+  const stacked = layoutTimelineTracks([
+    insert("t1", "texto-livre", 0, 3),
+    insert("t2", "texto-livre", 1, 2),
+  ])
+  assert.equal(stacked.tracks.find((track) => track.id === "texts")?.height, TIMELINE_LANE_HEIGHT * 2)
+})
+
 test("scrollLeftForZoom keeps the instant under the pointer", () => {
   const next = scrollLeftForZoom({ zoom: 1, nextZoom: 2, scrollLeft: 0, pointerX: 250, viewportWidth: 1000 })
   assert.equal(next, 250)

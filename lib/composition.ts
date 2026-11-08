@@ -33,6 +33,7 @@ import type { BrandKitId } from "./brand/kits.ts"
 import type { ContentNiche } from "./content/presets.ts"
 import type { ProductData } from "./content/runs.ts"
 import { parseCustomPresets } from "./style/user-presets.ts"
+import { getPresetStyle, LEGADO_PRESET_ID } from "./style/presets.ts"
 import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
 import { migrateTextPresetId } from "./text-presets/migrate.ts"
 import {
@@ -40,11 +41,12 @@ import {
   toAbsoluteCaptionWords,
 } from "./caption-time.ts"
 
-export const COMPOSITION_VERSION = 5 as const
+export const COMPOSITION_VERSION = 6 as const
 export const LEGACY_COMPOSITION_VERSION = 1 as const
 export const COMPOSITION_VERSION_V2 = 2 as const
 export const PREVIOUS_COMPOSITION_VERSION = 3 as const
 export const COMPOSITION_VERSION_V4 = 4 as const
+export const COMPOSITION_VERSION_V5 = 5 as const
 export const MIN_DURATION = 0.5
 export const DEFAULT_FPS = 30
 export const DEFAULT_WIDTH = 1080
@@ -835,6 +837,7 @@ function parseInsert(raw: unknown): CompositionInsert | null {
         textAlign: isTextAlign(raw.textAlign) ? raw.textAlign : "center",
         ...(asStoredString(raw.fontFamily) ? { fontFamily: asStoredString(raw.fontFamily) } : {}),
         ...(asNumber(raw.rotation) !== null ? { rotation: asNumber(raw.rotation)! } : {}),
+        ...(asNumber(raw.scale) !== null ? { scale: clampScale(asNumber(raw.scale)!) } : {}),
         ...(raw.role === "gancho" || raw.role === "prova" || raw.role === "cta" ? { role: raw.role } : {}),
         ...(typeof raw.contentId === "string" && raw.contentId ? { contentId: raw.contentId } : {}),
       },
@@ -978,6 +981,7 @@ function parseOutput(
 function isSupportedVersion(value: unknown): boolean {
   return (
     value === COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V5 ||
     value === COMPOSITION_VERSION_V4 ||
     value === PREVIOUS_COMPOSITION_VERSION ||
     value === COMPOSITION_VERSION_V2 ||
@@ -1031,6 +1035,29 @@ function parseRetention(raw: unknown): { ganchoEnd: number; ctaStart: number } |
   return { ganchoEnd, ctaStart }
 }
 
+/**
+ * Até a v5 a rotação gravada era o ângulo desenhado. Agora ela é o extra do
+ * usuário e a inclinação do preset soma na hora de pintar.
+ */
+function migrateLayoutRotation(insert: CompositionInsert, version: number): CompositionInsert {
+  if (version >= COMPOSITION_VERSION) return insert
+  if (insert.kind === "caption" || insert.type === "legenda") return insert
+  if (insert.kind !== "text" && insert.type !== "texto-livre") return insert
+  const presetId = insert.styleRef?.presetId
+  if (!presetId || presetId === LEGADO_PRESET_ID) return insert
+  if (typeof insert.rotation !== "number" || !Number.isFinite(insert.rotation)) return insert
+  const tilt = getPresetStyle(presetId).text.rotation ?? 0
+  if (!tilt) return insert
+  const delta = insert.rotation - tilt
+  return {
+    ...insert,
+    rotation: delta,
+    transform: insert.transform
+      ? { ...insert.transform, rotation: insert.transform.rotation - tilt }
+      : insert.transform,
+  }
+}
+
 export function parseComposition(input: unknown): Composition {
   if (!isRecord(input)) {
     throw new Error("versão de composição inválida")
@@ -1041,10 +1068,12 @@ export function parseComposition(input: unknown): Composition {
   const brand = isRecord(input.brand) ? input.brand : {}
   const batch = isRecord(input.batch) ? input.batch : {}
   const captionStyle = migrateCaptionStyle(input)
+  const storedVersion = typeof input.version === "number" ? input.version : LEGACY_COMPOSITION_VERSION
   const inserts = Array.isArray(input.inserts)
     ? input.inserts
         .map(parseInsert)
         .filter((insert): insert is CompositionInsert => insert !== null)
+        .map((insert) => migrateLayoutRotation(insert, storedVersion))
         .map((insert) => migrateInsertTransform(insert, captionStyle))
     : []
   const positions = Array.isArray(batch.positions)
@@ -1134,6 +1163,9 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
       ...(asStoredString(insert.fontFamily) ? { fontFamily: insert.fontFamily } : {}),
       ...(typeof insert.rotation === "number" && Number.isFinite(insert.rotation)
         ? { rotation: insert.rotation }
+        : {}),
+      ...(typeof insert.scale === "number" && Number.isFinite(insert.scale)
+        ? { scale: insert.scale }
         : {}),
       ...(insert.role ? { role: insert.role } : {}),
       ...(insert.contentId ? { contentId: insert.contentId } : {}),

@@ -2,8 +2,6 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import {
-  FONT_SIZE_MAX,
-  FONT_SIZE_MIN,
   SCALE_MAX,
   SCALE_MIN,
   type CompositionInsert,
@@ -181,17 +179,17 @@ test("scaleFactorFromDrag is 1 when the start distance is tiny", () => {
   assert.equal(scaleFactorFromDrag({ x: 10, y: 10 }, { x: 10, y: 10 }, 0.2), 1)
 })
 
-test("resizePatchForTrack changes fontSize for text and keeps x/y", () => {
-  const patch = resizePatchForTrack(textInsert({ fontSize: 80 }), 2)
-  assert.equal(patch.fontSize, 160)
+test("resizePatchForTrack scales text proportionally and keeps x/y", () => {
+  const patch = resizePatchForTrack(textInsert({ scale: 1 }), 1.2)
+  assert.equal(patch.scale, 1.2)
+  assert.equal(patch.fontSize, undefined)
   assert.equal(patch.x, undefined)
   assert.equal(patch.y, undefined)
-  assert.equal(patch.scale, undefined)
 })
 
-test("resizePatchForTrack clamps fontSize to 40-360", () => {
-  assert.equal(resizePatchForTrack(textInsert({ fontSize: 40 }), 0.1).fontSize, FONT_SIZE_MIN)
-  assert.equal(resizePatchForTrack(textInsert({ fontSize: 200 }), 10).fontSize, FONT_SIZE_MAX)
+test("resizePatchForTrack clamps text scale to 0.3–4", () => {
+  assert.equal(resizePatchForTrack(textInsert({ scale: 1 }), 0.1).scale, 0.3)
+  assert.equal(resizePatchForTrack(textInsert({ scale: 1 }), 10).scale, 4)
 })
 
 test("resizePatchForTrack changes scale for stickers with 3 decimals", () => {

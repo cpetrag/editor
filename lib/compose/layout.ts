@@ -41,6 +41,19 @@ export function getCanvasDisplayMetrics(rect: RectLike): CanvasDisplayMetrics {
   }
 }
 
+/** Coordenada do palco mesmo com o ponteiro fora do quadro. A alça de canto sai do frame ao escalar. */
+export function playPointFromClient(
+  clientX: number,
+  clientY: number,
+  metrics: CanvasDisplayMetrics,
+): { x: number; y: number } | null {
+  if (!(metrics.displayScale > 0)) return null
+  return {
+    x: (clientX - metrics.ox) / metrics.displayScale,
+    y: (clientY - metrics.oy) / metrics.displayScale,
+  }
+}
+
 export function clientToPlay(
   clientX: number,
   clientY: number,

@@ -130,7 +130,14 @@ export function applyUserTransformPatch(
   patch: Partial<Pick<InsertTransform, "x" | "y" | "scale" | "rotation" | "maxWidth">>,
   fallback: InsertTransform,
 ): CompositionInsert {
-  const base = insert.transform ?? fallback
+  const base = insert.transform ?? {
+    x: insert.x ?? fallback.x,
+    y: insert.y ?? fallback.y,
+    scale: insert.scale ?? fallback.scale,
+    rotation: insert.rotation ?? fallback.rotation,
+    maxWidth: insert.maxWidthPct ?? fallback.maxWidth,
+    touchedByUser: false,
+  }
   const next: InsertTransform = {
     x: patch.x ?? base.x,
     y: patch.y ?? base.y,
@@ -248,12 +255,15 @@ export function migrateInsertTransform(
       }
     : {}
 
+  const textOwnsLayout = kindOf(insert) === "text"
+  const pick = (flat: number | undefined, override: number | undefined, globalValue: number | undefined, fallbackValue: number) =>
+    (textOwnsLayout ? flat ?? override : override ?? flat) ?? globalValue ?? fallbackValue
   const next: InsertTransform = {
-    x: fromOverride.x ?? fromFlat.x ?? global.x ?? fallback.x,
-    y: fromOverride.y ?? fromFlat.y ?? global.y ?? fallback.y,
+    x: pick(fromFlat.x, fromOverride.x, global.x, fallback.x),
+    y: pick(fromFlat.y, fromOverride.y, global.y, fallback.y),
     scale: fromFlat.scale ?? fallback.scale,
-    rotation: fromOverride.rotation ?? fromFlat.rotation ?? global.rotation ?? fallback.rotation,
-    maxWidth: fromOverride.maxWidth ?? fromFlat.maxWidth ?? global.maxWidth ?? fallback.maxWidth,
+    rotation: pick(fromFlat.rotation, fromOverride.rotation, global.rotation, fallback.rotation),
+    maxWidth: pick(fromFlat.maxWidth, fromOverride.maxWidth, global.maxWidth, fallback.maxWidth),
     touchedByUser: true,
   }
   return {

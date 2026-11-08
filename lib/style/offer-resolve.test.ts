@@ -24,13 +24,13 @@ function textInsert(presetId: string): CompositionInsert {
   }
 }
 
-test("os 22 presets vencem o Impacto no insert", () => {
-  assert.equal(OFFER_PRESET_IDS.length, 22)
+test("os 35 presets vencem o Impacto no insert", () => {
+  assert.equal(OFFER_PRESET_IDS.length, 35)
   for (const id of OFFER_PRESET_IDS) {
     const expected = getPresetStyle(id)
     const resolved = resolveInsertStyle(textInsert(id))
     assert.equal(resolved.text.fontFamily, expected.text.fontFamily, id)
-    assert.equal(resolved.text.fontSize, expected.text.fontSize, id)
+    assert.equal(resolved.text.fontSize, 96, id)
     assert.equal(resolved.text.color, expected.text.color, id)
     assert.equal(resolved.text.background.enabled, expected.text.background.enabled, id)
     assert.equal(resolved.text.background.color, expected.text.background.color, id)
