@@ -285,9 +285,11 @@ export function motionAt(
   const from = intensifyDistance(resolveTarget(animation.enter.from), intensity)
   const toExit = intensifyDistance(resolveTarget(animation.exit.to), intensity)
 
+  const coverFrame = animation.entryFromFrame0 === "final" && local <= 0
   let pose = MOTION_IDENTITY
-  if (phases.enter > 0 || animation.enter.durationInFrames === 0) {
-    const enterProgress = progressAt(local, phases.enter, animation.enter.easing, animation.enter.overshoot, fps, speed)
+  if (!coverFrame && (phases.enter > 0 || animation.enter.durationInFrames === 0)) {
+    let enterProgress = progressAt(local, phases.enter, animation.enter.easing, animation.enter.overshoot, fps, speed)
+    if (animation.entryFromFrame0 === "final") enterProgress = 0.7 + 0.3 * enterProgress
     pose = mixPose(from, MOTION_IDENTITY, enterProgress)
   }
   if (phases.exit > 0 && cardLocal >= exitStart) {
@@ -296,16 +298,44 @@ export function motionAt(
     pose = mixPose(MOTION_IDENTITY, toExit, exitProgress)
   }
 
-  if (legacyLoop(animation.loop)) {
+  if (!coverFrame && legacyLoop(animation.loop)) {
     pose = applyLegacyLoop(pose, animation.loop, frame, fps, intensity)
-  } else {
+  } else if (!coverFrame) {
     const seconds = cardLocal / Math.max(1e-6, fps)
     const envelope = loopEnvelope(cardLocal, phases, animation, unitCount, spec.durationInFrames, speed)
     pose = applyCatalogLoop(pose, animation.loop, seconds, unitRank, seed, envelope, intensity)
   }
 
-  pose = applyEmphasis(pose, animation, cardLocal, intensity)
-  return applyGlitch(pose, frame, unitRank, seed)
+  if (!coverFrame) pose = applyEmphasis(pose, animation, cardLocal, intensity)
+  return coverFrame ? pose : applyGlitch(pose, frame, unitRank, seed)
+}
+
+/** Estouro e os outros com caixa: fundo e texto usam a mesma escala. */
+export function stickerMotionAt(input: {
+  time: number
+  fps: number
+  duration: number
+  animation: Animation
+  entryFromFrame0?: "final" | "play"
+}): { boxScale: number; textScale: number; opacity: number } {
+  const fps = input.fps > 0 ? input.fps : 30
+  const animation = input.entryFromFrame0
+    ? { ...input.animation, entryFromFrame0: input.entryFromFrame0 }
+    : input.animation
+  const pose = motionAt(
+    input.time * fps,
+    fps,
+    {
+      animation,
+      startFrame: 0,
+      durationInFrames: Math.max(0, input.duration * fps),
+    },
+    0,
+    1,
+    1,
+  )
+  const scale = pose.scale * pose.scaleX
+  return { boxScale: scale, textScale: scale, opacity: pose.opacity }
 }
 
 /** Caixa de fundo: entra em 6 frames e sai no mesmo instante da última unidade. */

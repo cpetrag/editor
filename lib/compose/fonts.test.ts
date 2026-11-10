@@ -9,6 +9,7 @@ import {
 } from "./fonts.ts"
 import { factoryPresetFontIds } from "../style/presets.ts"
 import { COMPOSITION_VERSION, DEFAULT_CAPTION_STYLE, type Composition } from "../composition.ts"
+import { defaultCompositionAudio } from "../audio/types.ts"
 
 function composition(patch: Partial<Composition> = {}): Composition {
   return {
@@ -27,6 +28,7 @@ function composition(patch: Partial<Composition> = {}): Composition {
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
     ...patch,
+    audio: patch.audio ?? defaultCompositionAudio(),
   }
 }
 

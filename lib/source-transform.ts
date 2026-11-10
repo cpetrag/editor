@@ -257,6 +257,34 @@ export function framingOffsetBounds(
   }
 }
 
+const DROP_SOURCE_TRANSFORM = new Set(["Resetar enquadramento", "Trocar vídeo"])
+const TRANSFORM_LOSS_KEY = "editor.debug.transform-loss"
+
+export function keepSourceTransform<T extends { source: { transform?: SourceTransform } }>(
+  previous: T,
+  next: T,
+  action: string,
+): T {
+  if (!previous.source.transform || next.source.transform || DROP_SOURCE_TRANSFORM.has(action)) return next
+  const entry = {
+    action,
+    at: new Date().toISOString(),
+    version: typeof process !== "undefined" ? (process.env.NEXT_PUBLIC_APP_VERSION ?? "") : "",
+  }
+  console.warn("[editor] transform perdido", action, new Error().stack)
+  try {
+    const storage = globalThis.localStorage
+    if (storage) {
+      const parsed: unknown = JSON.parse(storage.getItem(TRANSFORM_LOSS_KEY) || "[]")
+      const list = Array.isArray(parsed) ? parsed : []
+      storage.setItem(TRANSFORM_LOSS_KEY, JSON.stringify([...list, entry].slice(-5)))
+    }
+  } catch (error) {
+    console.error("[editor] não foi possível gravar a perda de enquadramento", error)
+  }
+  return { ...next, source: { ...next.source, transform: previous.source.transform } }
+}
+
 export function sourceScaleRangeLabel(): string {
   return "Escala 1–4"
 }

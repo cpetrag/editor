@@ -23,6 +23,7 @@ export type PlayStyleContext = {
   editPreview?: boolean
   productData?: ProductData
   brandKitId?: string
+  trimStart?: number
 }
 
 function isActive(insert: CompositionInsert, time: number): boolean {

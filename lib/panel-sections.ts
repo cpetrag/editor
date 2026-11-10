@@ -15,7 +15,7 @@ export const PANEL_SECTIONS: { id: PanelTabId; label: string }[] = [
   { id: "inserts", label: "Inserts" },
 ]
 
-export const VIDEO_BLOCK_IDS = ["framing", "watermark"] as const
+export const VIDEO_BLOCK_IDS = ["framing", "watermark", "audio"] as const
 export const CAPTION_STYLE_BLOCK_IDS = ["type", "layout", "fill", "stroke", "bg", "highlight"] as const
 export const INSERT_STYLE_BLOCK_IDS = ["type", "layout", "fill", "stroke", "bg"] as const
 export const MOTION_BLOCK_IDS = ["enter", "exit", "loop", "unit"] as const

@@ -215,6 +215,16 @@ export function MotionPanel({
 
   return (
     <div className="flex flex-col gap-3" role="tabpanel">
+      <label className="flex items-center justify-between gap-2 text-[0.7rem] text-foreground">
+        Começa pronto no 1º frame (capa)
+        <input
+          type="checkbox"
+          checked={animation.entryFromFrame0 !== "play" && (animation.entryFromFrame0 === "final" || insert.start < 0.05)}
+          onChange={(event) =>
+            onChange({ ...animation, entryFromFrame0: event.target.checked ? "final" : "play" })
+          }
+        />
+      </label>
       <section className="flex flex-col gap-1.5">
         <p className="text-[0.7rem] font-medium text-foreground">
           Pacotes · {slot === "gancho" ? "Gancho" : slot === "prova" ? "Prova" : "CTA"}

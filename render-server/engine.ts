@@ -83,6 +83,8 @@ export function createRemotionEngine(): RenderEngine {
               serveUrl,
               inputProps,
               codec: "h264",
+              audioCodec: "aac",
+              audioBitrate: "192k",
               outputLocation,
               concurrency: 3,
               crf: 18,

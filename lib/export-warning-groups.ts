@@ -16,6 +16,15 @@ const GROUP_LABELS: Record<ExportWarningCode, string> = {
   "contrast-bare": "Sem fundo nem contorno",
   "contrast-low": "Pouco contraste com o fundo",
   "empty-var": "Variável vazia",
+  "audio-silent": "Sem som",
+  "audio-cut": "Cortado no fim do vídeo",
+  "audio-clip": "Risco de distorção",
+  "audio-gap": "Silêncio no final",
+  "audio-missing": "Arquivo ausente",
+  "audio-pending": "Importação pendente",
+  "audio-capcut": "CapCut sem automação",
+  "audio-trim": "Corte inválido",
+  "insert-past-end": "Passa do fim do vídeo",
 }
 
 /** Agrupa avisos do mesmo tipo, na ordem em que o primeiro de cada tipo aparece. */

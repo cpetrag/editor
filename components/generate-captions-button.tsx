@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { AiRequestError, requestCaptions } from "@/lib/ai-client"
+import { placeSlicedCaptionLines } from "@/lib/audio/captions"
 import {
   DEFAULT_GROUP_OPTIONS,
   parseMaxWords,
@@ -19,6 +20,9 @@ interface GenerateCaptionsButtonProps {
   loadMedia: () => Promise<File | null>
   onGenerate: (lines: CaptionLine[], warnings: string[]) => void
   onStatus?: (message: string) => void
+  /** Quando há locução, ela é a fonte padrão da transcrição. */
+  voiceTrack?: { start: number; trimIn: number } | null
+  loadVoice?: () => Promise<File | null>
 }
 
 export function GenerateCaptionsButton({
@@ -27,21 +31,27 @@ export function GenerateCaptionsButton({
   loadMedia,
   onGenerate,
   onStatus,
+  voiceTrack = null,
+  loadVoice,
 }: GenerateCaptionsButtonProps) {
   const [loading, setLoading] = useState(false)
   const [maxWords, setMaxWords] = useState(DEFAULT_GROUP_OPTIONS.maxWords)
+  const [source, setSource] = useState<"voice" | "video">(voiceTrack ? "voice" : "video")
 
   async function handleClick() {
     setLoading(true)
     onStatus?.("Transcrevendo…")
     try {
-      const media = await loadMedia()
+      const useVoice = Boolean(voiceTrack && loadVoice && source === "voice")
+      const media = useVoice ? await loadVoice?.() : await loadMedia()
       if (!media) {
-        onStatus?.("Carregue um vídeo.")
+        onStatus?.(useVoice ? "Não achei o arquivo da locução." : "Carregue um vídeo.")
         return
       }
       const payload = await requestCaptions({ duration, media, maxWords })
-      onGenerate(payload.lines, payload.warnings)
+      const lines =
+        useVoice && voiceTrack ? placeSlicedCaptionLines(payload.lines, voiceTrack) : payload.lines
+      onGenerate(lines, payload.warnings)
       onStatus?.(
         payload.warnings.includes("words-estimated")
           ? "Legendas prontas. Timing estimado."
@@ -74,6 +84,28 @@ export function GenerateCaptionsButton({
         {loading ? <Spinner data-icon="inline-start" /> : <Captions data-icon="inline-start" />}
         Gerar legendas
       </Button>
+      {voiceTrack && loadVoice ? (
+        <div className="flex gap-2 text-[0.65rem] text-muted-foreground">
+          <label className="flex items-center gap-1">
+            <input
+              type="radio"
+              name="caption-source"
+              checked={source === "voice"}
+              onChange={() => setSource("voice")}
+            />
+            Locução
+          </label>
+          <label className="flex items-center gap-1">
+            <input
+              type="radio"
+              name="caption-source"
+              checked={source === "video"}
+              onChange={() => setSource("video")}
+            />
+            Áudio do vídeo
+          </label>
+        </div>
+      ) : null}
       <Field className="gap-1">
         <FieldLabel htmlFor="caption-max-words" className="text-[0.65rem] text-muted-foreground">
           Palavras por card

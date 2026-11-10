@@ -24,6 +24,8 @@ export interface ExportMenuActions {
   onExportModeChange: (mode: ExportMode) => void
   onOutputQualityChange: (quality: OutputQualityId) => void
   onSelectInsert: (id: string) => void
+  onReplaceAudio?: (trackId: string) => void
+  onFitInserts?: () => void
 }
 
 export interface ExportMenuProps {
@@ -49,6 +51,7 @@ export interface ExportMenuProps {
   webmWarning: string | null
   warnings: ExportWarning[]
   pendingNote?: string | null
+  audioPhrase?: string
 }
 
 function qualityLabel(value: string, sourceWidth: number, sourceHeight: number): string {
@@ -80,6 +83,7 @@ export function ExportPanel({
   webmWarning,
   warnings,
   pendingNote,
+  audioPhrase = "com o áudio do vídeo",
   onAfterExport,
 }: ExportMenuProps & { pendingNote?: string | null; onAfterExport?: () => void }) {
   const percent = Math.round(exportProgress * 100)
@@ -141,7 +145,7 @@ export function ExportPanel({
           </SelectContent>
         </Select>
       ) : (
-        <p className="text-xs text-muted-foreground">Final: o Mac gera 1080×1920 com o áudio do vídeo.</p>
+        <p className="text-xs text-muted-foreground">Final: o Mac gera 1080×1920 {audioPhrase}.</p>
       )}
 
       <label className="flex flex-col gap-1 text-[0.7rem] text-muted-foreground">
@@ -309,6 +313,24 @@ function ExportWarningGroupItem({
         <button type="button" className={itemClass} onClick={() => selectFirstOf(single.insertIds)}>
           {single.title}
         </button>
+        {single.code === "insert-past-end" ? (
+          <button
+            type="button"
+            className="mt-1 text-[0.65rem] font-medium text-foreground underline"
+            onClick={() => actionsRef.current.onFitInserts?.()}
+          >
+            Ajustar
+          </button>
+        ) : null}
+        {single.code === "audio-missing" && single.insertIds[0] ? (
+          <button
+            type="button"
+            className="mt-1 text-[0.65rem] font-medium text-foreground underline"
+            onClick={() => actionsRef.current.onReplaceAudio?.(single.insertIds[0] ?? "")}
+          >
+            Reenviar arquivo
+          </button>
+        ) : null}
       </li>
     )
   }

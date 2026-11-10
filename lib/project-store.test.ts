@@ -8,6 +8,7 @@ import {
   createDefaultComposition,
   type Composition,
 } from "./composition.ts"
+import { defaultCompositionAudio } from "./audio/types.ts"
 import {
   COMPOSITION_STORAGE_KEY,
   createMemoryFileStore,
@@ -62,6 +63,7 @@ const composition: Composition = {
   output: { width: 1080, height: 1920, fps: 30, videoBitrate: 8_000_000 },
   captionPreset: "viral",
   captionStyle: DEFAULT_CAPTION_STYLE,
+  audio: defaultCompositionAudio(),
 }
 
 test("save and load composition JSON roundtrip through localStorage", () => {

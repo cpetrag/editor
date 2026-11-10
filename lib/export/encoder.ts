@@ -6,6 +6,7 @@ import { CanvasTaintError, drawFrame, preloadBrandLogo, preloadStickerImages, re
 import type { WatermarkPaint } from "../watermark.ts"
 import { ensureComposeFontsReady, fontIdsUsedInComposition } from "../compose/fonts"
 import { resolveTrimWindow, trimProgress } from "../source-trim.ts"
+import { createDraftAudioMix } from "./draft-audio.ts"
 import {
   blobTypeFromMime,
   outputFps,
@@ -35,6 +36,7 @@ export interface ExportOptions {
   onProgress: (progress: ExportProgress) => void
   stickerBlobUrls?: Record<string, string>
   watermark?: WatermarkPaint | null
+  audioUrls?: Record<string, string>
 }
 
 function waitForEvent(target: EventTarget, event: string, signal: AbortSignal): Promise<void> {
@@ -100,11 +102,20 @@ async function recordWithMediaRecorder(
   const fps = outputFps(composition.output.fps)
   const finishHiddenWatch = watchTabHidden(signal)
   const canvasStream = canvas.captureStream(fps)
+  const mix = createDraftAudioMix({
+    video,
+    composition,
+    audioUrls: options.audioUrls ?? {},
+  })
   let audioTracks: MediaStreamTrack[] = []
-  try {
-    audioTracks = video.captureStream().getAudioTracks()
-  } catch (error) {
-    console.error("[editor] não foi possível capturar o áudio do vídeo", error)
+  if (mix) {
+    audioTracks = mix.stream.getAudioTracks()
+  } else {
+    try {
+      audioTracks = video.captureStream().getAudioTracks()
+    } catch (error) {
+      console.error("[editor] não foi possível capturar o áudio do vídeo", error)
+    }
   }
   const mixed = new MediaStream([
     ...canvasStream.getVideoTracks(),
@@ -132,8 +143,9 @@ async function recordWithMediaRecorder(
   const previousMuted = video.muted
   const previousVolume = video.volume
   video.muted = false
-  video.volume = 0
+  if (!mix) video.volume = 0
   try {
+    if (mix) await mix.start(trimWindow.start)
     recorder.start(200)
     try {
       await video.play()
@@ -172,6 +184,7 @@ async function recordWithMediaRecorder(
           reject(error)
           return
         }
+        mix?.tick(video.currentTime)
         onProgress({
           currentTime: video.currentTime,
           ratio: trimProgress(video.currentTime, trimWindow),
@@ -205,6 +218,7 @@ async function recordWithMediaRecorder(
       backgrounded: finishHiddenWatch(),
     }
   } finally {
+    mix?.close()
     video.pause()
     video.muted = previousMuted
     video.volume = previousVolume

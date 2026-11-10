@@ -8,6 +8,7 @@ import {
   type Composition,
   type CompositionSource,
 } from "./composition.ts"
+import { defaultCompositionAudio } from "./audio/types.ts"
 import {
   commitReadySource,
   isReadySource,
@@ -41,6 +42,7 @@ function sampleComposition(source: CompositionSource = sampleSource()): Composit
     },
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
+    audio: defaultCompositionAudio(),
   }
 }
 

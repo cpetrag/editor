@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import { DEFAULT_CAPTION_STYLE, type CaptionStyle, type CompositionInsert } from "./composition.ts"
+import { defaultCompositionAudio, type CompositionAudio } from "./audio/types.ts"
 import {
   HISTORY_LIMIT,
   beginInsertGesture,
@@ -66,6 +67,61 @@ test("pushPast after undo clears future", () => {
   const next = pushPast(undone.history, undone.present, c)
   assert.equal(next.future.length, 0)
   assert.equal(undo(next, c).present.inserts[0]?.id, "a")
+})
+
+function audioSnap(patch: {
+  volume?: number
+  muted?: boolean
+  duckingEnabled?: boolean
+} = {}): HistorySnapshot {
+  const audio: CompositionAudio = defaultCompositionAudio()
+  return {
+    inserts: [],
+    captionStyle: DEFAULT_CAPTION_STYLE,
+    audio: {
+      ...audio,
+      original: { volume: patch.volume ?? 1, muted: patch.muted ?? false },
+      ducking: { ...audio.ducking, enabled: patch.duckingEnabled ?? true },
+    },
+  }
+}
+
+test("undo restores original volume and redo puts it back", () => {
+  const before = audioSnap({ volume: 1 })
+  const after = audioSnap({ volume: 0.38 })
+  const pushed = pushPast(emptyHistory(), before, after)
+  const undone = undo(pushed, after)
+  assert.equal(undone.present.audio?.original.volume, 1)
+  const redone = redo(undone.history, undone.present)
+  assert.equal(redone.present.audio?.original.volume, 0.38)
+})
+
+test("undo restores original mute and ducking toggle", () => {
+  const audible = audioSnap({ muted: false, duckingEnabled: true })
+  const muted = audioSnap({ muted: true, duckingEnabled: true })
+  const undoneMute = undo(pushPast(emptyHistory(), audible, muted), muted)
+  assert.equal(undoneMute.present.audio?.original.muted, false)
+  assert.equal(redo(undoneMute.history, undoneMute.present).present.audio?.original.muted, true)
+
+  const duckedOff = audioSnap({ duckingEnabled: false })
+  const undoneDuck = undo(pushPast(emptyHistory(), audible, duckedOff), duckedOff)
+  assert.equal(undoneDuck.present.audio?.ducking.enabled, true)
+  assert.equal(redo(undoneDuck.history, undoneDuck.present).present.audio?.ducking.enabled, false)
+})
+
+test("a slider gesture with several inputs is a single history entry", () => {
+  const start = audioSnap({ volume: 1 })
+  const gesture = beginInsertGesture(start)
+  const samples = [0.8, 0.55, 0.38].map((volume) => audioSnap({ volume }))
+  const closed = samples.reduce(
+    (open, sample) => ({ gesture: open.gesture, present: sample }),
+    { gesture, present: start },
+  )
+  const committed = endInsertGesture(emptyHistory(), closed.gesture, closed.present)
+  assert.equal(committed.history.past.length, 1)
+  const undone = undo(committed.history, closed.present)
+  assert.equal(undone.present.audio?.original.volume, 1)
+  assert.equal(redo(undone.history, undone.present).present.audio?.original.volume, 0.38)
 })
 
 test("pushPast with equal JSON does not grow past", () => {

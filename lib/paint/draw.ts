@@ -235,6 +235,7 @@ export type PaintMotion = {
   seed: string
   /** Miniatura: deslocamentos do motor são px do quadro 1080 e precisam do mesmo `s`. */
   unitScale?: number
+  trimStart?: number
 }
 
 /** Caixa do fundo quando a unidade é letra ou palavra. No bloco a caixa segue o texto inteiro. */
@@ -258,6 +259,13 @@ export function insertBackgroundMotion(
   )
 }
 
+function animationForCover(animation: InsertStyle["animation"], motion: PaintMotion | undefined): InsertStyle["animation"] {
+  if (!motion || animation.entryFromFrame0 === "play" || animation.entryFromFrame0 === "final") return animation
+  const trimStart = motion.trimStart ?? 0
+  if (Math.abs(motion.start - trimStart) < 0.05) return { ...animation, entryFromFrame0: "final" }
+  return animation
+}
+
 export function paintInsertLayout(
   ctx: CanvasRenderingContext2D,
   layout: InsertPaintLayout,
@@ -272,8 +280,10 @@ export function paintInsertLayout(
   const strokeScale = 1
   const fps = motion && motion.fps > 0 ? motion.fps : 30
   const frame = (motion?.time ?? 0) * fps
-  const unitCount = Math.max(1, layout.pieces.length)
-  const boxMotion = insertBackgroundMotion(style, motion, unitCount)
+  const unitCount = Math.max(1, layout.pieces.filter((piece) => piece.text.trim()).length)
+  const animation = animationForCover(style.animation, motion)
+  const hasBox = style.text.background.enabled || Boolean(style.text.highlightBar) || Boolean(style.text.shape)
+  const boxMotion = hasBox ? null : insertBackgroundMotion(style, motion, unitCount)
   const unitScale = motion?.unitScale ?? 1
   if (boxMotion && boxMotion.opacity > 0) {
     const centerX = layout.bbox.x + layout.bbox.w / 2
@@ -284,7 +294,7 @@ export function paintInsertLayout(
     ctx.translate(-centerX, -centerY)
     ctx.globalAlpha *= boxMotion.opacity
   }
-  const paintBox = !boxMotion || boxMotion.opacity > 0
+  const paintBox = (!hasBox && (!boxMotion || boxMotion.opacity > 0))
   if (style.text.background.enabled && paintBox) {
     ctx.save()
     ctx.globalAlpha *= Math.max(0, Math.min(1, style.text.background.opacity / 100))
@@ -317,31 +327,11 @@ export function paintInsertLayout(
     ctx.restore()
   }
   if (boxMotion && boxMotion.opacity > 0) ctx.restore()
-  layout.pieces.forEach((piece, index) => {
-    const pose =
-      !motion || style.animation.unit === "bloco"
-        ? motion
-          ? animatedPoseAt({
-              anim: style.animation,
-              indexInCard: 0,
-              cardStartFrame: (motion.start ?? 0) * fps,
-              cardDurationFrames: Math.max(0, (motion.duration ?? 0) * fps),
-              frame,
-              fps,
-              unitCount: 1,
-              seed: hashSeed(motion.seed),
-            })
-          : IDENTITY_POSE
-        : animatedPoseAt({
-            anim: style.animation,
-            indexInCard: index,
-            cardStartFrame: motion.start * fps,
-            cardDurationFrames: Math.max(0, motion.duration * fps),
-            frame,
-            fps,
-            unitCount,
-            seed: hashSeed(motion.seed),
-          })
+  const paintOne = (piece: PaintPiece, pose: ReturnType<typeof animatedPoseAt> | typeof IDENTITY_POSE) => {
+    if (!piece.text.trim()) {
+      paintPiece(ctx, piece, style, strokeScale)
+      return
+    }
     ctx.save()
     const cx = piece.x + piece.width / 2
     ctx.translate(cx, piece.y)
@@ -352,8 +342,74 @@ export function paintInsertLayout(
     ctx.globalAlpha *= pose.opacity
     paintPiece(ctx, piece, style, strokeScale)
     ctx.restore()
-  })
-  if (style.text.underline && layout.lines.length > 0) {
+  }
+  const blockUnit = !motion || style.animation.unit === "bloco" || hasBox
+  if (blockUnit) {
+    const pose = motion
+      ? animatedPoseAt({
+          anim: animation,
+          indexInCard: 0,
+          cardStartFrame: (motion.start ?? 0) * fps,
+          cardDurationFrames: Math.max(0, (motion.duration ?? 0) * fps),
+          frame,
+          fps,
+          unitCount: 1,
+          seed: hashSeed(motion.seed),
+        })
+      : IDENTITY_POSE
+    const centerX = layout.bbox.x + layout.bbox.w / 2
+    const centerY = layout.bbox.y + layout.bbox.h / 2
+    ctx.save()
+    ctx.translate(centerX, centerY)
+    ctx.translate(pose.x * unitScale, pose.y * unitScale)
+    ctx.rotate((pose.rotate * Math.PI) / 180)
+    ctx.scale(pose.scale * (pose.scaleX ?? 1), pose.scale * (pose.scaleY ?? 1))
+    ctx.translate(-centerX, -centerY)
+    ctx.globalAlpha *= pose.opacity
+    if (hasBox && style.text.background.enabled) {
+      ctx.save()
+      ctx.globalAlpha *= Math.max(0, Math.min(1, style.text.background.opacity / 100))
+      ctx.fillStyle = style.text.background.color
+      paintShape(ctx, layout.bbox, style)
+      ctx.restore()
+    }
+    for (const piece of layout.pieces) paintPiece(ctx, piece, style, strokeScale)
+    if (style.text.underline && layout.lines.length > 0) {
+      const last = layout.lines[layout.lines.length - 1]
+      if (last && last.pieces.length > 0) {
+        const minX = Math.min(...last.pieces.map((piece) => piece.x))
+        const maxX = Math.max(...last.pieces.map((piece) => piece.x + piece.width))
+        ctx.strokeStyle = style.text.accent || style.text.highlight.color
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.moveTo(minX, last.y + last.height / 2 + 6)
+        ctx.lineTo(maxX, last.y + last.height / 2 + 6)
+        ctx.stroke()
+      }
+    }
+    ctx.restore()
+  } else {
+    let unitIndex = 0
+    for (const piece of layout.pieces) {
+      if (!piece.text.trim()) {
+        paintPiece(ctx, piece, style, strokeScale)
+        continue
+      }
+      const pose = animatedPoseAt({
+        anim: animation,
+        indexInCard: unitIndex,
+        cardStartFrame: motion.start * fps,
+        cardDurationFrames: Math.max(0, motion.duration * fps),
+        frame,
+        fps,
+        unitCount,
+        seed: hashSeed(motion.seed),
+      })
+      unitIndex += 1
+      paintOne(piece, pose)
+    }
+  }
+  if (!blockUnit && style.text.underline && layout.lines.length > 0) {
     const last = layout.lines[layout.lines.length - 1]
     if (last && last.pieces.length > 0) {
       const minX = Math.min(...last.pieces.map((piece) => piece.x))

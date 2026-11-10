@@ -14,9 +14,10 @@ import {
   type HookJobState,
 } from "@/lib/structure-preset"
 import { applyContentRecipe } from "@/lib/content/recipes"
-import { buildReadyInsert, fitReadyWindow, formatClockTenths, type ReadySpec } from "@/lib/content/gallery"
+import { buildReadyInsert, fitReadyWindow, formatClockTenths, insertsPastEnd, type ReadySpec } from "@/lib/content/gallery"
 import { contentPresetById, contentPresetsFor, isContentNiche, type ContentNiche } from "@/lib/content/presets"
 import { BatchPanel } from "@/components/batch-panel"
+import { PanelErrorBoundary } from "@/components/panel-error-boundary"
 import { HookVariationsDialog } from "@/components/hook-variations-dialog"
 import { EditorHeaderActions, type SaveStatus } from "@/components/editor-header-actions"
 import { ExportMenu, type ExportMenuActions } from "@/components/export-menu"
@@ -39,6 +40,13 @@ import {
   type CompositionSource,
 } from "@/lib/composition"
 import { toCliRenderProps, toRenderProps } from "@/remotion/types"
+import { defaultCompositionAudio, type AudioKind, type AudioTrack, type CompositionAudio } from "@/lib/audio/types"
+import { audioAfterFileChoice } from "@/lib/audio/place"
+import { audioExportPhrase, audioSummary } from "@/lib/audio/summary"
+import { tracksForRender } from "@/lib/audio/upload"
+import { collectAudioWarnings } from "@/lib/audio/warnings"
+import { loadAudioPeaks, saveAudioPeaks } from "@/lib/audio/peaks-store"
+import { clampTrack } from "@/lib/audio/range"
 import {
   beginInsertGesture,
   canRedo,
@@ -186,6 +194,7 @@ import {
 import {
   clampSourceTransform,
   DEFAULT_SOURCE_TRANSFORM,
+  keepSourceTransform,
   type SourceTransform,
 } from "@/lib/source-transform"
 import {
@@ -196,7 +205,7 @@ import {
   splitSourceAt,
   type SegmentedFraming,
 } from "@/lib/source-segments"
-import { clampSourceTrim, type SourceTrim } from "@/lib/source-trim"
+import { clampSourceTrim, resolveTrimWindow, type SourceTrim } from "@/lib/source-trim"
 
 function presetCatalogOf(library: UserPreset[], composition: Composition) {
   return mergePresetCatalog(library, composition.customPresets)
@@ -273,6 +282,7 @@ function historyPresent(composition: Composition): HistorySnapshot {
     ...(composition.productData ? { productData: composition.productData } : {}),
     ...(composition.niche ? { niche: composition.niche } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    audio: composition.audio ?? defaultCompositionAudio(),
   }
 }
 
@@ -395,6 +405,13 @@ export function VideoEditor() {
   const [hookRunning, setHookRunning] = useState(false)
   const selectedInsertId = insertIdOf(selection)
   const [stickerBlobUrls, setStickerBlobUrls] = useState<Record<string, string>>({})
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({})
+  const [audioPeaks, setAudioPeaks] = useState<Record<string, number[]>>({})
+  const [sourcePeaks, setSourcePeaks] = useState<number[]>([])
+  const [missingAudioIds, setMissingAudioIds] = useState<string[]>([])
+  const [selectedAudioId, setSelectedAudioId] = useState<string | null>(null)
+  const [audioImporting, setAudioImporting] = useState(false)
+  const audioUrlsRef = useRef<Record<string, string>>({})
   const [batchPreview, setBatchPreview] = useState<Variation | null>(null)
   const historyRef = useRef(emptyHistory())
   const gestureRef = useRef(emptyGesture())
@@ -573,6 +590,74 @@ export function VideoEditor() {
     }
   }, [])
 
+  const audioKey = (composition.audio?.tracks ?? []).map((track) => `${track.id}:${track.fileId}`).join("|")
+  const sourceFileId = composition.source.fileId ?? ""
+
+  useEffect(() => {
+    let cancelled = false
+    const urls: Record<string, string> = {}
+    async function loadAudio() {
+      const tracks = compositionRef.current.audio?.tracks ?? []
+      const missing: string[] = []
+      const peaks: Record<string, number[]> = {}
+      for (const track of tracks) {
+        try {
+          const file = await fileStoreRef.current.load(track.fileId)
+          if (cancelled) return
+          if (!file) {
+            missing.push(track.id)
+            continue
+          }
+          urls[track.fileId] = urls[track.fileId] ?? URL.createObjectURL(file.blob)
+          const cached = await loadAudioPeaks(track.fileId)
+          if (cached) peaks[track.fileId] = cached
+          else {
+            const { inspectAudioBlob } = await import("@/lib/audio/decode")
+            const inspected = await inspectAudioBlob(file.blob)
+            peaks[track.fileId] = inspected.peaks
+            void saveAudioPeaks(track.fileId, inspected.peaks)
+          }
+        } catch (error) {
+          console.error("[editor] falha ao abrir áudio", error)
+          missing.push(track.id)
+        }
+      }
+      if (cancelled) return
+      for (const url of Object.values(audioUrlsRef.current)) {
+        if (!Object.values(urls).includes(url)) URL.revokeObjectURL(url)
+      }
+      audioUrlsRef.current = urls
+      setAudioUrls(urls)
+      setAudioPeaks(peaks)
+      setMissingAudioIds(missing)
+      if (sourceFileId) {
+        try {
+          const cached = await loadAudioPeaks(sourceFileId)
+          if (cancelled) return
+          if (cached) {
+            setSourcePeaks(cached)
+          } else {
+            const file = await fileStoreRef.current.load(sourceFileId)
+            if (!file || cancelled) return
+            const { inspectAudioBlob } = await import("@/lib/audio/decode")
+            const inspected = await inspectAudioBlob(file.blob)
+            if (cancelled) return
+            setSourcePeaks(inspected.peaks)
+            void saveAudioPeaks(sourceFileId, inspected.peaks)
+          }
+        } catch (error) {
+          console.error("[editor] waveform do vídeo indisponível", error)
+        }
+      } else {
+        setSourcePeaks([])
+      }
+    }
+    void loadAudio()
+    return () => {
+      cancelled = true
+    }
+  }, [audioKey, sourceFileId])
+
   useEffect(() => {
     let cancelled = false
     async function hydratePresets() {
@@ -697,14 +782,14 @@ export function VideoEditor() {
       }
       setComposition((prev) => {
         const committed = commitReadySource(prev, nextSource)
-        return clampComposition({
+        return keepSourceTransform(prev, clampComposition({
           ...committed,
           inserts: committed.inserts.map((insert) =>
             insertKind(insert) === "caption"
               ? finalizeCaptionInsert(insert, probe.duration)
               : clampInsert(insert, probe.duration),
           ),
-        })
+        }), "Trocar vídeo")
       })
       rememberPrevious(previous)
       sourceBlobRef.current = file
@@ -907,6 +992,7 @@ export function VideoEditor() {
       productData: snapshot.productData,
       niche: snapshot.niche,
       brandKitId: snapshot.brandKitId,
+      audio: snapshot.audio ?? compositionRef.current.audio ?? defaultCompositionAudio(),
     })
     compositionRef.current = next
     setComposition(next)
@@ -943,9 +1029,9 @@ export function VideoEditor() {
   )
 
   const applyComposition = useCallback(
-    (updater: (composition: Composition) => Composition, mode: "discrete" | "gesture") => {
+    (updater: (composition: Composition) => Composition, mode: "discrete" | "gesture", action = "editar") => {
       const prev = compositionRef.current
-      const nextRaw = updater(prev)
+      const nextRaw = keepSourceTransform(prev, updater(prev), action)
       if (mode === "discrete") {
         const committed = commitDiscrete(
           historyRef.current,
@@ -976,14 +1062,154 @@ export function VideoEditor() {
     saveWatermarkPrefs(next)
   }, [])
 
+  const changeAudio = useCallback(
+    (next: CompositionAudio, mode: "discrete" | "gesture") => {
+      if (mode === "gesture" && !gestureRef.current.active) beginInsertHistory()
+      applyComposition((current) => ({ ...current, audio: next }), mode)
+    },
+    [applyComposition, beginInsertHistory],
+  )
+
+  const commitAudioFile = useCallback(
+    async (input: {
+      file: File
+      duration: number
+      kind: AudioKind
+      replaceTrackId?: string
+      history?: "discrete" | "gesture"
+      muteOriginal?: boolean
+      peaks?: number[]
+    }) => {
+      const fileId = crypto.randomUUID()
+      const trackId = input.replaceTrackId ?? crypto.randomUUID()
+      try {
+        await fileStoreRef.current.save(fileId, input.file, {
+          fileName: input.file.name,
+          mimeType: input.file.type || "audio/mpeg",
+        })
+        if (input.peaks) {
+          void saveAudioPeaks(fileId, input.peaks)
+          setAudioPeaks((current) => ({ ...current, [fileId]: input.peaks ?? [] }))
+        } else {
+          const { inspectAudioBlob } = await import("@/lib/audio/decode")
+          const inspected = await inspectAudioBlob(input.file)
+          void saveAudioPeaks(fileId, inspected.peaks)
+          setAudioPeaks((current) => ({ ...current, [fileId]: inspected.peaks }))
+        }
+      } catch (error) {
+        console.error("[editor] falha ao guardar áudio", error)
+        setLiveMessage("Não foi possível guardar esse áudio.")
+        return
+      }
+      const url = URL.createObjectURL(input.file)
+      audioUrlsRef.current = { ...audioUrlsRef.current, [fileId]: url }
+      setAudioUrls(audioUrlsRef.current)
+      applyComposition((current) => {
+        const audio = current.audio ?? defaultCompositionAudio()
+        const videoDuration = current.source.duration
+        if (input.replaceTrackId) {
+          return {
+            ...current,
+            audio: {
+              ...audio,
+              tracks: audio.tracks.map((track) =>
+                track.id === input.replaceTrackId
+                  ? clampTrack(
+                      {
+                        ...track,
+                        kind: input.kind,
+                        fileId,
+                        fileName: input.file.name,
+                        duration: input.duration,
+                        trimIn: 0,
+                        trimOut: Math.min(input.duration, videoDuration > 0 ? videoDuration : input.duration),
+                      },
+                      videoDuration,
+                    )
+                  : track,
+              ),
+            },
+          }
+        }
+        return {
+          ...current,
+          audio: audioAfterFileChoice(audio, {
+            id: trackId,
+            fileId,
+            fileName: input.file.name,
+            duration: input.duration,
+            videoDuration,
+            voiceTaken: audio.tracks.some((track) => track.kind === "voice"),
+            muteOriginal: input.muteOriginal === true,
+          }),
+        }
+      }, input.history === "gesture" ? "gesture" : "discrete")
+      setSelectedAudioId(trackId)
+      setActiveTab("editor")
+      setMissingAudioIds((current) => current.filter((id) => id !== trackId))
+    },
+    [applyComposition],
+  )
+
+  const editAudioTrack = useCallback(
+    (id: string, patch: Partial<AudioTrack>, phase: "start" | "move" | "end") => {
+      if (phase === "start") {
+        beginInsertHistory()
+        return
+      }
+      if (phase === "end") {
+        endInsertHistory()
+        return
+      }
+      applyComposition((current) => {
+        const audio = current.audio ?? defaultCompositionAudio()
+        return {
+          ...current,
+          audio: {
+            ...audio,
+            tracks: audio.tracks.map((track) =>
+              track.id === id ? clampTrack({ ...track, ...patch }, current.source.duration) : track,
+            ),
+          },
+        }
+      }, "gesture")
+    },
+    [applyComposition, beginInsertHistory, endInsertHistory],
+  )
+
+  const loadRenderAudios = useCallback(async (current: Composition) => {
+    const files: { id: string; blob: Blob; fileName: string }[] = []
+    for (const track of tracksForRender(current.audio ?? defaultCompositionAudio())) {
+      const record = await fileStoreRef.current.load(track.fileId)
+      if (!record) {
+        throw new Error(`Falta o arquivo “${track.fileName}”. Reenvie a faixa antes de exportar.`)
+      }
+      files.push({ id: track.id, blob: record.blob, fileName: track.fileName || record.fileName })
+    }
+    return files
+  }, [])
+
+  const loadCaptionVoice = useCallback(async (): Promise<File | null> => {
+    const audio = compositionRef.current.audio ?? defaultCompositionAudio()
+    const track = audio.tracks.find((item) => item.kind === "voice" && !item.muted)
+    if (!track) return null
+    const record = await fileStoreRef.current.load(track.fileId)
+    if (!record) return null
+    const { sliceAudioBlob } = await import("@/lib/audio/decode")
+    const sliced = await sliceAudioBlob(record.blob, track.trimIn, track.trimOut)
+    return new File([sliced], track.fileName.replace(/\.\w+$/, "") + ".wav", { type: "audio/wav" })
+  }, [])
+
   const applySourceFraming = useCallback(
     (
       reframe: (source: Composition["source"]) => SegmentedFraming,
       mode: "discrete" | "gesture",
+      action = "enquadramento",
     ) => {
       applyComposition(
         (prev) => ({ ...prev, source: applySegmentedFraming(prev.source, reframe(prev.source)) }),
         mode,
+        action,
       )
     },
     [applyComposition],
@@ -1019,7 +1245,7 @@ export function VideoEditor() {
   )
 
   const handleResetAllSourceTransforms = useCallback(() => {
-    applySourceFraming(clearSegmentTransforms, "discrete")
+    applySourceFraming(clearSegmentTransforms, "discrete", "Resetar enquadramento")
   }, [applySourceFraming])
 
   const handleSplitSource = useCallback(
@@ -1133,6 +1359,14 @@ export function VideoEditor() {
     if (activeTab !== "batch") setBatchPreview(null)
   }, [activeTab])
 
+  const fitToCut = useCallback((created: Insert) => {
+    const end = resolveTrimWindow(compositionRef.current.source).end
+    const timing = fitReadyWindow(created.start, created.duration, end)
+    created.start = timing.start
+    created.duration = timing.duration
+    return created
+  }, [])
+
   const placeReady = useCallback((created: Insert, selectMarked: boolean, toast: boolean) => {
     applyInserts((inserts) => [...inserts, created], "discrete")
     setSelection({ kind: "insert", id: created.id })
@@ -1142,9 +1376,9 @@ export function VideoEditor() {
 
   const addTextInsert = useCallback(() => {
     finishTextEditRef.current("commit")
-    const duration = compositionRef.current.source.duration
+    const end = resolveTrimWindow(compositionRef.current.source).end
     const created = createInsert("texto-livre")
-    const timing = fitReadyWindow(playheadRef.current, created.duration, duration)
+    const timing = fitReadyWindow(playheadRef.current, created.duration, end)
     created.start = timing.start
     created.duration = timing.duration
     created.text = ""
@@ -1153,8 +1387,8 @@ export function VideoEditor() {
 
   const addReadyInsert = useCallback((spec: ReadySpec, selectMarked: boolean) => {
     finishTextEditRef.current("commit")
-    const duration = compositionRef.current.source.duration
-    const created = buildReadyInsert(spec, playheadRef.current, duration)
+    const end = resolveTrimWindow(compositionRef.current.source).end
+    const created = buildReadyInsert(spec, playheadRef.current, end)
     placeReady(created, selectMarked, true)
   }, [placeReady])
 
@@ -1162,10 +1396,10 @@ export function VideoEditor() {
     finishTextEditRef.current("commit")
     const current = compositionRef.current.inserts.find((insert) => insert.id === id)
     if (!current || insertKind(current) === "caption") return
-    const copy = duplicateInsert(current)
+    const copy = fitToCut(duplicateInsert(current))
     applyInserts((inserts) => [...inserts, copy], "discrete")
     setSelection({ kind: "insert", id: copy.id })
-  }, [applyInserts])
+  }, [applyInserts, fitToCut])
 
   const canAddSticker = useCallback(
     (inserts: Insert[]) => inserts.filter((insert) => insertKind(insert) === "sticker").length < MAX_STICKERS,
@@ -1184,11 +1418,12 @@ export function VideoEditor() {
         label: item.name,
         libraryId: item.id,
       })
-      created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
     },
-    [applyInserts, canAddSticker],
+    [applyInserts, canAddSticker, fitToCut],
   )
 
   const persistStickerFile = useCallback(
@@ -1219,12 +1454,13 @@ export function VideoEditor() {
         label: file.name || "colar",
         fileId,
       })
-      created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
       setActiveTab("editor")
     },
-    [applyInserts, backgroundUrl, canAddSticker],
+    [applyInserts, backgroundUrl, canAddSticker, fitToCut],
   )
 
   useEffect(() => {
@@ -1244,12 +1480,13 @@ export function VideoEditor() {
   const addElement = useCallback(
     (type: InsertType) => {
       const created = createInsert(type)
-      created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
       setActiveTab("editor")
     },
-    [applyInserts],
+    [applyInserts, fitToCut],
   )
 
   const changeInsert = useCallback(
@@ -1522,7 +1759,8 @@ export function VideoEditor() {
     (x: number, y: number) => {
       finishTextEdit("commit")
       const created = createInsert("texto-livre")
-      created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      fitToCut(created)
       created.x = x
       created.y = y
       created.text = DEFAULT_INLINE_TEXT
@@ -1534,7 +1772,7 @@ export function VideoEditor() {
       setSelection({ kind: "insert", id: created.id })
       setEditingTextId(created.id)
     },
-    [applyInserts, closeOpenGesture, finishTextEdit],
+    [applyInserts, closeOpenGesture, finishTextEdit, fitToCut],
   )
 
   const startNewProject = useCallback(() => {
@@ -1547,6 +1785,13 @@ export function VideoEditor() {
       URL.revokeObjectURL(url)
     }
     setStickerBlobUrls({})
+    for (const url of Object.values(audioUrlsRef.current)) URL.revokeObjectURL(url)
+    audioUrlsRef.current = {}
+    setAudioUrls({})
+    setAudioPeaks({})
+    setSourcePeaks([])
+    setMissingAudioIds([])
+    setSelectedAudioId(null)
     revokeObjectUrl()
     sourceBlobRef.current = null
     const next = newProjectComposition()
@@ -1674,6 +1919,7 @@ export function VideoEditor() {
         if (textEditRef.current && textEditRef.current.id !== next.id) {
           finishTextEditRef.current("commit")
         }
+        setSelectedAudioId(null)
         setSelection(insertSelection(next.id, next.ids ?? [next.id]))
         setPanelSelectionTick((tick) => tick + 1)
         if (activeTab !== "editor") setActiveTab("editor")
@@ -2187,14 +2433,16 @@ export function VideoEditor() {
   )
 
   const playable = isPlayableUrl(backgroundUrl)
-  const canExport = playable && composition.source.duration > 0
+  const canExport = playable && composition.source.duration > 0 && missingAudioIds.length === 0
   const exportDisabledReason = !hasPlayableSource(composition.source)
     ? "Carregue um vídeo para exportar."
     : !playable
       ? "Carregue um vídeo para exportar."
       : composition.source.duration <= 0
         ? "Aguarde o vídeo carregar"
-        : null
+        : missingAudioIds.length > 0
+          ? "Falta um arquivo de áudio. Reenvie a faixa."
+          : null
 
   const handleInterruptMacRender = useCallback(async () => {
     setLiveMessage("Interrompendo o render no Mac…")
@@ -2228,6 +2476,7 @@ export function VideoEditor() {
         const chosenName = sanitizeCapcutFileName(stemName)
         setExportFileName(sanitizeExportStem(stemName))
         setLiveMessage("")
+        const audios = await loadRenderAudios(composition)
         finalExportTask.start({
           video: videoBlob,
           props: toCliRenderProps(
@@ -2238,11 +2487,13 @@ export function VideoEditor() {
               }),
               videoSrc: "",
               stickerSrcs: stickerBlobUrls,
+              audioSrcs: audioUrls,
               watermarkPrefs,
             }),
           ),
           fileName: chosenName,
           saveToCapcut: true,
+          audios,
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : "Falha ao exportar"
@@ -2250,7 +2501,7 @@ export function VideoEditor() {
         setLiveMessage(`Falha ao exportar: ${message}`)
       }
     },
-    [backgroundUrl, composition, stickerBlobUrls, watermarkPrefs],
+    [audioUrls, backgroundUrl, composition, loadRenderAudios, stickerBlobUrls, watermarkPrefs],
   )
 
   const exportHookVariations = useCallback(async (input: { hooks: string[]; varyText: boolean; varyRecipes: boolean }) => {
@@ -2313,11 +2564,13 @@ export function VideoEditor() {
                   }),
                   videoSrc: "",
                   stickerSrcs: stickerBlobUrls,
-                  watermark: watermarkPaintInput(next.watermarkEnabled, watermarkPrefs),
+                  audioSrcs: audioUrls,
+                  watermarkPrefs,
                 }),
               ),
               fileName: item.fileName,
               saveToCapcut,
+              audios: await loadRenderAudios(next),
             })
             await watchJobUntilDone({
               jobId,
@@ -2328,7 +2581,19 @@ export function VideoEditor() {
         })),
         onUpdate: setHookJobs,
       })
-      const manifest = hookVariationManifest(stem, hooks, extras)
+      const mix = compositionRef.current.audio ?? defaultCompositionAudio()
+      const manifest = hookVariationManifest(stem, hooks, extras, {
+        summary: audioSummary(mix),
+        tracks: tracksForRender(mix).map((track) => ({
+          kind: track.kind,
+          name: track.fileName,
+          start: track.start,
+          trimIn: track.trimIn,
+          trimOut: track.trimOut,
+          volume: track.volume,
+          loop: track.loop,
+        })),
+      })
       const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const link = document.createElement("a")
@@ -2345,7 +2610,7 @@ export function VideoEditor() {
     } finally {
       setHookRunning(false)
     }
-  }, [backgroundUrl, exportFileName, hookDialogId, hookRunning, saveToCapcut, stickerBlobUrls, watermarkPrefs])
+  }, [audioUrls, backgroundUrl, exportFileName, hookDialogId, hookRunning, loadRenderAudios, saveToCapcut, stickerBlobUrls, watermarkPrefs])
 
   const handleExport = useCallback(async () => {
     if (finalExport.running) {
@@ -2386,6 +2651,7 @@ export function VideoEditor() {
         onProgress: (progress) => setDraftProgress(draftEncodeProgress(progress.ratio)),
         stickerBlobUrls,
         watermark: watermarkPaintInput(composition.watermarkEnabled, watermarkPrefs),
+        audioUrls,
       })
       setDraftPhase("saving")
       setDraftProgress(0.98)
@@ -2449,6 +2715,7 @@ export function VideoEditor() {
     exportFileName,
     finalExport.running,
     saveToCapcut,
+    audioUrls,
     stickerBlobUrls,
     watermarkPrefs,
   ])
@@ -2516,6 +2783,25 @@ export function VideoEditor() {
           }),
         ),
         ...emptyVariableWarnings(composition.inserts, composition.productData),
+        ...(() => {
+          const late = insertsPastEnd(composition.inserts, resolveTrimWindow(composition.source).end)
+          return late.length
+            ? [{
+                id: "insert-past-end",
+                code: "insert-past-end" as const,
+                insertIds: late.map((insert) => insert.id),
+                title: "Insert passa do fim do vídeo",
+              }]
+            : []
+        })(),
+        ...collectAudioWarnings({
+          audio: composition.audio ?? defaultCompositionAudio(),
+          videoDuration: composition.source.duration,
+          missingTrackIds: missingAudioIds,
+          saveToCapcut,
+          importing: audioImporting,
+          fps: composition.output.fps,
+        }),
       ],
     [
       composition.brand.fontId,
@@ -2524,9 +2810,15 @@ export function VideoEditor() {
       composition.captionStyle,
       composition.inserts,
       composition.source.duration,
+      composition.source.trim,
       composition.productData,
       composition.styleRef,
       composition.tracks,
+      composition.audio,
+      composition.output.fps,
+      missingAudioIds,
+      saveToCapcut,
+      audioImporting,
     ],
   )
 
@@ -2591,7 +2883,32 @@ export function VideoEditor() {
       }))
     },
     onSelectInsert: (id) => {
+      const audioHit = (compositionRef.current.audio?.tracks ?? []).some((track) => track.id === id)
+      if (audioHit) {
+        setSelectedAudioId(id)
+        setActiveTab("editor")
+        return
+      }
       if (insertIdOf(selection) !== id) toggleInsert(id)
+    },
+    onFitInserts: () => {
+      const end = resolveTrimWindow(compositionRef.current.source).end
+      const late = new Set(insertsPastEnd(compositionRef.current.inserts, end).map((insert) => insert.id))
+      if (late.size === 0) return
+      applyInserts(
+        (inserts) =>
+          inserts.map((insert) => {
+            if (!late.has(insert.id)) return insert
+            const timing = fitReadyWindow(insert.start, insert.duration, end)
+            return { ...insert, start: timing.start, duration: timing.duration }
+          }),
+        "discrete",
+      )
+    },
+    onReplaceAudio: (trackId) => {
+      setSelectedAudioId(trackId)
+      setActiveTab("editor")
+      setSelection(null)
     },
   }
 
@@ -2606,6 +2923,8 @@ export function VideoEditor() {
     error: finalExportError,
     fileName: exportFileName,
   })
+  const audioPhrase = audioExportPhrase(composition.audio ?? defaultCompositionAudio())
+  const captionVoice = (composition.audio?.tracks ?? []).find((track) => track.kind === "voice" && !track.muted)
   const pendingExportNote = editingTextId
     ? "Há um texto em edição. Ele entra no vídeo só se for aplicado."
     : null
@@ -2642,6 +2961,7 @@ export function VideoEditor() {
             sourceWidth={composition.source.width}
             sourceHeight={composition.source.height}
             webmWarning={webmWarning}
+            audioPhrase={audioPhrase}
             warnings={exportWarnings}
           />
         }
@@ -2659,6 +2979,7 @@ export function VideoEditor() {
       exportProgress,
       exportSpec,
       exportStatus,
+      audioPhrase,
       exportWarnings,
       exporting,
       finalExport.canRetry,
@@ -2703,6 +3024,7 @@ export function VideoEditor() {
       sourceWidth={composition.source.width}
       sourceHeight={composition.source.height}
       webmWarning={webmWarning}
+      audioPhrase={audioPhrase}
       warnings={exportWarnings}
     />
   )
@@ -2867,6 +3189,7 @@ export function VideoEditor() {
 
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-clip lg:grid-cols-[minmax(340px,30%)_1fr] lg:grid-rows-1">
         {activeTab === "editor" ? (
+          <PanelErrorBoundary variant="panel">
           <ControlPanel
             videoExport={videoExport}
             source={composition.source}
@@ -2879,6 +3202,7 @@ export function VideoEditor() {
             burnedInWarning={burnedInWarning}
             inserts={composition.inserts}
             videoDuration={composition.source.duration}
+            videoUrl={backgroundUrl}
             missingFile={missingFile}
             exporting={exporting}
             exportProgress={exportProgress}
@@ -2996,8 +3320,21 @@ export function VideoEditor() {
             watermarkPrefs={watermarkPrefs}
             onWatermarkEnabledChange={handleWatermarkEnabled}
             onWatermarkPrefsChange={handleWatermarkPrefs}
+            compositionAudio={composition.audio ?? defaultCompositionAudio()}
+            audioUrls={audioUrls}
+            missingAudioIds={missingAudioIds}
+            selectedAudioId={selectedAudioId}
+            onChangeAudio={changeAudio}
+            onCommitAudioFile={(input) => commitAudioFile(input)}
+            onAudioImportingChange={setAudioImporting}
+            captionVoice={
+              captionVoice ? { start: captionVoice.start, trimIn: captionVoice.trimIn } : null
+            }
+            loadCaptionVoice={loadCaptionVoice}
           />
+          </PanelErrorBoundary>
         ) : activeTab === "library" ? (
+          <PanelErrorBoundary variant="panel">
           <LibraryPanel
             fontId={composition.brand.fontId}
             onAddLibrarySticker={addLibrarySticker}
@@ -3011,8 +3348,9 @@ export function VideoEditor() {
               const created = createInsert(type)
               created.start = nextInsertStart(
                 playheadRef.current,
-                compositionRef.current.source.duration,
+                resolveTrimWindow(compositionRef.current.source).end,
               )
+              fitToCut(created)
               if (point) {
                 created.x = Math.min(100, Math.max(0, Math.round(point.x * 10) / 10))
                 created.y = Math.min(100, Math.max(0, Math.round(point.y * 10) / 10))
@@ -3046,7 +3384,9 @@ export function VideoEditor() {
               changeInsert(selectedInsertId, { fontFamily: fontId })
             }}
           />
+          </PanelErrorBoundary>
         ) : (
+          <PanelErrorBoundary variant="panel">
           <BatchPanel
             backgroundUrl={backgroundUrl}
             fileName={fileName}
@@ -3062,9 +3402,11 @@ export function VideoEditor() {
               }))
             }
             customPresets={composition.customPresets}
+            audio={composition.audio}
             tracks={composition.tracks}
             styleRef={composition.styleRef}
           />
+          </PanelErrorBoundary>
         )}
         <PreviewPanel
           ref={previewRef}
@@ -3080,7 +3422,8 @@ export function VideoEditor() {
           onCancelComboPreview={cancelComboPreview}
           onDropElement={(type, x, y) => {
             const created = createInsert(type)
-            created.start = nextInsertStart(playheadRef.current, compositionRef.current.source.duration)
+            created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+            fitToCut(created)
             created.x = Math.min(100, Math.max(0, Math.round(x * 10) / 10))
             created.y = Math.min(100, Math.max(0, Math.round(y * 10) / 10))
             applyInserts((inserts) => [...inserts, created], "discrete")
@@ -3099,6 +3442,17 @@ export function VideoEditor() {
           fontId={composition.brand.fontId}
           stickerBlobUrls={stickerBlobUrls}
           watermark={watermarkPaint}
+          audio={composition.audio ?? defaultCompositionAudio()}
+          audioUrls={audioUrls}
+          audioPeaks={audioPeaks}
+          sourcePeaks={sourcePeaks}
+          selectedAudioId={selectedAudioId}
+          onSelectAudio={(id) => {
+            setSelectedAudioId(id)
+            setSelection(null)
+            setActiveTab("editor")
+          }}
+          onAudioEdit={editAudioTrack}
           logoSrc={composition.brand.logo}
           captionPreset={composition.captionPreset}
           captionStyle={composition.captionStyle}

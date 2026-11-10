@@ -7,6 +7,8 @@ import { resolveStyle } from "../style/resolve-style.ts"
 import type { InsertStyle, StyleLayer } from "../style/types.ts"
 import { isTextPresetId } from "../text-presets/catalog.ts"
 import { resolvedTextInsertForPlay } from "./draw-insert-style.ts"
+import { brandKitOf } from "../brand/kits.ts"
+import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { canvasFontFamily } from "./fonts.ts"
 import { canvasShadow } from "./insert-style.ts"
 import type { TextLayout } from "./layout-text.ts"
@@ -30,6 +32,7 @@ export type InlineEditorCss = {
   WebkitTextStroke?: string
   paintOrder?: string
   textShadow?: string
+  accentColor?: string
 }
 
 export type InlineEditorPlacement = {
@@ -117,8 +120,12 @@ export function inlineEditorCss(input: {
   painted: InsertStyle | null
   brandFontId: string
   scale: number
+  brandKitId?: string
 }): InlineEditorCss {
-  const { laidOut, layout, painted, brandFontId, scale } = input
+  const { laidOut, layout, brandFontId, scale } = input
+  const painted = input.painted
+    ? resolveStyleColors(input.painted, brandKitOf(input.brandKitId))
+    : null
   const layer = resolveLayerStyle(laidOut, brandFontId)
   const size = layout.effectiveFontSize
   const maxWidth = ((layer.maxWidthPct / 100) * PLAY_W) * scale
@@ -137,6 +144,7 @@ export function inlineEditorCss(input: {
       textAlign: text.textAlign,
       color: visibleColor(text.color),
       caretColor: "#38bdf8",
+      accentColor: text.accent || text.highlight.color || "#FFD400",
       maxWidth,
       padding: "0px",
       borderRadius: "0px",

@@ -561,6 +561,7 @@ export type InsertPaintContext = {
   productData?: ProductData
   brandKitId?: string
   editPreview?: boolean
+  trimStart?: number
 }
 
 export function drawResolvedInsertText(
@@ -606,6 +607,7 @@ export function drawResolvedInsertText(
             start: insert.start,
             duration: insert.duration,
             seed: insert.id,
+            trimStart: paintContext?.trimStart ?? 0,
           },
     })
     ctx.restore()

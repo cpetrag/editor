@@ -39,6 +39,7 @@ import { ExportCompareLayer, type ExportCompareMode } from "@/components/export-
 import { OverlayCanvas } from "@/components/overlay-canvas"
 import { SourceZoomSlider } from "@/components/source-zoom-slider"
 import { PreviewPlayer, type PreviewPlayerHandle } from "@/components/preview-player"
+import { PanelErrorBoundary } from "@/components/panel-error-boundary"
 import { EditorTimeline } from "@/components/editor-timeline"
 import { clipMotionMarks, moveEmphasis } from "@/lib/motion/select"
 import { resolveStyleForEditor } from "@/lib/style/editor-style"
@@ -91,6 +92,7 @@ import {
   type SourceTrim,
 } from "@/lib/source-trim"
 import type { WatermarkPaint } from "@/lib/watermark"
+import { defaultCompositionAudio, type AudioTrack, type CompositionAudio } from "@/lib/audio/types"
 import { scrollIntoPanelViewport } from "@/lib/scroll-panel"
 
 /** Uma linha da barra de estilo: size-7 (28) + py-1.5 (12) + borda (2) + folga. */
@@ -130,6 +132,13 @@ interface PreviewPanelProps {
   tracks?: Partial<Record<TrackId, TrackStyle>>
   customPresets?: Composition["customPresets"]
   watermark?: WatermarkPaint | null
+  audio?: CompositionAudio
+  audioUrls?: Record<string, string>
+  audioPeaks?: Record<string, number[]>
+  sourcePeaks?: number[]
+  selectedAudioId?: string | null
+  onSelectAudio?: (id: string) => void
+  onAudioEdit?: (id: string, patch: Partial<AudioTrack>, phase: "start" | "move" | "end") => void
   onPlayheadChange?: (time: number) => void
   onSelect?: (selection: PreviewSelection) => void
   onPatchInsert?: (id: string, patch: Partial<Insert>) => void
@@ -209,6 +218,13 @@ export const PreviewPanel = memo(
       tracks,
       customPresets,
       watermark,
+      audio,
+      audioUrls = {},
+      audioPeaks = {},
+      sourcePeaks = [],
+      selectedAudioId = null,
+      onSelectAudio,
+      onAudioEdit,
       onPlayheadChange,
       onSelect,
       onPatchInsert,
@@ -380,6 +396,14 @@ export const PreviewPanel = memo(
       captionPreset,
       captionStyle: captionStyle ?? DEFAULT_CAPTION_STYLE,
       stickerSrcs: stickerBlobUrls,
+      audio: {
+        original: (audio ?? defaultCompositionAudio()).original,
+        ducking: (audio ?? defaultCompositionAudio()).ducking,
+        tracks: (audio ?? defaultCompositionAudio()).tracks.map((track) => ({
+          ...track,
+          src: audioUrls[track.fileId] ?? "",
+        })),
+      },
       ...(styleRef ? { styleRef } : {}),
       ...(tracks ? { tracks } : {}),
       ...(customPresets ? { customPresets } : {}),
@@ -397,6 +421,8 @@ export const PreviewPanel = memo(
       sourceHeight,
       sourceTransform,
       sourceWidth,
+      audio,
+      audioUrls,
       stickerBlobUrls,
       styleRef,
       totalDuration,
@@ -491,7 +517,8 @@ export const PreviewPanel = memo(
         onPatchInsert?.(drag.id, next)
         return
       }
-      const proposed = moveInsertTiming(drag.base, time - drag.grabOffset, totalDuration)
+      const limit = trimWindowRef.current.end > 0 ? trimWindowRef.current.end : totalDuration
+      const proposed = moveInsertTiming(drag.base, time - drag.grabOffset, limit)
       const moved = moveTimelineGroup({
         items: drag.items,
         selectedIds: drag.groupIds,
@@ -1107,12 +1134,17 @@ export const PreviewPanel = memo(
           />
 
           {!videoError ? (
-            <PreviewPlayer
-              ref={playerRef}
-              renderProps={renderProps}
-              onFrame={onPlayerFrame}
-              onPlayingChange={onPlayerPlayingChange}
-            />
+            <PanelErrorBoundary
+              variant="preview"
+              resetKey={renderProps.audio?.tracks.map((track) => `${track.id}:${track.trimIn}:${track.trimOut}:${track.duration}`).join("|") ?? ""}
+            >
+              <PreviewPlayer
+                ref={playerRef}
+                renderProps={renderProps}
+                onFrame={onPlayerFrame}
+                onPlayingChange={onPlayerPlayingChange}
+              />
+            </PanelErrorBoundary>
           ) : null}
 
           {playableUrl ? (
@@ -1199,6 +1231,7 @@ export const PreviewPanel = memo(
             brandKitId={brandKitId}
             project={styleRef ? { styleRef } : {}}
             videoDuration={totalDuration}
+            trimStart={trimWindow.start}
             customPresets={customPresets ? Object.values(customPresets) : undefined}
             onSelect={onSelect}
             onPatchInsert={onPatchInsert}
@@ -1491,6 +1524,15 @@ export const PreviewPanel = memo(
               activeSegmentIndex={activeSegmentIndex}
               sourceCuts={sourceCuts}
               onRemoveSourceCut={onRemoveSourceCut}
+              audioTracks={audio?.tracks ?? []}
+              audioPeaks={audioPeaks}
+              sourcePeaks={sourcePeaks}
+              sourceAudioDim={
+                (audio?.original.muted ?? false) || (audio?.original.volume ?? 1) < 0.2
+              }
+              selectedAudioId={selectedAudioId}
+              onSelectAudio={onSelectAudio}
+              onAudioEdit={onAudioEdit}
               trimWindow={trimWindow}
               hasTrim={Boolean(activeTrim)}
               canDragTrim={Boolean(onChangeTrim)}

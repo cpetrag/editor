@@ -14,6 +14,19 @@ import { getPresetStyle } from "@/lib/style/presets"
 
 const BACKDROP_TOP = "#6b5646"
 const BACKDROP_BOTTOM = "#2a211b"
+const backdropImages = new Map<string, HTMLImageElement>()
+
+function backdropImage(src: string | null | undefined): HTMLImageElement | null {
+  if (!src) return null
+  const cached = backdropImages.get(src)
+  if (cached?.complete && cached.naturalWidth > 0) return cached
+  if (!cached) {
+    const image = new Image()
+    image.src = src
+    backdropImages.set(src, image)
+  }
+  return null
+}
 
 export function PaintedInsertThumb({
   text,
@@ -25,6 +38,7 @@ export function PaintedInsertThumb({
   paintScale,
   maxTextWidth,
   aspect = "16/10",
+  backdrop,
 }: {
   text: string
   styleId: string
@@ -37,12 +51,27 @@ export function PaintedInsertThumb({
   paintScale?: number
   maxTextWidth?: number
   aspect?: "16/10" | "4/3"
+  backdrop?: string | null
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [hover, setHover] = useState(false)
   const [visible, setVisible] = useState(false)
   const [reduced, setReduced] = useState(false)
   const [ownWidth, setOwnWidth] = useState(0)
+  const [photoTick, setPhotoTick] = useState(0)
+
+  useEffect(() => {
+    if (!backdrop) return
+    const image = backdropImages.get(backdrop) ?? new Image()
+    if (!backdropImages.has(backdrop)) {
+      image.src = backdrop
+      backdropImages.set(backdrop, image)
+    }
+    if (image.complete && image.naturalWidth > 0) return
+    const done = () => setPhotoTick((tick) => tick + 1)
+    image.addEventListener("load", done)
+    return () => image.removeEventListener("load", done)
+  }, [backdrop])
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -105,11 +134,13 @@ export function PaintedInsertThumb({
       const ctx = node.getContext("2d")
       if (!ctx) return
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const backdrop = ctx.createLinearGradient(0, 0, cssW, cssH)
-      backdrop.addColorStop(0, BACKDROP_TOP)
-      backdrop.addColorStop(1, BACKDROP_BOTTOM)
-      ctx.fillStyle = backdrop
+      const wash = ctx.createLinearGradient(0, 0, cssW, cssH)
+      wash.addColorStop(0, BACKDROP_TOP)
+      wash.addColorStop(1, BACKDROP_BOTTOM)
+      ctx.fillStyle = wash
       ctx.fillRect(0, 0, cssW, cssH)
+      const photo = backdropImage(backdrop)
+      if (photo) ctx.drawImage(photo, 0, 0, cssW, cssH)
       const filled = fillVars(text, productData).text || " "
       const resolved = scalePaintStyle(
         resolveStyleColors({ ...base, animation, text: { ...base.text } }, brandKitOf(kitId)),
@@ -147,7 +178,7 @@ export function PaintedInsertThumb({
       cancelled = true
       cancelAnimationFrame(raf)
     }
-  }, [animate, kitId, maxTextWidth, packId, paintScale, playing, productData, scale, styleId, text, textWidth])
+  }, [animate, backdrop, kitId, maxTextWidth, packId, paintScale, photoTick, playing, productData, scale, styleId, text, textWidth])
 
   return (
     <canvas

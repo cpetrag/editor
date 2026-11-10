@@ -8,6 +8,7 @@ import {
   type Composition,
   type CompositionInsert,
 } from "./composition.ts"
+import { defaultCompositionAudio } from "./audio/types.ts"
 import {
   collectExportWarnings,
   checklistItemsFromComposition,
@@ -249,6 +250,7 @@ function sampleComposition(inserts: CompositionInsert[]): Composition {
     },
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
+    audio: defaultCompositionAudio(),
   }
 }
 

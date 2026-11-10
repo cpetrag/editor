@@ -22,6 +22,7 @@ import {
   type Composition,
   type CompositionInsert,
 } from "./composition.ts"
+import { defaultCompositionAudio } from "./audio/types.ts"
 
 function sampleInsert(patch: Partial<CompositionInsert> = {}): CompositionInsert {
   return {
@@ -60,6 +61,7 @@ function sampleComposition(patch: Partial<Composition> = {}): Composition {
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
     ...patch,
+    audio: patch.audio ?? defaultCompositionAudio(),
   }
 }
 

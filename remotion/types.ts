@@ -17,6 +17,8 @@ import {
   type WatermarkPaint,
   type WatermarkPrefs,
 } from "../lib/watermark.ts"
+import { shiftAudioToTrim } from "../lib/audio/place.ts"
+import { defaultCompositionAudio, type AudioTrack, type CompositionAudio } from "../lib/audio/types.ts"
 
 export type RenderInsert = CompositionInsert & {
   text: string
@@ -24,6 +26,14 @@ export type RenderInsert = CompositionInsert & {
   endInSeconds: number
   style: Record<string, unknown>
   words?: CaptionWord[]
+}
+
+export type RenderAudioTrack = AudioTrack & { src: string }
+
+export type RenderAudio = {
+  original: CompositionAudio["original"]
+  tracks: RenderAudioTrack[]
+  ducking: CompositionAudio["ducking"]
 }
 
 export type RenderProps = {
@@ -40,7 +50,7 @@ export type RenderProps = {
     /** Trechos com zoom próprio, em segundos do arquivo original. */
     cuts?: Composition["source"]["cuts"]
   }
-  audio?: { src: string; volume: number }
+  audio?: RenderAudio
   fps: number
   width: number
   height: number
@@ -119,10 +129,21 @@ export function toCliRenderProps(props: RenderProps): RenderProps {
       stickerSrcs[id] = src
     }
   }
+  const audio = props.audio
+    ? {
+        ...props.audio,
+        tracks: props.audio.tracks.map((track) => ({
+          ...track,
+          src:
+            isRenderSafeVideoSrc(track.src) && !track.src.startsWith("/api/") ? track.src : "",
+        })),
+      }
+    : undefined
   return {
     ...props,
     video: { ...props.video, src: videoSrc },
     stickerSrcs,
+    ...(audio ? { audio } : {}),
   }
 }
 
@@ -130,7 +151,8 @@ export function toRenderProps(input: {
   composition: Composition
   videoSrc: string
   stickerSrcs?: Record<string, string>
-  audio?: { src: string; volume: number }
+  /** fileId → URL que o preview ou o renderer consegue ler. */
+  audioSrcs?: Record<string, string>
   watermarkPrefs?: WatermarkPrefs
 }): RenderProps {
   const { composition, videoSrc } = input
@@ -139,6 +161,19 @@ export function toRenderProps(input: {
     normalizeWatermarkPrefs(input.watermarkPrefs ?? {}),
   )
   const trimWindow = resolveTrimWindow(composition.source)
+  const mix = shiftAudioToTrim(
+    composition.audio ?? defaultCompositionAudio(),
+    trimWindow.start,
+    trimWindow.duration,
+  )
+  const audio: RenderAudio = {
+    original: mix.original,
+    ducking: mix.ducking,
+    tracks: mix.tracks.map((track) => ({
+      ...track,
+      src: input.audioSrcs?.[track.fileId] ?? "",
+    })),
+  }
   return {
     video: {
       src: videoSrc,
@@ -156,7 +191,7 @@ export function toRenderProps(input: {
         ? { cuts: composition.source.cuts }
         : {}),
     },
-    ...(input.audio ? { audio: input.audio } : {}),
+    audio,
     fps: composition.output.fps || composition.source.fps || DEFAULT_FPS,
     width: composition.output.width || DEFAULT_WIDTH,
     height: composition.output.height || DEFAULT_HEIGHT,

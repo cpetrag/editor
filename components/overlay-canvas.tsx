@@ -246,6 +246,7 @@ export function OverlayCanvas({
   productData,
   brandKitId,
   videoDuration = 0,
+  trimStart = 0,
   customPresets,
   watermark,
   onSelect,
@@ -281,6 +282,7 @@ export function OverlayCanvas({
   productData?: import("@/lib/content/runs").ProductData
   brandKitId?: string
   videoDuration?: number
+  trimStart?: number
   customPresets?: UserPreset[]
   watermark?: WatermarkPaint | null
   /** When false, only hit-testing/selection run — Remotion paints the inserts. */
@@ -447,6 +449,7 @@ export function OverlayCanvas({
         }),
         ...(watermark?.text ? ["geist"] : []),
       ])
+      if (document.fonts?.ready) await document.fonts.ready
       if (cancelled) return
       const ctx = canvas.getContext("2d")
       if (!ctx) return
@@ -468,7 +471,7 @@ export function OverlayCanvas({
           },
           captionPreset,
           captionStyle,
-          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId },
+          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId, trimStart },
           watermark ?? null,
         )
       }
@@ -643,6 +646,7 @@ export function OverlayCanvas({
         painted,
         brandFontId: fontId,
         scale: metrics.displayScale,
+        brandKitId,
       }),
       placement: inlineEditorPlacement(layout, metrics, hostBox),
     }

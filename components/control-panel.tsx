@@ -10,7 +10,10 @@ import { AppVersionBadge } from "@/components/app-version-badge"
 import { BackgroundSourceCard, WatermarkFields } from "@/components/background-source-card"
 import { InsertCard } from "@/components/insert-card"
 import { CaptionLineList } from "@/components/caption-line-list"
+import { AudioPanel } from "@/components/audio-panel"
 import { BlockToolbar, CollapsibleBlock, PanelSwitch } from "@/components/collapsible-block"
+import { audioSummary } from "@/lib/audio/summary"
+import { defaultCompositionAudio, type AudioKind, type CompositionAudio } from "@/lib/audio/types"
 import { PanelOverflowMenu } from "@/components/panel-overflow-menu"
 import { StyleCustomizePanel } from "@/components/style-customize-panel"
 import { InsertsGallery } from "@/components/inserts-gallery"
@@ -68,6 +71,7 @@ interface ControlPanelProps {
   burnedInWarning: boolean
   inserts: Insert[]
   videoDuration: number
+  videoUrl?: string
   missingFile: boolean
   exporting: boolean
   exportProgress: number
@@ -133,6 +137,8 @@ interface ControlPanelProps {
   presetLibrary?: PresetLibraryHandlers
   canGenerateCaptions: boolean
   onGenerateCaptions: (lines: CaptionLine[], warnings: string[]) => void
+  captionVoice?: { start: number; trimIn: number } | null
+  loadCaptionVoice?: () => Promise<File | null>
   onBeginInsertGesture?: () => void
   onEndInsertGesture?: () => void
   sourceSelected?: boolean
@@ -142,6 +148,21 @@ interface ControlPanelProps {
   watermarkPrefs: WatermarkPrefs
   onWatermarkEnabledChange?: (enabled: boolean) => void
   onWatermarkPrefsChange?: (prefs: WatermarkPrefs) => void
+  compositionAudio?: CompositionAudio
+  audioUrls?: Record<string, string>
+  missingAudioIds?: readonly string[]
+  selectedAudioId?: string | null
+  onChangeAudio?: (audio: CompositionAudio, mode: "discrete" | "gesture") => void
+  onCommitAudioFile?: (input: {
+    file: File
+    duration: number
+    kind: AudioKind
+    replaceTrackId?: string
+    history?: "discrete" | "gesture"
+    muteOriginal?: boolean
+    peaks?: number[]
+  }) => void | Promise<void>
+  onAudioImportingChange?: (importing: boolean) => void
   getPlayhead?: () => number
   onPlayRange?: (start: number, end: number) => void
   retentionCuts?: { ganchoEnd: number; ctaStart: number } | null
@@ -165,6 +186,7 @@ export function ControlPanel({
   burnedInWarning,
   inserts,
   videoDuration,
+  videoUrl,
   missingFile,
   exporting,
   exportProgress,
@@ -228,6 +250,8 @@ export function ControlPanel({
   presetLibrary,
   canGenerateCaptions,
   onGenerateCaptions,
+  captionVoice = null,
+  loadCaptionVoice,
   onBeginInsertGesture,
   onEndInsertGesture,
   sourceSelected = false,
@@ -237,6 +261,13 @@ export function ControlPanel({
   watermarkPrefs = DEFAULT_WATERMARK_PREFS,
   onWatermarkEnabledChange,
   onWatermarkPrefsChange,
+  compositionAudio,
+  audioUrls = {},
+  missingAudioIds = [],
+  selectedAudioId = null,
+  onChangeAudio,
+  onCommitAudioFile,
+  onAudioImportingChange,
   getPlayhead,
   onPlayRange,
   retentionCuts,
@@ -297,6 +328,12 @@ export function ControlPanel({
   const [tab, setTab] = usePanelTab()
   const [captionSub, setCaptionSub] = useState<"text" | "style" | "motion">("text")
   const videoBlocks = usePanelBlocks("video", VIDEO_BLOCK_IDS)
+  const mix = compositionAudio ?? defaultCompositionAudio()
+
+  useEffect(() => {
+    if (!selectedAudioId) return
+    setTab("video")
+  }, [selectedAudioId, setTab])
   const captionStyleBlocks = usePanelBlocks("captions-style", CAPTION_STYLE_BLOCK_IDS)
   const captionMotionBlocks = usePanelBlocks("captions-motion", MOTION_BLOCK_IDS)
   const insertStyleBlocks = usePanelBlocks("inserts-style", INSERT_STYLE_BLOCK_IDS)
@@ -310,6 +347,16 @@ export function ControlPanel({
   }, [panelSelectionTick, selectedId, setTab])
 
   const visibleTab: PanelTabId = hasSource ? tab : "video"
+  const [audioImporting, setAudioImporting] = useState(false)
+  const audioLeaveTold = useRef(false)
+  const audioCardOpen = (videoBlocks.isOpen("audio") || Boolean(selectedAudioId)) && visibleTab === "video"
+  useEffect(() => {
+    if (audioImporting && !audioCardOpen && !audioLeaveTold.current) {
+      audioLeaveTold.current = true
+      onAiStatus("Áudio não adicionado")
+    }
+    if (!audioImporting) audioLeaveTold.current = false
+  }, [audioCardOpen, audioImporting, onAiStatus])
   const selectedCaption =
     inserts.find((insert) => insert.id === selectedId && insertKind(insert) === "caption") ?? null
   const showSourceBlocks = hasSource && !replacingSource && importState.status === "idle"
@@ -596,6 +643,29 @@ export function ControlPanel({
                   >
                     <WatermarkFields prefs={watermarkPrefs} onPrefsChange={onWatermarkPrefsChange} />
                   </CollapsibleBlock>
+                  <CollapsibleBlock
+                    title="Áudio"
+                    summary={audioSummary(mix)}
+                    open={videoBlocks.isOpen("audio") || Boolean(selectedAudioId)}
+                    onToggle={() => videoBlocks.toggle("audio")}
+                  >
+                    <AudioPanel
+                      audio={mix}
+                      videoDuration={videoDuration}
+                      audioUrls={audioUrls}
+                      missingTrackIds={missingAudioIds}
+                      selectedTrackId={selectedAudioId}
+                      onChange={(next, mode) => onChangeAudio?.(next, mode)}
+                      onBeginGesture={onBeginInsertGesture}
+                      onEndGesture={onEndInsertGesture}
+                      onCommitFile={(input) => onCommitAudioFile?.(input)}
+                      onImportingChange={(importing) => {
+                        setAudioImporting(importing)
+                        onAudioImportingChange?.(importing)
+                      }}
+                      onStatus={onAiStatus}
+                    />
+                  </CollapsibleBlock>
                   <details className="rounded-md border border-border px-3 py-2">
                     <summary className="cursor-pointer text-xs font-medium text-foreground">Dados do produto</summary>
                     <div className="mt-2">
@@ -620,6 +690,8 @@ export function ControlPanel({
                 loadMedia={loadAiMedia}
                 onGenerate={onGenerateCaptions}
                 onStatus={onAiStatus}
+                voiceTrack={captionVoice}
+                loadVoice={loadCaptionVoice}
               />
               <CaptionLineList inserts={inserts} selectedId={selectedId} onReveal={onRevealCaption} />
             </>
@@ -782,6 +854,7 @@ export function ControlPanel({
               ) : (
                 <InsertsGallery
                   videoDuration={videoDuration}
+                  videoUrl={videoUrl}
                   niche={niche}
                   productData={productData}
                   brandKitId={brandKitId}

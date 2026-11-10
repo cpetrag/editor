@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { Scissors } from "lucide-react"
 
+import { AudioWaveform } from "@/components/audio-waveform"
 import { TimelineClipBar } from "@/components/timeline-clip"
+import { slicePeaks } from "@/lib/audio/peaks"
+import { moveAudioTrack, trackOutputRange, trimAudioInEdge, trimAudioOutEdge, usableLength } from "@/lib/audio/range"
+import type { AudioTrack } from "@/lib/audio/types"
 import { formatTime, type Insert } from "@/lib/inserts"
 import { retentionZones, type RetentionCuts } from "@/lib/insert-ops"
 import { sourceZoomPercent } from "@/lib/source-transform"
 import type { SourceCut, listSourceSegments } from "@/lib/source-segments"
 import { clientXToTime, type TimelineHandle } from "@/lib/timeline-clip"
 import {
+  TIMELINE_AUDIO_LANE_HEIGHT,
   TIMELINE_CLIP_HEIGHT,
   TIMELINE_ZOOM_MIN,
   clipShowsLabel,
@@ -23,6 +28,7 @@ import {
   idsTouchingRect,
   marqueeSelection,
   selectableItems,
+  snapToleranceSeconds,
   type PxRect,
 } from "@/lib/timeline-selection"
 import type { ClipMotionMarks } from "@/lib/motion/select"
@@ -66,6 +72,13 @@ export interface EditorTimelineProps {
   onClipPointerDown: (event: React.PointerEvent, insert: Insert, handle: TimelineHandle) => void
   selectedIds?: readonly string[]
   snapGuideTime?: number | null
+  audioTracks?: readonly AudioTrack[]
+  audioPeaks?: Record<string, number[]>
+  sourcePeaks?: number[]
+  sourceAudioDim?: boolean
+  selectedAudioId?: string | null
+  onSelectAudio?: (id: string) => void
+  onAudioEdit?: (id: string, patch: Partial<AudioTrack>, phase: "start" | "move" | "end") => void
   onChangeSelection?: (ids: string[], primaryId: string | null) => void
   onSelectionCommand?: (
     command: "duplicate" | "delete" | "align" | "track",
@@ -103,6 +116,13 @@ export function EditorTimeline({
   onClipPointerDown,
   selectedIds,
   snapGuideTime = null,
+  audioTracks = [],
+  audioPeaks = {},
+  sourcePeaks = [],
+  sourceAudioDim = false,
+  selectedAudioId = null,
+  onSelectAudio,
+  onAudioEdit,
   onChangeSelection,
   onSelectionCommand,
   motionById,
@@ -127,7 +147,15 @@ export function EditorTimeline({
   zoomRef.current = zoom
   const [viewportWidth, setViewportWidth] = useState(0)
 
-  const layout = useMemo(() => layoutTimelineTracks(inserts), [inserts])
+  const audioDragRef = useRef<{
+    handle: "move" | "in" | "out"
+    origin: number
+    track: AudioTrack
+  } | null>(null)
+  const layout = useMemo(
+    () => layoutTimelineTracks(inserts, audioTracks.map((track) => track.id)),
+    [audioTracks, inserts],
+  )
   const zones = useMemo(
     () => (showRetention && totalDuration > 0 ? retentionZones(totalDuration, retentionCuts) : []),
     [retentionCuts, showRetention, totalDuration],
@@ -340,12 +368,68 @@ export function EditorTimeline({
   }, [contextMenu])
 
   const segmentsTrack = layout.tracks.find((track) => track.id === "segments")
+  const audioKindColor: Record<AudioTrack["kind"], string> = {
+    music: "#34d399",
+    voice: "#fbbf24",
+    sfx: "#c4b5fd",
+  }
+  function snapAudioTime(time: number): number {
+    const tolerance = snapToleranceSeconds(contentWidth, totalDuration)
+    if (!(tolerance > 0)) return time
+    const targets = [currentTime, 0, totalDuration]
+    for (const segment of segments) targets.push(segment.start, segment.end)
+    if (retentionCuts) targets.push(retentionCuts.ganchoEnd, retentionCuts.ctaStart)
+    let best = time
+    let bestDist = tolerance
+    for (const target of targets) {
+      const dist = Math.abs(target - time)
+      if (dist <= bestDist) {
+        best = target
+        bestDist = dist
+      }
+    }
+    return best
+  }
+  function onAudioPointerDown(event: React.PointerEvent, track: AudioTrack, handle: "move" | "in" | "out") {
+    if (event.button !== 0 || exporting) return
+    event.preventDefault()
+    event.stopPropagation()
+    onSelectAudio?.(track.id)
+    const rect = contentRef.current?.getBoundingClientRect()
+    if (!rect) return
+    audioDragRef.current = {
+      handle,
+      origin: clientXToTime(event.clientX, rect, totalDuration),
+      track,
+    }
+    onAudioEdit?.(track.id, {}, "start")
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  function onAudioPointerMove(event: React.PointerEvent) {
+    const drag = audioDragRef.current
+    const rect = contentRef.current?.getBoundingClientRect()
+    if (!drag || !rect) return
+    const time = snapAudioTime(clientXToTime(event.clientX, rect, totalDuration))
+    const next =
+      drag.handle === "in"
+        ? trimAudioInEdge(drag.track, time, totalDuration)
+        : drag.handle === "out"
+          ? trimAudioOutEdge(drag.track, time, totalDuration)
+          : moveAudioTrack(drag.track, drag.track.start + (time - drag.origin), totalDuration)
+    onAudioEdit?.(drag.track.id, { start: next.start, trimIn: next.trimIn, trimOut: next.trimOut }, "move")
+  }
+  function onAudioPointerUp() {
+    const drag = audioDragRef.current
+    if (!drag) return
+    audioDragRef.current = null
+    onAudioEdit?.(drag.track.id, {}, "end")
+  }
   const tracksHeight = layout.height
   const selectedIdList = selectedIds ?? (selectedInsertId ? [selectedInsertId] : [])
   const singleSelection = selectedIdList.length === 1
 
   return (
-    <div data-editor-timeline className="flex max-h-[34vh] min-h-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-background/40">
+    <div data-editor-timeline className="flex max-h-[34vh] min-h-0 items-start overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-background/40">
       {/* nomes das trilhas */}
       <div className="sticky left-0 z-30 w-20 shrink-0 border-r border-border bg-card" aria-hidden>
         <div style={{ height: rulerHeight }} className="border-b border-border" />
@@ -362,7 +446,7 @@ export function EditorTimeline({
         </div>
       </div>
 
-      <div ref={viewportRef} className="relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden">
+      <div ref={viewportRef} className="relative min-w-0 flex-1 self-start overflow-x-auto">
         <div
           ref={contentRef}
           className="relative cursor-pointer touch-none select-none overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
@@ -442,6 +526,22 @@ export function EditorTimeline({
               ))}
 
               {/* trechos do vídeo, com o zoom de cada um */}
+              {segmentsTrack && sourcePeaks.length > 0 ? (
+                <div
+                  className="pointer-events-none absolute overflow-hidden"
+                  style={{
+                    left: 0,
+                    width: "100%",
+                    top: segmentsTrack.top + 2,
+                    height: segmentsTrack.height - 4,
+                    opacity: sourceAudioDim ? 0.35 : 0.85,
+                  }}
+                  aria-hidden
+                >
+                  <AudioWaveform peaks={sourcePeaks} color="#d4d4d8" dim={sourceAudioDim} />
+                </div>
+              ) : null}
+
               {segmentsTrack
                 ? segments.map((segment) => {
                     const widthPx = (pct(segment.end - segment.start) / 100) * contentWidth
@@ -493,6 +593,72 @@ export function EditorTimeline({
                     </button>
                   ))
                 : null}
+
+              {audioTracks.map((track) => {
+                const range = trackOutputRange(track, totalDuration)
+                const cycle = usableLength(track)
+                const selected = track.id === selectedAudioId
+                const peaks = slicePeaks(audioPeaks[track.fileId] ?? [], track.duration, track.trimIn, track.trimOut)
+                const color = audioKindColor[track.kind]
+                const top = (layout.clipTops.get(track.id) ?? 0) + 1
+                const height = TIMELINE_AUDIO_LANE_HEIGHT - 2
+                const repeats: { start: number; end: number }[] = []
+                if (track.loop && cycle > 0.05) {
+                  for (let at = track.start + cycle; at < totalDuration - 0.05; at += cycle) {
+                    repeats.push({ start: at, end: Math.min(totalDuration, at + cycle) })
+                  }
+                }
+                const blockStyle = (start: number, end: number) => ({
+                  left: start <= 0 ? 0 : `${pct(start)}%`,
+                  width: `${Math.max(pct(end - start), 0.4)}%`,
+                  top,
+                  height,
+                })
+                return (
+                  <div key={track.id}>
+                    {repeats.map((repeat) => (
+                      <div
+                        key={`${track.id}-${repeat.start}`}
+                        className="pointer-events-none absolute overflow-hidden opacity-40"
+                        style={{ ...blockStyle(repeat.start, repeat.end), backgroundColor: color }}
+                        aria-hidden
+                      />
+                    ))}
+                    <div
+                      className={cn(
+                        "absolute flex items-center overflow-hidden",
+                        range.start > 0 ? "rounded-[3px]" : "rounded-r-[3px]",
+                        selected && "z-[12] outline outline-1 outline-white",
+                      )}
+                      style={{ ...blockStyle(range.start, range.end), backgroundColor: color }}
+                      onPointerDown={(event) => onAudioPointerDown(event, track, "move")}
+                      onPointerMove={onAudioPointerMove}
+                      onPointerUp={onAudioPointerUp}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onSelectAudio?.(track.id)
+                      }}
+                    >
+                      <AudioWaveform peaks={peaks} color="rgba(0,0,0,0.55)" />
+                      <span className="relative z-10 mx-1 min-w-0 truncate rounded-sm bg-white/90 px-1 font-mono text-[0.6rem] leading-none text-zinc-950">
+                        {track.fileName}
+                      </span>
+                      {selected ? (
+                        <>
+                          <span
+                            className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-zinc-950/50"
+                            onPointerDown={(event) => onAudioPointerDown(event, track, "in")}
+                          />
+                          <span
+                            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-zinc-950/50"
+                            onPointerDown={(event) => onAudioPointerDown(event, track, "out")}
+                          />
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
 
               {inserts.map((insert) => {
                 const widthPct = pct(insert.duration)

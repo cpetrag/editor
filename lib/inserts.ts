@@ -23,6 +23,7 @@ import {
   type StickerSourceKind,
 } from "./composition.ts"
 import { getElementPreset } from "./elements/catalog.ts"
+import { FONT_MAP } from "./fonts.ts"
 import { offsetDuplicatePercents } from "./canvas/keys.ts"
 import {
   applyTextPreset,

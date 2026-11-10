@@ -40,13 +40,24 @@ import {
   clampAbsoluteCaptionWords,
   toAbsoluteCaptionWords,
 } from "./caption-time.ts"
+import { clampTrack } from "./audio/range.ts"
+import {
+  AUDIO_VOLUME_MAX,
+  MAX_AUDIO_TRACKS,
+  MAX_VOICE_TRACKS,
+  defaultCompositionAudio,
+  isAudioKind,
+  type AudioTrack,
+  type CompositionAudio,
+} from "./audio/types.ts"
 
-export const COMPOSITION_VERSION = 6 as const
+export const COMPOSITION_VERSION = 7 as const
 export const LEGACY_COMPOSITION_VERSION = 1 as const
 export const COMPOSITION_VERSION_V2 = 2 as const
 export const PREVIOUS_COMPOSITION_VERSION = 3 as const
 export const COMPOSITION_VERSION_V4 = 4 as const
 export const COMPOSITION_VERSION_V5 = 5 as const
+export const COMPOSITION_VERSION_V6 = 6 as const
 export const MIN_DURATION = 0.5
 export const DEFAULT_FPS = 30
 export const DEFAULT_WIDTH = 1080
@@ -322,6 +333,7 @@ export interface Composition {
   niche?: ContentNiche
   brandKitId?: BrandKitId
   projectSeed?: string
+  audio: CompositionAudio
 }
 
 const INSERT_TYPES: readonly InsertType[] = [
@@ -566,11 +578,45 @@ export function mergeInsertPatch(
   return next
 }
 
+function clampCompositionAudio(audio: CompositionAudio | undefined, duration: number): CompositionAudio {
+  const source = audio ?? defaultCompositionAudio()
+  const limit = duration > 0 ? duration : 0
+  const tracks: AudioTrack[] = []
+  let voices = 0
+  for (const track of source.tracks) {
+    if (tracks.length >= MAX_AUDIO_TRACKS) break
+    if (track.kind === "voice") {
+      if (voices >= MAX_VOICE_TRACKS) continue
+      voices += 1
+    }
+    tracks.push(clampTrack(track, limit))
+  }
+  const volume = asNumber(source.original?.volume)
+  const amount = asNumber(source.ducking?.amount)
+  const fade = asNumber(source.ducking?.fade)
+  return {
+    original: {
+      volume: clamp(volume ?? 1, 0, AUDIO_VOLUME_MAX),
+      muted: source.original?.muted === true,
+    },
+    tracks,
+    ducking: {
+      enabled: source.ducking?.enabled !== false,
+      amount: clamp(amount ?? 0.65, 0, 1),
+      fade: Math.max(0, fade ?? 0.25),
+    },
+  }
+}
+
 export function clampComposition(composition: Composition): Composition {
   const duration = composition.source.duration
-  if (!(duration > 0)) return composition
+  const audio = clampCompositionAudio(composition.audio, duration)
+  const audioSame = JSON.stringify(composition.audio) === JSON.stringify(audio)
+  const nextAudio = audioSame ? composition.audio : audio
+  if (!(duration > 0)) return audioSame ? composition : { ...composition, audio: nextAudio }
   return {
     ...composition,
+    audio: nextAudio,
     source: clampSourceCutsOf(clampSourceWithTrim(composition.source)),
     inserts: composition.inserts.map((insert) => clampInsert(insert, duration)),
   }
@@ -981,6 +1027,7 @@ function parseOutput(
 function isSupportedVersion(value: unknown): boolean {
   return (
     value === COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V6 ||
     value === COMPOSITION_VERSION_V5 ||
     value === COMPOSITION_VERSION_V4 ||
     value === PREVIOUS_COMPOSITION_VERSION ||
@@ -1040,7 +1087,7 @@ function parseRetention(raw: unknown): { ganchoEnd: number; ctaStart: number } |
  * usuário e a inclinação do preset soma na hora de pintar.
  */
 function migrateLayoutRotation(insert: CompositionInsert, version: number): CompositionInsert {
-  if (version >= COMPOSITION_VERSION) return insert
+  if (version >= COMPOSITION_VERSION_V6) return insert
   if (insert.kind === "caption" || insert.type === "legenda") return insert
   if (insert.kind !== "text" && insert.type !== "texto-livre") return insert
   const presetId = insert.styleRef?.presetId
@@ -1120,7 +1167,58 @@ export function parseComposition(input: unknown): Composition {
     ...(isContentNicheValue(input.niche) ? { niche: input.niche } : {}),
     ...(isBrandKitValue(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
     ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
+    audio: storedVersion >= COMPOSITION_VERSION ? parseAudio(input.audio, source.duration) : defaultCompositionAudio(),
   })
+}
+
+function parseAudio(raw: unknown, videoDuration: number): CompositionAudio {
+  if (!isRecord(raw)) return defaultCompositionAudio()
+  const original = isRecord(raw.original) ? raw.original : {}
+  const ducking = isRecord(raw.ducking) ? raw.ducking : {}
+  const tracks = Array.isArray(raw.tracks)
+    ? raw.tracks.flatMap((item) => {
+        const track = parseAudioTrack(item)
+        return track ? [track] : []
+      })
+    : []
+  return clampCompositionAudio(
+    {
+      original: {
+        volume: asNumber(original.volume) ?? 1,
+        muted: original.muted === true,
+      },
+      tracks,
+      ducking: {
+        enabled: ducking.enabled !== false,
+        amount: asNumber(ducking.amount) ?? 0.65,
+        fade: asNumber(ducking.fade) ?? 0.25,
+      },
+    },
+    videoDuration,
+  )
+}
+
+function parseAudioTrack(raw: unknown): AudioTrack | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.id !== "string" || !raw.id) return null
+  if (typeof raw.fileId !== "string" || !raw.fileId) return null
+  const duration = asNumber(raw.duration)
+  if (duration === null || duration < 0) return null
+  return {
+    id: raw.id,
+    kind: isAudioKind(raw.kind) ? raw.kind : "sfx",
+    fileId: raw.fileId,
+    fileName: typeof raw.fileName === "string" ? raw.fileName : "audio",
+    duration,
+    start: asNumber(raw.start) ?? 0,
+    trimIn: asNumber(raw.trimIn) ?? 0,
+    trimOut: asNumber(raw.trimOut) ?? duration,
+    volume: asNumber(raw.volume) ?? 1,
+    fadeIn: asNumber(raw.fadeIn) ?? 0,
+    fadeOut: asNumber(raw.fadeOut) ?? 0,
+    loop: raw.loop === true,
+    muted: raw.muted === true,
+  }
 }
 
 function serializeInsert(insert: CompositionInsert): CompositionInsert {
@@ -1259,6 +1357,7 @@ export function serializeComposition(composition: Composition): string {
     ...(composition.niche ? { niche: composition.niche } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
     ...(composition.projectSeed ? { projectSeed: composition.projectSeed } : {}),
+    audio: composition.audio ?? defaultCompositionAudio(),
   }
   return JSON.stringify(payload)
 }
@@ -1288,6 +1387,7 @@ export function createDefaultComposition(): Composition {
     captionPreset: DEFAULT_CAPTION_PRESET,
     captionStyle: DEFAULT_CAPTION_STYLE,
     tracks: { cta: { styleRef: DEFAULT_CTA_STYLE_REF } },
+    audio: defaultCompositionAudio(),
   }
 }
 

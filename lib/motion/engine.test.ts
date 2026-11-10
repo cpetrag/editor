@@ -9,7 +9,7 @@ import { LEGADO_STYLE, PRESETS } from "../style/presets.ts"
 import { planStyledTextDraw } from "../style/caption-draw.ts"
 import type { Animation } from "../style/types.ts"
 import { applyPack, EMPHASIS, ENTER, EXIT, LOOPS, PACKS } from "./catalog.ts"
-import { backgroundEnvelope, motionAt, unitStaggerIndex, type MotionSpec } from "./engine.ts"
+import { backgroundEnvelope, motionAt, stickerMotionAt, unitStaggerIndex, type MotionSpec } from "./engine.ts"
 import { springProgress, UNIT_EASINGS, ease } from "./easings.ts"
 import { hashSeed } from "./hash.ts"
 
@@ -165,6 +165,24 @@ test("intensidade 1 e velocidade 1 reproduzem a animação sem esses campos", ()
     motionAt(40, FPS, specOf(pulsing), 0, 1, 0),
     motionAt(40, FPS, specOf({ ...pulsing, intensity: 1, speed: 1 }), 0, 1, 0),
   )
+})
+
+test("Estouro escala a caixa e o texto juntos, e o frame 0 da capa já está pronto", () => {
+  const animation = applyPack(LEGADO_STYLE.animation, "estouro")
+  for (const time of [0, 0.1, 0.25, 0.4, 1]) {
+    const motion = stickerMotionAt({ time, fps: 30, duration: 3, animation })
+    assert.equal(motion.boxScale, motion.textScale)
+  }
+  const cover = stickerMotionAt({
+    time: 0,
+    fps: 30,
+    duration: 3,
+    animation,
+    entryFromFrame0: "final",
+  })
+  assert.equal(cover.boxScale, 1)
+  assert.equal(cover.textScale, 1)
+  assert.equal(cover.opacity, 1)
 })
 
 test("catálogo tem 22 entradas, 11 saídas, 13 loops, 5 ênfases e 10 pacotes", () => {

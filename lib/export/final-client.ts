@@ -1,4 +1,5 @@
 import type { RenderProps } from "../../remotion/types.ts"
+import { audioFormField, renderUploadError } from "../audio/upload.ts"
 import { capcutFromDownloadHeaders } from "./capcut-client.ts"
 import { sanitizeCapcutFileName } from "./capcut-path.ts"
 import {
@@ -83,10 +84,17 @@ export async function startFinalRender(input: {
   props: RenderProps
   fileName?: string
   saveToCapcut?: boolean
+  audios?: { id: string; blob: Blob; fileName: string }[]
   fetchImpl?: FetchImpl
   signal?: AbortSignal
 }): Promise<string> {
   const fetchImpl = input.fetchImpl ?? fetch
+  const audios = input.audios ?? []
+  const uploadError = renderUploadError(
+    input.video.size,
+    audios.map((item) => item.blob.size),
+  )
+  if (uploadError) throw new RenderExportError(uploadError, 413, false)
   const form = new FormData()
   form.set(
     "props",
@@ -94,6 +102,9 @@ export async function startFinalRender(input: {
     "props.json",
   )
   form.set("video", input.video, "video.mp4")
+  for (const audio of audios) {
+    form.set(audioFormField(audio.id), audio.blob, audio.fileName || "audio.mp3")
+  }
   if (input.saveToCapcut) {
     form.set("saveToCapcut", "1")
     form.set("fileName", input.fileName || "video.mp4")

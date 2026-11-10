@@ -39,6 +39,7 @@ export type FinalTaskStartInput = {
   props: RenderProps
   fileName: string
   saveToCapcut?: boolean
+  audios?: { id: string; blob: Blob; fileName: string }[]
   fetchImpl?: FetchImpl
   pollDelayMs?: number
   requestTimeoutMs?: number
@@ -252,6 +253,7 @@ export function createFinalExportTask(options: {
           props: input.props,
           fileName: input.fileName,
           saveToCapcut: input.saveToCapcut,
+          audios: input.audios,
           fetchImpl,
           signal: uploadAbort.signal,
         })

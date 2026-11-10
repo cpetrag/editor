@@ -62,16 +62,17 @@ export function fitReadyWindow(
   const tenth = (value: number) => Math.floor(Math.max(0, value) * 10) / 10
   const length = duration > 0 ? duration : READY_DURATION
   if (!(videoDuration > 0)) return { start: tenth(start), duration: length }
-  let nextStart = tenth(Math.min(start, videoDuration))
-  if (nextStart + length <= videoDuration + frame) return { start: nextStart, duration: length }
+  const nextStart = tenth(Math.min(Math.max(0, start), videoDuration))
   const remaining = videoDuration - nextStart
-  if (remaining >= 1.5) {
-    const cut = tenth(remaining)
-    return { start: nextStart, duration: cut > 0 ? cut : remaining }
+  if (remaining + frame < 1) {
+    const fitted = Math.min(1.5, videoDuration)
+    const backed = tenth(Math.max(0, videoDuration - fitted))
+    const span = tenth(videoDuration - backed)
+    return { start: backed, duration: span > 0 ? span : fitted }
   }
-  nextStart = tenth(Math.max(0, videoDuration - length))
   if (nextStart + length <= videoDuration + frame) return { start: nextStart, duration: length }
-  return { start: 0, duration: Math.max(0.1, tenth(videoDuration) || videoDuration) }
+  const cut = tenth(remaining)
+  return { start: nextStart, duration: cut > 0 ? cut : remaining }
 }
 
 export function markerAtTime(
@@ -468,6 +469,17 @@ export function thumbGridMetrics(
   const cardWidth = gridWidth > 0 ? (gridWidth - gap * (columns - 1)) / columns : 0
   const scale = cardWidth > 0 ? (cardWidth / 1080) * (mode === "estilos" ? 1.6 : 1.45) : 0
   return { columns, gap, cardWidth, scale, maxTextWidth: cardWidth * 0.9 }
+}
+
+export function insertsPastEnd(
+  inserts: CompositionInsert[],
+  end: number,
+  fps = 30,
+): CompositionInsert[] {
+  if (!(end > 0)) return []
+  return inserts.filter(
+    (insert) => insert.kind !== "caption" && passesVideoEnd(insert.start, insert.duration, end, fps),
+  )
 }
 
 export function passesVideoEnd(start: number, duration: number, videoDuration: number, fps = 30): boolean {

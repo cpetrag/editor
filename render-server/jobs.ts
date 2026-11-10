@@ -8,12 +8,14 @@ export type JobStatus = "rendering" | "done" | "error"
 export type JobPaths = {
   inputPath: string
   outputPath: string
+  audioDir: string
 }
 
 export function jobPaths(tmpDir: string, jobId: string): JobPaths {
   return {
     inputPath: path.join(tmpDir, `${jobId}-in.mp4`),
     outputPath: path.join(tmpDir, `${jobId}.mp4`),
+    audioDir: path.join(tmpDir, `${jobId}-audio`),
   }
 }
 
@@ -29,6 +31,7 @@ export function isExpired(
 export async function cleanupJobFiles(paths: JobPaths): Promise<void> {
   await rm(paths.inputPath, { force: true })
   await rm(paths.outputPath, { force: true })
+  if (paths.audioDir) await rm(paths.audioDir, { recursive: true, force: true })
 }
 
 export async function resetTmpDir(tmpDir: string): Promise<void> {

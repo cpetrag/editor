@@ -8,6 +8,7 @@ import {
   type Composition,
   type CompositionInsert,
 } from "../lib/composition.ts"
+import { defaultCompositionAudio } from "../lib/audio/types.ts"
 import {
   calculateShortMetadata,
   defaultRenderProps,
@@ -56,6 +57,7 @@ function sampleComposition(patch: Partial<Composition> = {}): Composition {
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
     ...patch,
+    audio: patch.audio ?? defaultCompositionAudio(),
   }
 }
 

@@ -134,6 +134,8 @@ export type Animation = {
   speed?: number
   packId?: string
   clipDir?: "esq" | "dir" | "cima" | "baixo"
+  /** `final`: o frame 0 do insert já sai legível (capa). `play`: a entrada começa do zero. */
+  entryFromFrame0?: "final" | "play"
 }
 
 export type InsertStyle = { text: TextStyle; animation: Animation }

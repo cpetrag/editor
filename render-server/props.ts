@@ -69,6 +69,24 @@ export function mediaUrlForJob(origin: string, jobId: string): string {
   return `${origin.replace(/\/$/, "")}/media/${jobId}`
 }
 
+export function mediaUrlForAudio(origin: string, jobId: string, trackId: string): string {
+  return `${mediaUrlForJob(origin, jobId)}/${encodeURIComponent(trackId)}`
+}
+
+/** Troca o src das faixas pelo endereço http do arquivo salvo no job. Faixa sem arquivo sai do render. */
+export function applyUploadedAudio(
+  props: RenderProps,
+  audioSrcById: Record<string, string>,
+): RenderProps {
+  if (!props.audio) return props
+  const tracks = props.audio.tracks.flatMap((track) => {
+    const src = audioSrcById[track.id]
+    if (!src) return []
+    return [{ ...track, src }]
+  })
+  return { ...props, audio: { ...props.audio, tracks } }
+}
+
 export function applyUploadedVideo(
   props: RenderProps,
   videoSrc: string | null,

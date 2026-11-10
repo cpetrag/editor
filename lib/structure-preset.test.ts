@@ -21,6 +21,12 @@ test("hookVariationFiles and manifest name g1 g2 g3", () => {
       { file: "calca-flare_g3.mp4", hook: "Terceiro" },
     ],
   })
+  const withAudio = hookVariationManifest("Calça Flare", ["Um"], undefined, {
+    summary: "original mudo · música",
+    tracks: [{ kind: "music", name: "trilha.mp3", start: 0, trimIn: 0, trimOut: 12, volume: 0.4, loop: true }],
+  })
+  assert.equal(withAudio.audio?.summary, "original mudo · música")
+  assert.equal(withAudio.audio?.tracks[0]?.name, "trilha.mp3")
 })
 
 test("runHookVariationQueue continues after a failed job", async () => {

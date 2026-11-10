@@ -53,6 +53,15 @@ export type ExportWarningCode =
   | "contrast-bare"
   | "contrast-low"
   | "empty-var"
+  | "audio-silent"
+  | "audio-cut"
+  | "audio-clip"
+  | "audio-gap"
+  | "audio-missing"
+  | "audio-pending"
+  | "audio-capcut"
+  | "audio-trim"
+  | "insert-past-end"
 
 export type ExportWarning = {
   id: string

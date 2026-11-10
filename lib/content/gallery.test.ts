@@ -15,12 +15,13 @@ import {
   wrapMarkup,
 } from "./gallery.ts"
 
-test("encaixa 3s no playhead e recua quando sobra menos de 1,5s", () => {
+test("encaixa 3s no playhead e recua quando sobra menos de 1s", () => {
   assert.deepEqual(fitReadyWindow(4, 3, 20), { start: 4, duration: 3 })
   assert.deepEqual(fitReadyWindow(18.2, 3, 20), { start: 18.2, duration: 1.8 })
+  assert.deepEqual(fitReadyWindow(12.7, 2.1, 14.2), { start: 12.7, duration: 1.5 })
   const backed = fitReadyWindow(19.2, 3, 20)
-  assert.equal(backed.start + backed.duration <= 20 + 1 / 30, true)
-  assert.ok(backed.start < 19.2)
+  assert.equal(backed.start, 18.5)
+  assert.equal(backed.duration, 1.5)
 })
 
 test("relógio com décimo e vírgula", () => {

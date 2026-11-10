@@ -23,6 +23,7 @@ import {
   parseComposition,
   serializeComposition,
 } from "../composition.ts"
+import { defaultCompositionAudio } from "../audio/types.ts"
 
 function sampleUser(patch: Partial<UserPreset> = {}): UserPreset {
   return createUserPreset({
@@ -225,6 +226,7 @@ test("composição serializa customPresets e reabre o estilo", () => {
     captionPreset: "viral",
     captionStyle: DEFAULT_CAPTION_STYLE,
     customPresets: { [mine.id]: mine },
+    audio: defaultCompositionAudio(),
   })
   const loaded = parseComposition(JSON.parse(json) as unknown)
   assert.equal(loaded.customPresets?.[mine.id]?.style.text.fontSize, 92)

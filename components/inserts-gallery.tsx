@@ -24,9 +24,10 @@ import {
   thumbGridMetrics,
   type ReadySpec,
 } from "@/lib/content/gallery"
-import { fillVars, PRODUCT_FIELDS, type ProductData } from "@/lib/content/runs"
+import { fillVars, type ProductData } from "@/lib/content/runs"
 import type { RetentionCuts } from "@/lib/insert-ops"
 import type { InsertType, Template } from "@/lib/inserts"
+import { brandKitOf } from "@/lib/brand/kits"
 import { listOfferPresets } from "@/lib/style/offer-styles"
 import { isFreshOfferStyle, markStyleUsed, readUsedStyles } from "@/lib/style/fresh-styles"
 import { cn } from "@/lib/utils"
@@ -53,11 +54,67 @@ const SLOT_LABEL: Record<ContentSlot, string> = {
   cta: "CTA",
 }
 
-const SHOWING: Record<ContentSlot, string> = {
-  gancho: "ganchos",
-  prova: "provas",
-  oferta: "ofertas",
-  cta: "CTAs",
+const CONTEXT_KEY = "editor.inserts-context.v1"
+const frameCache = new Map<string, string>()
+
+function readContextOpen(): boolean {
+  try {
+    return localStorage.getItem(CONTEXT_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function usePlayheadFrame(url: string | undefined, time: number): string | null {
+  const [src, setSrc] = useState<string | null>(null)
+  useEffect(() => {
+    if (!url) {
+      setSrc(null)
+      return
+    }
+    const key = `${url}|${time.toFixed(1)}`
+    const cached = frameCache.get(key)
+    if (cached) {
+      setSrc(cached)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      const video = document.createElement("video")
+      video.crossOrigin = "anonymous"
+      video.muted = true
+      video.preload = "auto"
+      video.src = url
+      const finish = () => {
+        if (cancelled) return
+        const canvas = document.createElement("canvas")
+        canvas.width = 180
+        canvas.height = 320
+        const ctx = canvas.getContext("2d")
+        if (!ctx || !(video.videoWidth > 0)) return
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        try {
+          const data = canvas.toDataURL("image/jpeg", 0.72)
+          frameCache.set(key, data)
+          setSrc(data)
+        } catch (error) {
+          console.error("[editor] não foi possível copiar o frame do vídeo", error)
+        }
+      }
+      video.onloadeddata = () => {
+        const next = Number.isFinite(video.duration) ? Math.min(time, Math.max(0, video.duration - 0.05)) : time
+        if (Math.abs(video.currentTime - next) < 0.05) finish()
+        else video.currentTime = next
+      }
+      video.onseeked = finish
+      video.onerror = () => console.error("[editor] falha ao ler o frame da miniatura")
+    }, 300)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [time, url])
+  return src
 }
 
 export function InsertsGallery({
@@ -66,6 +123,7 @@ export function InsertsGallery({
   productData,
   brandKitId,
   retentionCuts,
+  videoUrl,
   getPlayhead,
   activeTemplateId,
   loadAiMedia,
@@ -84,6 +142,7 @@ export function InsertsGallery({
   productData?: ProductData
   brandKitId: string
   retentionCuts?: RetentionCuts | null
+  videoUrl?: string
   getPlayhead?: () => number
   activeTemplateId: string | null
   loadAiMedia: () => Promise<File | null>
@@ -100,7 +159,7 @@ export function InsertsGallery({
   const [query, setQuery] = useState("")
   const [slotPick, setSlotPick] = useState<ContentSlot | "todos" | null>(null)
   const [mode, setMode] = useState<"prontos" | "estilos">("prontos")
-  const [productOpen, setProductOpen] = useState(false)
+  const [productOpen, setProductOpen] = useState(readContextOpen)
   const [playhead, setPlayhead] = useState(0)
   const [gridWidth, setGridWidth] = useState(0)
   const [usedStyles, setUsedStyles] = useState<string[] | null>(null)
@@ -140,10 +199,19 @@ export function InsertsGallery({
   const recipes = galleryRecipes({ niche, slot, query, productData })
   const styles = galleryStyles(slot)
   const styleNames = new Map(listOfferPresets().map((preset) => [preset.id, preset.label]))
-  const missing = PRODUCT_FIELDS.filter((field) => !(productData?.[field] ?? "").trim())
   const summaryName = productData?.produto?.trim() || "Produto sem nome"
-  const summaryPrice = productData?.preco?.trim() || "sem preço"
-  const summaryNote = productData?.nota?.trim()
+  const nicheLabel = NICHES.find((item) => item.id === niche)?.label ?? "Geral"
+  const kitLabel = brandKitOf(brandKitId).label
+  const frame = usePlayheadFrame(videoUrl, playhead)
+  const priceGaps = recipes.filter((preset) => missingFieldLabels(preset.text, productData).includes("preço")).length
+  function setContextOpen(open: boolean) {
+    setProductOpen(open)
+    try {
+      localStorage.setItem(CONTEXT_KEY, open ? "1" : "0")
+    } catch (error) {
+      console.error("[editor] não foi possível gravar o painel de contexto", error)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -172,31 +240,27 @@ export function InsertsGallery({
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">
-        {slotPick == null ? (
-          <span>
-            Playhead na <b className="text-foreground">{SLOT_LABEL[marker.slot].toUpperCase()}</b>
-            {` (${formatRange(marker.from)}–${formatRange(marker.to)}) · mostrando ${SHOWING[marker.slot]}`}
-          </span>
-        ) : (
-          <>
-            <span>{slotPick === "todos" ? "Mostrando todos os momentos" : `Filtro escolhido: ${SLOT_LABEL[slotPick]}`}</span>
-            <Button type="button" variant="ghost" size="xs" onClick={() => setSlotPick(null)}>
-              Seguir o playhead
-            </Button>
-          </>
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-1" role="group" aria-label="Momento">
+      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Momento">
+        <button
+          type="button"
+          aria-pressed={slotPick == null}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
+            slotPick == null ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+          )}
+          onClick={() => setSlotPick(null)}
+        >
+          <span aria-hidden>{slotPick == null ? "●" : "○"}</span>
+          Seguir playhead
+        </button>
         {MOMENTS.map((item) => (
           <button
             key={item.id}
             type="button"
-            aria-pressed={slot === item.id}
+            aria-pressed={slotPick === item.id}
             className={cn(
               "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
-              slot === item.id ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+              slotPick === item.id ? "bg-foreground text-background" : "text-muted-foreground",
             )}
             onClick={() => setSlotPick(item.id)}
           >
@@ -206,46 +270,37 @@ export function InsertsGallery({
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          Nicho
-          <select
-            aria-label="Nicho"
-            className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-            value={niche}
-            onChange={(event) => onNiche?.(event.target.value as ContentNiche)}
-          >
-            {NICHES.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </select>
-        </label>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Cores</span>
-          <BrandKitPicker kitId={brandKitId} onChange={(id) => onBrandKit?.(id)} />
-        </div>
-      </div>
-
-      <div className="rounded-md border border-border px-2 py-1.5">
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <p className="min-w-0 truncate text-foreground">
-            <b>{summaryName}</b>
-            {` · ${summaryPrice}`}
-            {summaryNote ? ` · ⭐ ${summaryNote}` : ""}
-            {missing.length > 0 ? ` · falta: ${missing.map((field) => FIELD_LABEL[field].toLowerCase()).join(", ")}` : ""}
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-expanded={productOpen}
-            onClick={() => setProductOpen((open) => !open)}
-          >
-            {productOpen ? "Fechar" : "Editar dados"}
-          </Button>
-        </div>
+      <div className="rounded-md border border-border">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground"
+          aria-expanded={productOpen}
+          onClick={() => setContextOpen(!productOpen)}
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {nicheLabel} · {kitLabel} · {summaryName}
+          </span>
+          <span aria-hidden>{productOpen ? "▴" : "▾"}</span>
+        </button>
         {productOpen ? (
-          <div className="mt-2">
+          <div className="flex flex-col gap-2 border-t border-border px-2 py-2">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Nicho
+              <select
+                aria-label="Nicho"
+                className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                value={niche}
+                onChange={(event) => onNiche?.(event.target.value as ContentNiche)}
+              >
+                {NICHES.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Cores</span>
+              <BrandKitPicker kitId={brandKitId} onChange={(id) => onBrandKit?.(id)} />
+            </div>
             <ProductDataFields
               data={productData ?? {}}
               niche={niche}
@@ -258,6 +313,7 @@ export function InsertsGallery({
         ) : null}
       </div>
 
+      <div className="sticky top-0 z-10 flex flex-col gap-1 bg-background py-1">
       <div className="flex items-center justify-between gap-2">
         <div className="inline-flex rounded-md border border-border p-0.5" role="group" aria-label="Tipo da grade">
           {([
@@ -281,6 +337,12 @@ export function InsertsGallery({
         <span className="text-xs text-muted-foreground">
           {mode === "prontos" ? `${recipes.length} prontos` : `${styles.length} estilos`}
         </span>
+      </div>
+        {priceGaps > 0 ? (
+          <button type="button" className="text-left text-xs text-amber-800 dark:text-amber-200" onClick={() => setContextOpen(true)}>
+            {priceGaps} prontos precisam de preço — Editar dados
+          </button>
+        ) : null}
       </div>
 
       {mode === "prontos" && recipes.length === 0 ? (
@@ -322,6 +384,7 @@ export function InsertsGallery({
                           packId={MOMENT_PACK[moment]}
                           kitId={brandKitId}
                           productData={productData}
+                          backdrop={frame}
                           paintScale={metrics.scale}
                           maxTextWidth={metrics.maxTextWidth}
                           aspect="4/3"
@@ -377,6 +440,7 @@ export function InsertsGallery({
                           packId={preset.pack}
                           kitId={brandKitId}
                           productData={productData}
+                          backdrop={frame}
                           paintScale={thumbGridMetrics(gridWidth, "prontos").scale}
                           maxTextWidth={thumbGridMetrics(gridWidth, "prontos").maxTextWidth}
                         />
@@ -441,11 +505,4 @@ function colorOf(slot: ContentSlot): string {
   if (slot === "prova") return "var(--track-frete)"
   if (slot === "oferta") return "var(--track-preco)"
   return "var(--brand)"
-}
-
-function formatRange(seconds: number): string {
-  const safe = Math.max(0, seconds)
-  const minutes = Math.floor(safe / 60)
-  const whole = Math.floor(safe % 60)
-  return `${minutes}:${String(whole).padStart(2, "0")}`
 }

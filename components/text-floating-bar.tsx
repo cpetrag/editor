@@ -15,6 +15,7 @@ import {
   Type,
 } from "lucide-react"
 
+import { TOGGLE_INLINE_ACCENT } from "@/components/text-inline-editor"
 import { TEXT_PRESETS, type TextPresetId } from "@/lib/text-presets"
 import { FONT_OPTIONS } from "@/lib/fonts"
 import type { OverlayTextAlign } from "@/lib/composition"
@@ -193,6 +194,20 @@ export function TextFloatingBar({
         </button>
       ),
     })),
+    {
+      key: "accent",
+      node: (
+        <button
+          type="button"
+          title="Destacar"
+          aria-label="Destacar"
+          onClick={() => window.dispatchEvent(new Event(TOGGLE_INLINE_ACCENT))}
+          className="flex size-7 items-center justify-center rounded-full bg-white/5 text-[0.7rem] font-black text-amber-300 hover:bg-white/10"
+        >
+          B
+        </button>
+      ),
+    },
     {
       key: "color",
       node: (

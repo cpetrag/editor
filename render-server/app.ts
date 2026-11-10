@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import path from "node:path"
 import {
   createServer,
   type IncomingMessage,
@@ -23,7 +24,10 @@ import {
 } from "./jobs.ts"
 import { createMutex } from "./mutex.ts"
 import { createProgressHub, type ProgressEvent } from "./progress.ts"
-import { applyUploadedVideo, mediaUrlForJob, parseRenderProps } from "./props.ts"
+import { MAX_AUDIO_FILE_BYTES, MAX_RENDER_UPLOAD_BYTES } from "../lib/audio/types.ts"
+import { audioFormField } from "../lib/audio/upload.ts"
+import { capcutAudioPlan } from "../lib/export/capcut-audio.ts"
+import { applyUploadedAudio, applyUploadedVideo, mediaUrlForAudio, mediaUrlForJob, parseRenderProps } from "./props.ts"
 
 export type RenderEngine = {
   bundle: () => Promise<{ serveUrl: string; version: string }>
@@ -84,10 +88,7 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
     const now = options.now()
     for (const job of [...jobs.values()]) {
       if (!isExpired(job, now, options.ttlMs)) continue
-      await cleanupJobFiles({
-        inputPath: job.inputPath ?? jobPaths(options.tmpDir, job.id).inputPath,
-        outputPath: job.outputPath,
-      })
+      await cleanupJobFiles(filesForJob(options.tmpDir, job))
       jobs.delete(job.id)
       hub.drop(job.id)
     }
@@ -169,9 +170,14 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       return
     }
 
-    const mediaMatch = /^\/media\/([^/]+)$/.exec(requestUrl.pathname)
+    const mediaMatch = /^\/media\/([^/]+)(?:\/([^/]+))?$/.exec(requestUrl.pathname)
     if ((method === "GET" || method === "HEAD") && mediaMatch) {
-      await handleMedia(res, decodeURIComponent(mediaMatch[1] ?? ""), method === "HEAD")
+      await handleMedia(
+        res,
+        decodeURIComponent(mediaMatch[1] ?? ""),
+        mediaMatch[2] ? decodeURIComponent(mediaMatch[2]) : null,
+        method === "HEAD",
+      )
       return
     }
 
@@ -215,9 +221,33 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       const paths = jobPaths(options.tmpDir, jobId)
       let inputPath: string | null = null
       const video = form.get("video")
+      const videoBytes = isUploadedFile(video) ? video.size : 0
+      const audioUploads = await readAudioUploads(form, props)
+      const audioBytes = audioUploads.reduce((sum, item) => sum + item.file.size, 0)
+      if (audioUploads.some((item) => item.file.size > MAX_AUDIO_FILE_BYTES)) {
+        mutex.release()
+        sendJson(res, 413, { error: "Cada áudio pode ter no máximo 50 MB." })
+        return
+      }
+      if (videoBytes + audioBytes > MAX_RENDER_UPLOAD_BYTES) {
+        mutex.release()
+        sendJson(res, 413, {
+          error: "O envio passa de 200 MB (vídeo + áudios). Remova uma faixa ou use um arquivo menor.",
+        })
+        return
+      }
       if (isUploadedFile(video) && video.size > 0) {
         await writeFile(paths.inputPath, Buffer.from(await video.arrayBuffer()))
         inputPath = paths.inputPath
+      }
+      const audioSrcById: Record<string, string> = {}
+      if (audioUploads.length > 0) {
+        await mkdir(paths.audioDir, { recursive: true })
+        for (const item of audioUploads) {
+          const dest = pathJoinAudio(paths.audioDir, item.id)
+          await writeFile(dest, Buffer.from(await item.file.arrayBuffer()))
+          audioSrcById[item.id] = mediaUrlForAudio(url, jobId, item.id)
+        }
       }
 
       const job: Job = {
@@ -236,7 +266,10 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       sendJson(res, 202, { jobId })
       void runJob(
         job,
-        applyUploadedVideo(props, inputPath ? mediaUrlForJob(url, jobId) : null),
+        applyUploadedAudio(
+          applyUploadedVideo(props, inputPath ? mediaUrlForJob(url, jobId) : null),
+          audioSrcById,
+        ),
         controller,
       )
     } catch (error) {
@@ -280,10 +313,13 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       })
       if (job.saveToCapcut && options.capcutDir) {
         try {
+          const extraFiles = await readCapcutAudioFiles(options.tmpDir, job.id, inputProps)
           const copied = await copyExportToCapcut({
             destDir: options.capcutDir,
             fileName: job.exportFileName,
             sourcePath: job.outputPath,
+            extraFiles,
+            audioPlan: capcutAudioPlan(inputProps.audio),
           })
           job.capcutFileName = copied.fileName
         } catch (error) {
@@ -385,24 +421,32 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
   async function handleMedia(
     res: ServerResponse,
     jobId: string,
+    audioId: string | null,
     headOnly: boolean,
   ): Promise<void> {
     const job = jobs.get(jobId)
-    if (!job?.inputPath) {
+    if (!job) {
+      sendJson(res, 404, { error: "vídeo de entrada não encontrado" })
+      return
+    }
+    const filePath = audioId
+      ? audioFilePath(jobPaths(options.tmpDir, jobId).audioDir, audioId)
+      : job.inputPath
+    if (!filePath) {
       sendJson(res, 404, { error: "vídeo de entrada não encontrado" })
       return
     }
 
     let size = 0
     try {
-      size = (await stat(job.inputPath)).size
+      size = (await stat(filePath)).size
     } catch {
-      sendJson(res, 404, { error: "vídeo de entrada não encontrado" })
+      sendJson(res, 404, { error: audioId ? "áudio não encontrado" : "vídeo de entrada não encontrado" })
       return
     }
 
     res.writeHead(200, {
-      "Content-Type": "video/mp4",
+      "Content-Type": audioId ? "audio/mpeg" : "video/mp4",
       "Content-Length": size,
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",
@@ -412,7 +456,7 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       res.end()
       return
     }
-    await pipeline(createReadStream(job.inputPath), res)
+    await pipeline(createReadStream(filePath), res)
   }
 
   async function handleDownload(res: ServerResponse, jobId: string): Promise<void> {
@@ -452,10 +496,7 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
     try {
       await pipeline(createReadStream(job.outputPath), res)
     } finally {
-      await cleanupJobFiles({
-        inputPath: job.inputPath ?? jobPaths(options.tmpDir, job.id).inputPath,
-        outputPath: job.outputPath,
-      })
+      await cleanupJobFiles(filesForJob(options.tmpDir, job))
       jobs.delete(jobId)
       hub.drop(jobId)
     }
@@ -529,6 +570,74 @@ async function readPropsField(form: FormData): Promise<string | null> {
   if (typeof value === "string") return value
   if (isUploadedFile(value)) return value.text()
   return null
+}
+
+function filesForJob(
+  tmpDir: string,
+  job: { id: string; inputPath: string | null; outputPath: string },
+) {
+  const paths = jobPaths(tmpDir, job.id)
+  return {
+    ...paths,
+    inputPath: job.inputPath ?? paths.inputPath,
+    outputPath: job.outputPath,
+  }
+}
+
+function safeAudioId(id: string): string | null {
+  return /^[a-zA-Z0-9_-]{1,80}$/.test(id) ? id : null
+}
+
+function audioFilePath(audioDir: string, id: string): string | null {
+  const safe = safeAudioId(id)
+  if (!safe) return null
+  const dest = path.join(audioDir, `${safe}.audio`)
+  if (!dest.startsWith(audioDir)) return null
+  return dest
+}
+
+function pathJoinAudio(audioDir: string, id: string): string {
+  const dest = audioFilePath(audioDir, id)
+  if (!dest) throw new Error("id de áudio inválido")
+  return dest
+}
+
+function readAudioUploads(
+  form: FormData,
+  props: RenderProps,
+): { id: string; file: File }[] {
+  const uploads: { id: string; file: File }[] = []
+  for (const track of props.audio?.tracks ?? []) {
+    if (track.muted || !(track.volume > 0)) continue
+    if (!safeAudioId(track.id)) continue
+    const value = form.get(audioFormField(track.id))
+    if (!isUploadedFile(value) || value.size <= 0) continue
+    uploads.push({ id: track.id, file: value })
+  }
+  return uploads
+}
+
+async function readCapcutAudioFiles(
+  tmpDir: string,
+  jobId: string,
+  props: RenderProps,
+): Promise<{ fileName: string; bytes: Uint8Array }[]> {
+  const audioDir = jobPaths(tmpDir, jobId).audioDir
+  const files: { fileName: string; bytes: Uint8Array }[] = []
+  for (const track of props.audio?.tracks ?? []) {
+    const filePath = audioFilePath(audioDir, track.id)
+    if (!filePath) continue
+    try {
+      const bytes = await readFile(filePath)
+      files.push({
+        fileName: track.fileName || `${track.id}.mp3`,
+        bytes: new Uint8Array(bytes),
+      })
+    } catch {
+      /* faixa sem arquivo no disco */
+    }
+  }
+  return files
 }
 
 function isUploadedFile(value: FormDataEntryValue | null): value is File {

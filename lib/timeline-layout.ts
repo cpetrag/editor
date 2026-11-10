@@ -2,12 +2,13 @@ import { insertKind, type CompositionInsert } from "./composition.ts"
 import { stackLanes } from "./insert-ops.ts"
 import type { Insert } from "./inserts.ts"
 
-export type TimelineTrackId = "segments" | "captions" | "texts" | "elements"
+export type TimelineTrackId = "segments" | "captions" | "texts" | "audio" | "elements"
 
 export const TIMELINE_TRACK_LABELS: Record<TimelineTrackId, string> = {
   segments: "Trechos",
   captions: "Legendas",
   texts: "Textos",
+  audio: "Áudio",
   elements: "Elementos",
 }
 
@@ -16,6 +17,7 @@ const TRACK_ORDER: TimelineTrackId[] = ["segments", "captions", "texts", "elemen
 export const TIMELINE_LANE_HEIGHT = 20
 export const TIMELINE_CLIP_HEIGHT = 16
 export const TIMELINE_SEGMENT_TRACK_HEIGHT = 24
+export const TIMELINE_AUDIO_LANE_HEIGHT = 22
 export const TIMELINE_TRACK_GAP = 4
 
 export type TimelineTrackLayout = {
@@ -40,7 +42,10 @@ export function timelineTrackFor(insert: Pick<CompositionInsert, "kind" | "type"
 }
 
 /** Cada trilha empilha os próprios clipes. Texto e elemento vazios não ocupam faixa. */
-export function layoutTimelineTracks(inserts: readonly Insert[]): TimelineLayout {
+export function layoutTimelineTracks(
+  inserts: readonly Insert[],
+  audioTrackIds: readonly string[] = [],
+): TimelineLayout {
   const byTrack = new Map<TimelineTrackId, Insert[]>()
   for (const insert of inserts) {
     const track = timelineTrackFor(insert)
@@ -52,6 +57,15 @@ export function layoutTimelineTracks(inserts: readonly Insert[]): TimelineLayout
   const tracks: TimelineTrackLayout[] = []
   const clipTops = new Map<string, number>()
   let top = 0
+  const pushAudio = () => {
+    if (audioTrackIds.length === 0 || tracks.some((track) => track.id === "audio")) return
+    const audioHeight = audioTrackIds.length * TIMELINE_AUDIO_LANE_HEIGHT
+    audioTrackIds.forEach((audioId, index) => {
+      clipTops.set(audioId, top + index * TIMELINE_AUDIO_LANE_HEIGHT)
+    })
+    tracks.push({ id: "audio", label: TIMELINE_TRACK_LABELS.audio, top, height: audioHeight })
+    top += audioHeight + TIMELINE_TRACK_GAP
+  }
   for (const id of TRACK_ORDER) {
     if (id === "segments") {
       tracks.push({ id, label: TIMELINE_TRACK_LABELS[id], top, height: TIMELINE_SEGMENT_TRACK_HEIGHT })
@@ -64,15 +78,19 @@ export function layoutTimelineTracks(inserts: readonly Insert[]): TimelineLayout
     let laneCount = members.length === 0 ? (id === "captions" ? 1 : 0) : 1
     for (const lane of lanes.values()) laneCount = Math.max(laneCount, lane + 1)
     const height = laneCount * TIMELINE_LANE_HEIGHT
-    if (height === 0) continue
+    if (height === 0) {
+      if (id === "texts") pushAudio()
+      continue
+    }
     const clipOffset = (TIMELINE_LANE_HEIGHT - TIMELINE_CLIP_HEIGHT) / 2
     for (const [insertId, lane] of lanes) {
       clipTops.set(insertId, top + lane * TIMELINE_LANE_HEIGHT + clipOffset)
     }
     tracks.push({ id, label: TIMELINE_TRACK_LABELS[id], top, height })
     top += height + TIMELINE_TRACK_GAP
+    if (id === "texts") pushAudio()
   }
-  return { tracks, clipTops, height: top - TIMELINE_TRACK_GAP }
+  return { tracks, clipTops, height: Math.max(0, top - TIMELINE_TRACK_GAP) }
 }
 
 export const TIMELINE_ZOOM_MIN = 1

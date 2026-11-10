@@ -73,13 +73,28 @@ export function hookVariationFiles(baseName: string, hooks: string[]): HookVaria
   }))
 }
 
+export type HookManifestAudio = {
+  summary: string
+  tracks: {
+    kind: string
+    name: string
+    start: number
+    trimIn: number
+    trimOut: number
+    volume: number
+    loop: boolean
+  }[]
+}
+
 export function hookVariationManifest(
   baseName: string,
   hooks: string[],
   extras?: Array<{ contentId?: string; styleId?: string; packId?: string }>,
+  audio?: HookManifestAudio,
 ) {
   return {
     baseName: slug(baseName) || "video",
+    ...(audio ? { audio } : {}),
     variations: hookVariationFiles(baseName, hooks).map((item, index) => ({
       file: item.fileName,
       hook: item.hook,

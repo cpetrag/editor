@@ -38,6 +38,9 @@ export function projectFileIds(
   for (const insert of composition.inserts) {
     if (insertKind(insert) === "sticker" && insert.fileId) ids.add(insert.fileId)
   }
+  for (const track of composition.audio?.tracks ?? []) {
+    if (track.fileId) ids.add(track.fileId)
+  }
   for (const extra of extraIds) {
     if (extra) ids.add(extra)
   }

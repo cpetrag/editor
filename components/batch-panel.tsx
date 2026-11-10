@@ -24,6 +24,8 @@ import {
   type Variation,
 } from "@/lib/inserts"
 import type { Composition, CompositionBatch, StyleRef, TrackId, TrackStyle } from "@/lib/composition"
+import type { CompositionAudio } from "@/lib/audio/types"
+import { buildManifest } from "@/lib/batch-manifest"
 import { presetsUsedInComposition } from "@/lib/style/user-presets"
 import { estimateBatch } from "@/lib/insert-ops"
 import { tryPickExportFormat } from "@/lib/export/mime"
@@ -40,6 +42,7 @@ interface BatchPanelProps {
   customPresets?: Composition["customPresets"]
   tracks?: Partial<Record<TrackId, TrackStyle>>
   styleRef?: StyleRef
+  audio?: CompositionAudio
 }
 
 const POSITIONS: InsertPosition[] = ["top", "center", "bottom"]
@@ -56,6 +59,7 @@ export function BatchPanel({
   customPresets,
   tracks,
   styleRef,
+  audio,
 }: BatchPanelProps) {
   const { hooks, fonts, positions, baseName } = batch
   const [hookDraft, setHookDraft] = useState("")
@@ -133,21 +137,20 @@ export function BatchPanel({
       styleRef,
       customPresets,
     })
-    const manifest = {
-      baseName,
-      backgroundUrl,
-      inserts,
-      axes,
-      ext: exportExt,
-      total: variations.length,
-      customPresets: usedPresets,
-      variations: variations.map((v) => ({
-        fileName: v.fileName,
-        hook: v.hook,
-        fontId: v.fontId,
-        position: v.position,
-      })),
-    }
+    const manifest = buildManifest(
+      {
+        batch: { ...batch, baseName },
+        inserts,
+        audio,
+      },
+      {
+        backgroundUrl,
+        ext: exportExt,
+        axes,
+        variations,
+        customPresets: usedPresets,
+      },
+    )
     const blob = new Blob([JSON.stringify(manifest, null, 2)], {
       type: "application/json",
     })

@@ -5,6 +5,7 @@ import type { BrandKitId } from "./brand/kits.ts"
 import type { SourceTransform } from "./source-transform.ts"
 import type { SourceTrim } from "./source-trim.ts"
 import type { SourceCut } from "./source-segments.ts"
+import type { CompositionAudio } from "./audio/types.ts"
 
 export const HISTORY_LIMIT = 50
 
@@ -21,6 +22,7 @@ export interface HistorySnapshot {
   productData?: ProductData
   niche?: ContentNiche
   brandKitId?: BrandKitId
+  audio?: CompositionAudio
 }
 
 export interface InsertHistory {
