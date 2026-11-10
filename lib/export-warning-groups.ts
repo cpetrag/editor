@@ -26,6 +26,10 @@ const GROUP_LABELS: Record<ExportWarningCode, string> = {
   "audio-trim": "Corte inválido",
   "insert-past-end": "Passa do fim do vídeo",
   "shopee-stale": "Dado da Shopee desatualizado",
+  "voice-cut": "Locução maior que o vídeo",
+  "speed-slow": "Velocidade baixa",
+  "reverse-muted": "Áudio original mudo na volta",
+  "pingpong-short": "Volta muito curta",
 }
 
 /** Agrupa avisos do mesmo tipo, na ordem em que o primeiro de cada tipo aparece. */

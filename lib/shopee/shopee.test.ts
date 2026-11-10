@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { clampComposition, createDefaultComposition, parseComposition, serializeComposition } from "../composition.ts"
+import { clampComposition, COMPOSITION_VERSION, createDefaultComposition, parseComposition, serializeComposition } from "../composition.ts"
 import { buildReadyInsert, priceGapCount, galleryRecipes } from "../content/gallery.ts"
 import { emptyVariableWarnings } from "../content/empty-vars.ts"
 import { createInsert } from "../inserts.ts"
@@ -215,7 +215,7 @@ test("migração v7 para v8 preserva source.transform e liga pricing off", () =>
   stored.version = 7
   delete stored.pricing
   const parsed = parseComposition(stored)
-  assert.equal(parsed.version, 8)
+  assert.equal(parsed.version, COMPOSITION_VERSION)
   assert.equal(parsed.pricing, "off")
   assert.equal(parsed.productData?.produto, "short de tricô")
   assert.equal(parsed.source.transform?.scale, 1.5)

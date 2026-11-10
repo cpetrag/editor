@@ -75,6 +75,9 @@ import {
   type OverlayModeId,
 } from "@/lib/compose/keyboard-scope"
 import { secondsFromFrame, toRenderInsert, type RenderProps } from "@/remotion/types"
+import { isIdentityPlayback, type SourcePlayback } from "@/lib/video/playback"
+import { editorDuration } from "@/lib/video/duration"
+import { buildVideoTimeline, sourceTimeAtOutput, type VideoSegment } from "@/lib/video/timeline"
 import { insertIdOf, insertSelection, selectedIdsOf, type PreviewSelection } from "@/lib/preview-selection"
 import { sourceZoomPercent, type SourceTransform } from "@/lib/source-transform"
 import {
@@ -108,6 +111,10 @@ interface PreviewPanelProps {
   inserts: Insert[]
   fontFamily: string
   timelineDuration: number
+  sourcePlayback?: SourcePlayback
+  sourceFps?: number
+  reverseSrc?: string
+  reverseStatus?: "idle" | "preparing" | "ready" | "error"
   showTimeline?: boolean
   retentionCuts?: { ganchoEnd: number; ctaStart: number } | null
   exporting: boolean
@@ -195,6 +202,10 @@ export const PreviewPanel = memo(
       inserts,
       fontFamily,
       timelineDuration,
+      sourcePlayback,
+      sourceFps = 30,
+      reverseSrc,
+      reverseStatus = "idle",
       showTimeline = true,
       retentionCuts = null,
       exporting,
@@ -301,14 +312,39 @@ export const PreviewPanel = memo(
   insertsRef.current = inserts
   videoReadyRef.current = videoReady
 
-  const totalDuration =
+  const fileDuration =
     timelineDuration > 0
-      ? resolveTimelineDuration(timelineDuration)
+      ? timelineDuration
       : videoDuration && videoDuration > 0
-        ? resolveTimelineDuration(videoDuration)
+        ? videoDuration
         : 0
-  const activeTrim = timelineDuration > 0 ? clampSourceTrim(trim, timelineDuration) : null
-  const trimWindow = resolveTrimWindow({ duration: totalDuration, trim: activeTrim ?? undefined })
+  const playbackActive = !isIdentityPlayback(sourcePlayback) && fileDuration > 0
+  const playbackClock = useMemo(() => {
+    if (!playbackActive || !sourcePlayback) return null
+    const media = {
+      duration: fileDuration,
+      fps: sourceFps > 0 ? sourceFps : 30,
+      trim: trim ?? undefined,
+      cuts: sourceCuts,
+      playback: sourcePlayback,
+    }
+    const duration = editorDuration(media, audio)
+    return buildVideoTimeline(media, sourcePlayback, duration)
+  }, [audio, fileDuration, playbackActive, sourceCuts, sourceFps, sourcePlayback, trim])
+  const totalDuration =
+    playbackClock && playbackClock.duration > 0
+      ? playbackClock.duration
+      : fileDuration > 0
+        ? resolveTimelineDuration(fileDuration)
+        : 0
+  const activeTrim = fileDuration > 0 ? clampSourceTrim(trim, fileDuration) : null
+  const trimWindow = resolveTrimWindow({ duration: fileDuration > 0 ? fileDuration : totalDuration, trim: activeTrim ?? undefined })
+  const toSourceTime = useCallback(
+    (time: number) => (playbackClock ? sourceTimeAtOutput(playbackClock.segments, time) : time),
+    [playbackClock],
+  )
+  const playbackClockRef = useRef(playbackClock)
+  playbackClockRef.current = playbackClock
   const trimWindowRef = useRef(trimWindow)
   trimWindowRef.current = trimWindow
   const totalDurationRef = useRef(totalDuration)
@@ -333,30 +369,36 @@ export const PreviewPanel = memo(
     [sourceCuts, sourceTransform],
   )
   const segments = useMemo(
-    () => listSourceSegments(framing, totalDuration),
-    [framing, totalDuration],
+    () => listSourceSegments(framing, playbackActive ? fileDuration : totalDuration),
+    [fileDuration, framing, playbackActive, totalDuration],
   )
-  const activeSegmentIndex = segmentIndexAt(sourceCuts, currentTime)
+  const sourceNow = playbackClock ? sourceTimeAtOutput(playbackClock.segments, currentTime) : currentTime
+  const activeSegmentIndex = playbackClock
+    ? (playbackClock.segments.find((segment, index) => {
+        const last = index === playbackClock.segments.length - 1
+        return currentTime >= segment.outStart && (currentTime < segment.outEnd || last)
+      })?.cutIndex ?? 0)
+    : segmentIndexAt(sourceCuts, currentTime)
   // Zoom, arraste e reset no preview agem sobre o trecho sob o playhead.
-  const activeSourceTransform = sourceTransformAt(framing, currentTime)
+  const activeSourceTransform = sourceTransformAt(framing, sourceNow)
   const canSplitHere =
     Boolean(onSplitSource) &&
-    timelineDuration > 0 &&
-    canSplitSourceAt(framing, currentTime, timelineDuration)
+    fileDuration > 0 &&
+    canSplitSourceAt(framing, sourceNow, fileDuration)
   const patchActiveSourceTransform = useMemo(
     () =>
       onPatchSourceTransform
         ? (transform: SourceTransform) =>
-            onPatchSourceTransform(transform, currentTimeRef.current)
+            onPatchSourceTransform(transform, toSourceTime(currentTimeRef.current))
         : undefined,
-    [onPatchSourceTransform],
+    [onPatchSourceTransform, toSourceTime],
   )
   const resetActiveSourceTransform = useMemo(
     () =>
       onResetSourceTransform
-        ? () => onResetSourceTransform(currentTimeRef.current)
+        ? () => onResetSourceTransform(toSourceTime(currentTimeRef.current))
         : undefined,
-    [onResetSourceTransform],
+    [onResetSourceTransform, toSourceTime],
   )
   const selectedInsertId = insertIdOf(selection)
   const selectedInsert = inserts.find((insert) => insert.id === selectedInsertId) ?? null
@@ -387,6 +429,15 @@ export const PreviewPanel = memo(
         height: sourceHeight || 1920,
         ...(sourceTransform ? { transform: sourceTransform } : {}),
         ...(sourceCuts ? { cuts: sourceCuts } : {}),
+        ...(playbackClock && playbackClock.segments.length > 0
+          ? {
+              segments: playbackClock.segments,
+              playback: sourcePlayback,
+              usefulDuration: trimWindow.duration,
+              usefulStart: trimWindow.start,
+              ...(reverseSrc ? { reverseSrc } : {}),
+            }
+          : {}),
       },
       fps: renderFps,
       width: 1080,
@@ -419,6 +470,11 @@ export const PreviewPanel = memo(
       playableUrl,
       sourceCuts,
       sourceHeight,
+      playbackClock,
+      sourcePlayback,
+      trimWindow.duration,
+      trimWindow.start,
+      reverseSrc,
       sourceTransform,
       sourceWidth,
       audio,
@@ -454,7 +510,7 @@ export const PreviewPanel = memo(
       return
     }
     // O Player toca o arquivo inteiro; a saída do corte para a reprodução aqui.
-    if (player?.isPlaying() && span.end < totalDurationRef.current && time >= span.end) {
+    if (!playbackClockRef.current && player?.isPlaying() && span.end < totalDurationRef.current && time >= span.end) {
       player.pause()
       player.seekToFrame(Math.round(span.end * renderFps))
       currentTimeRef.current = span.end
@@ -568,14 +624,14 @@ export const PreviewPanel = memo(
   const markTrim = useCallback(
     (edge: "in" | "out") => {
       if (!onChangeTrim || !(timelineDuration > 0)) return
-      const time = currentTimeRef.current
+      const time = toSourceTime(currentTimeRef.current)
       const next =
         edge === "in"
           ? markTrimIn(activeTrim, time, timelineDuration)
           : markTrimOut(activeTrim, time, timelineDuration)
       onChangeTrim(next, "discrete")
     },
-    [activeTrim, onChangeTrim, timelineDuration],
+    [activeTrim, onChangeTrim, timelineDuration, toSourceTime],
   )
 
   const stepFrames = useCallback(
@@ -609,10 +665,10 @@ export const PreviewPanel = memo(
 
   const splitAtPlayhead = useCallback(() => {
     if (!onSplitSource || !(timelineDuration > 0)) return
-    const time = currentTimeRef.current
+    const time = toSourceTime(currentTimeRef.current)
     if (!canSplitSourceAt(framing, time, timelineDuration)) return
     onSplitSource(time)
-  }, [framing, onSplitSource, timelineDuration])
+  }, [framing, onSplitSource, timelineDuration, toSourceTime])
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
@@ -620,14 +676,21 @@ export const PreviewPanel = memo(
       const track = trackRef.current
       if (!drag || !track || !onChangeTrim || !(timelineDuration > 0)) return
       drag.dragging = true
-      const time = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
+      const outputTime = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
+      const time = playbackClockRef.current
+        ? sourceTimeAtOutput(playbackClockRef.current.segments, outputTime)
+        : outputTime
       const span = trimWindowRef.current
       const next =
         drag.edge === "in"
           ? clampSourceTrim({ start: time, end: span.end }, timelineDuration)
           : clampSourceTrim({ start: span.start, end: time }, timelineDuration)
       onChangeTrim(next, "gesture")
-      const shown = drag.edge === "in" ? (next?.start ?? 0) : (next?.end ?? timelineDuration)
+      const shown = playbackClockRef.current
+        ? outputTime
+        : drag.edge === "in"
+          ? (next?.start ?? 0)
+          : (next?.end ?? timelineDuration)
       currentTimeRef.current = shown
       setCurrentTime(shown)
       playerRef.current?.seekToFrame(Math.round(shown * renderFps))
@@ -1378,6 +1441,11 @@ export const PreviewPanel = memo(
             title={frameTimecode}
           >
             {shownTimecode}
+            {reverseStatus === "preparing" ? (
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.65rem] text-amber-800 dark:text-amber-200">
+                gerando volta
+              </span>
+            ) : null}
           </span>
 
           {showTimeline && totalDuration > 0 && onChangeTrim ? (
@@ -1521,6 +1589,7 @@ export const PreviewPanel = memo(
               showRetention={showRetention}
               retentionCuts={retentionCuts}
               segments={segments}
+              playbackSegments={playbackClock?.segments}
               activeSegmentIndex={activeSegmentIndex}
               sourceCuts={sourceCuts}
               onRemoveSourceCut={onRemoveSourceCut}
@@ -1534,7 +1603,7 @@ export const PreviewPanel = memo(
               onSelectAudio={onSelectAudio}
               onAudioEdit={onAudioEdit}
               trimWindow={trimWindow}
-              hasTrim={Boolean(activeTrim)}
+              hasTrim={Boolean(activeTrim) && !playbackClock}
               canDragTrim={Boolean(onChangeTrim)}
               contentRef={trackRef}
               zoom={timelineZoom}

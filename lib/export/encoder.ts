@@ -7,6 +7,8 @@ import type { WatermarkPaint } from "../watermark.ts"
 import { ensureComposeFontsReady, fontIdsUsedInComposition } from "../compose/fonts"
 import { resolveTrimWindow, trimProgress } from "../source-trim.ts"
 import { createDraftAudioMix } from "./draft-audio.ts"
+import { draftFrameCount, draftPlan, draftSampleAt, type DraftPlan, type DraftSample } from "./draft-timeline.ts"
+import { activeVoiceEnd } from "../video/duration.ts"
 import {
   blobTypeFromMime,
   outputFps,
@@ -37,6 +39,10 @@ export interface ExportOptions {
   stickerBlobUrls?: Record<string, string>
   watermark?: WatermarkPaint | null
   audioUrls?: Record<string, string>
+  /** Blob invertido já pronto (`<fileId>:rev`). */
+  reverseUrl?: string | null
+  /** Gera a volta se o IndexedDB ainda não tiver o blob. */
+  ensureReverse?: () => Promise<string>
 }
 
 function waitForEvent(target: EventTarget, event: string, signal: AbortSignal): Promise<void> {
@@ -92,11 +98,51 @@ function watchTabHidden(signal: AbortSignal): () => boolean {
   return stop
 }
 
+function openReverseVideo(url: string, signal: AbortSignal): Promise<HTMLVideoElement> {
+  const video = document.createElement("video")
+  video.src = url
+  video.muted = true
+  video.playsInline = true
+  video.preload = "auto"
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      cleanup()
+      reject(new DOMException("Export cancelado", "AbortError"))
+    }
+    const onReady = () => {
+      cleanup()
+      resolve(video)
+    }
+    const onError = () => {
+      cleanup()
+      reject(new Error("não foi possível abrir a volta"))
+    }
+    const cleanup = () => {
+      video.removeEventListener("loadeddata", onReady)
+      video.removeEventListener("error", onError)
+      signal.removeEventListener("abort", onAbort)
+    }
+    signal.addEventListener("abort", onAbort)
+    video.addEventListener("loadeddata", onReady)
+    video.addEventListener("error", onError)
+  })
+}
+
+function audioClockOf(composition: Composition, plan: DraftPlan): number {
+  if (composition.source.playback?.fit === "audio") {
+    return Math.max(plan.duration, activeVoiceEnd(composition.audio))
+  }
+  return plan.duration
+}
+
 async function recordWithMediaRecorder(
   options: ExportOptions,
   canvas: HTMLCanvasElement,
   format: ExportFormat,
+  plan: DraftPlan,
+  reverseVideo: HTMLVideoElement | null,
 ): Promise<ExportResult> {
+  if (plan.stretched) return recordStretched(options, canvas, format, plan, reverseVideo)
   const { video, composition, fontFamily, signal, onProgress } = options
   const trimWindow = resolveTrimWindow(composition.source)
   const fps = outputFps(composition.output.fps)
@@ -225,9 +271,170 @@ async function recordWithMediaRecorder(
   }
 }
 
+async function recordStretched(
+  options: ExportOptions,
+  canvas: HTMLCanvasElement,
+  format: ExportFormat,
+  plan: DraftPlan,
+  reverseVideo: HTMLVideoElement | null,
+): Promise<ExportResult> {
+  const { video, composition, fontFamily, signal, onProgress } = options
+  const fps = outputFps(composition.output.fps)
+  const finishHiddenWatch = watchTabHidden(signal)
+  const canvasStream = canvas.captureStream(fps)
+  const mix = createDraftAudioMix({
+    video,
+    composition,
+    audioUrls: options.audioUrls ?? {},
+    outputDuration: audioClockOf(composition, plan),
+  })
+  let audioTracks: MediaStreamTrack[] = []
+  if (mix) audioTracks = mix.stream.getAudioTracks()
+  const mixed = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks])
+  const recorder = new MediaRecorder(mixed, {
+    mimeType: format.mime,
+    videoBitsPerSecond: composition.output.videoBitrate,
+  })
+  const chunks: BlobPart[] = []
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data)
+  }
+  const stopped = new Promise<Blob>((resolve, reject) => {
+    recorder.onerror = () => reject(recorder.error ?? new Error("Falha no MediaRecorder"))
+    recorder.onstop = () => resolve(new Blob(chunks, { type: blobTypeFromMime(format.mime) }))
+  })
+
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Canvas 2D indisponível")
+  const previousRate = video.playbackRate
+  const previousMuted = video.muted
+  const previousVolume = video.volume
+  video.muted = false
+  video.preservesPitch = true
+  if (!mix) video.volume = 0
+  if (reverseVideo) {
+    reverseVideo.muted = true
+    reverseVideo.preservesPitch = true
+  }
+
+  let shownKey = ""
+  const align = (sample: DraftSample): HTMLVideoElement => {
+    const el = sample.useReverse ? reverseVideo : video
+    if (!el) throw new Error("A volta do ping-pong ainda não está pronta")
+    const other = sample.useReverse ? video : reverseVideo
+    if (other && other !== el && !other.paused) other.pause()
+    if (sample.segment.kind !== "freeze") el.playbackRate = sample.segment.speed || 1
+    el.preservesPitch = true
+    const key = `${sample.segment.kind}:${sample.segment.outStart}`
+    const drift = Math.abs(el.currentTime - sample.mediaTime)
+    if (key !== shownKey || drift > 1.5 / fps) {
+      if (key !== shownKey || drift > 0.02) el.currentTime = sample.mediaTime
+    }
+    shownKey = key
+    if (sample.segment.kind === "freeze") {
+      if (!el.paused) el.pause()
+    } else if (el.paused) {
+      void el.play().catch((error: unknown) => {
+        console.error("[editor] falha ao tocar o trecho do rascunho", error)
+      })
+    }
+    return el
+  }
+
+  const first = draftSampleAt(plan, 0)
+  const firstEl = align(first)
+  if (Math.abs(firstEl.currentTime - first.mediaTime) > 0.02) {
+    firstEl.currentTime = first.mediaTime
+    await waitForEvent(firstEl, "seeked", signal)
+  }
+
+  try {
+    if (mix) await mix.start(0)
+    if (first.segment.kind !== "freeze") await firstEl.play()
+    recorder.start(100)
+    const started = performance.now()
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        cleanup()
+        video.pause()
+        reverseVideo?.pause()
+        if (recorder.state !== "inactive") recorder.stop()
+        reject(new DOMException("Export cancelado", "AbortError"))
+      }
+      const draw = () => {
+        if (signal.aborted) return
+        const outputTime = (performance.now() - started) / 1000
+        if (outputTime >= plan.duration) {
+          cleanup()
+          video.pause()
+          reverseVideo?.pause()
+          if (recorder.state !== "inactive") recorder.stop()
+          resolve()
+          return
+        }
+        try {
+          const sample = draftSampleAt(plan, outputTime)
+          const el = align(sample)
+          drawFrame(
+            ctx,
+            el,
+            composition,
+            outputTime,
+            fontFamily,
+            options.stickerBlobUrls,
+            undefined,
+            options.watermark,
+            sample.sourceTime,
+            plan.duration,
+          )
+          mix?.tick(outputTime, sample.muteOriginal)
+          onProgress({
+            currentTime: outputTime,
+            ratio: plan.duration > 0 ? Math.min(1, outputTime / plan.duration) : 1,
+          })
+        } catch (error) {
+          cleanup()
+          video.pause()
+          reverseVideo?.pause()
+          if (recorder.state !== "inactive") recorder.stop()
+          reject(error)
+          return
+        }
+        raf = requestAnimationFrame(draw)
+      }
+      let raf = requestAnimationFrame(draw)
+      const cleanup = () => {
+        cancelAnimationFrame(raf)
+        signal.removeEventListener("abort", onAbort)
+      }
+      signal.addEventListener("abort", onAbort)
+    })
+    const blob = await stopped
+    mixed.getTracks().forEach((track) => track.stop())
+    throwIfAborted(signal)
+    return {
+      blob,
+      fileName: downloadName(composition.source.fileName, format.ext),
+      silent: audioTracks.length === 0,
+      mime: format.mime,
+      ext: format.ext,
+      backgrounded: finishHiddenWatch(),
+    }
+  } finally {
+    mix?.close()
+    video.pause()
+    reverseVideo?.pause()
+    video.playbackRate = previousRate
+    video.muted = previousMuted
+    video.volume = previousVolume
+  }
+}
+
 async function encodeWithWebCodecs(
   options: ExportOptions,
   canvas: HTMLCanvasElement,
+  plan: DraftPlan,
+  reverseVideo: HTMLVideoElement | null,
 ): Promise<ExportResult> {
   if (typeof VideoEncoder === "undefined") {
     throw new Error("Não foi possível gerar MP4 neste navegador. Use Chrome recente.")
@@ -269,21 +476,44 @@ async function encodeWithWebCodecs(
   const ctx = canvas.getContext("2d")
   if (!ctx) throw new Error("Canvas 2D indisponível")
 
+  const frameTotal = plan.stretched ? draftFrameCount(plan.duration, fps) : 0
   let frameIndex = 0
-  for (let offset = 0; offset < trimWindow.duration; offset += frameDuration) {
+  const steps = plan.stretched ? frameTotal : Math.ceil(trimWindow.duration / frameDuration)
+  for (let index = 0; index < steps; index += 1) {
     throwIfAborted(signal)
     if (encoderError) throw encoderError
-    const time = trimWindow.start + offset
-    await seekVideo(video, time, signal)
-    drawFrame(ctx, video, composition, time, fontFamily, options.stickerBlobUrls, undefined, options.watermark)
+    const outputTime = plan.stretched ? index / fps : trimWindow.start + index * frameDuration
+    const sample = plan.stretched ? draftSampleAt(plan, outputTime) : null
+    const media = sample?.useReverse ? reverseVideo : video
+    if (!media) throw new Error("A volta do ping-pong ainda não está pronta")
+    const fileTime = sample ? sample.mediaTime : outputTime
+    await seekVideo(media, fileTime, signal)
+    const stamp = plan.stretched ? outputTime : index * frameDuration
+    drawFrame(
+      ctx,
+      media,
+      composition,
+      plan.stretched ? outputTime : fileTime,
+      fontFamily,
+      options.stickerBlobUrls,
+      undefined,
+      options.watermark,
+      sample?.sourceTime,
+      plan.stretched ? plan.duration : undefined,
+    )
     const frame = new VideoFrame(canvas, {
-      timestamp: Math.round(offset * 1_000_000),
+      timestamp: Math.round(stamp * 1_000_000),
       duration: Math.round(frameDuration * 1_000_000),
     })
     encoder.encode(frame, { keyFrame: frameIndex % Math.round(fps) === 0 })
     frame.close()
     frameIndex += 1
-    onProgress({ currentTime: time, ratio: trimProgress(time, trimWindow) })
+    onProgress({
+      currentTime: plan.stretched ? outputTime : fileTime,
+      ratio: plan.stretched
+        ? (plan.duration > 0 ? Math.min(1, outputTime / plan.duration) : 1)
+        : trimProgress(fileTime, trimWindow),
+    })
     while (encoder.encodeQueueSize > 4) {
       await new Promise((resolve) => setTimeout(resolve, 8))
     }
@@ -322,13 +552,20 @@ export async function exportComposition(options: ExportOptions): Promise<ExportR
   ])
   await preloadStickerImages(composition, options.stickerBlobUrls)
 
+  const plan = draftPlan(composition.source, composition.audio)
+  let reverseVideo: HTMLVideoElement | null = null
+  if (plan.needsReverse) {
+    const url = options.reverseUrl || (options.ensureReverse ? await options.ensureReverse() : "")
+    if (!url) throw new Error("A volta do ping-pong ainda não está pronta")
+    reverseVideo = await openReverseVideo(url, options.signal)
+  }
+
   const format = tryPickExportFormat()
   try {
     if (format) {
-      return await recordWithMediaRecorder(options, canvas, format)
+      return await recordWithMediaRecorder(options, canvas, format, plan, reverseVideo)
     }
-    const result = await encodeWithWebCodecs(options, canvas)
-    return result
+    return await encodeWithWebCodecs(options, canvas, plan, reverseVideo)
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error
     if (error instanceof CanvasTaintError) throw error
@@ -337,7 +574,10 @@ export async function exportComposition(options: ExportOptions): Promise<ExportR
     }
     if (!format) throw error
     console.error("[editor] MediaRecorder falhou, tentando WebCodecs", error)
-    return encodeWithWebCodecs(options, canvas)
+    return encodeWithWebCodecs(options, canvas, plan, reverseVideo)
+  } finally {
+    reverseVideo?.pause()
+    if (reverseVideo) reverseVideo.src = ""
   }
 }
 

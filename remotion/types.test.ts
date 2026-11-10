@@ -133,7 +133,8 @@ test("toRenderProps recorta a duração e mantém o tempo do arquivo nos inserts
 test("toRenderProps sem corte não manda campos de trim", () => {
   const props = toRenderProps({ composition: sampleComposition(), videoSrc: "" })
   assert.equal(props.video.trimStartInSeconds, undefined)
-  assert.equal(props.video.sourceDurationInSeconds, undefined)
+  assert.equal(props.video.sourceDurationInSeconds, 18)
+  assert.equal(props.video.sourceFps, 30)
   assert.equal(props.video.cuts, undefined)
   assert.equal(sourceTimeFromFrame(30, props), 1)
 })

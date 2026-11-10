@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { access, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   createServer,
@@ -27,7 +27,37 @@ import { createProgressHub, type ProgressEvent } from "./progress.ts"
 import { MAX_AUDIO_FILE_BYTES, MAX_RENDER_UPLOAD_BYTES } from "../lib/audio/types.ts"
 import { audioFormField } from "../lib/audio/upload.ts"
 import { capcutAudioPlan } from "../lib/export/capcut-audio.ts"
+import { alignRenderTimeline } from "../lib/video/render-align.ts"
+import { hashFile, pruneReverseCache, reverseCacheId, reverseUsefulRange } from "../lib/video/reverse-file.ts"
+import { durationWithinFrame, probeDurationSeconds } from "./probe.ts"
 import { applyUploadedAudio, applyUploadedVideo, mediaUrlForAudio, mediaUrlForJob, parseRenderProps } from "./props.ts"
+
+async function materializeReverse(
+  inputPath: string,
+  dest: string,
+  range: { start: number; end: number },
+): Promise<void> {
+  const hash = await hashFile(inputPath)
+  const id = reverseCacheId(hash, range.start, range.end)
+  const cacheDir = path.join(process.cwd(), "tmp", "reverse-cache")
+  await mkdir(cacheDir, { recursive: true })
+  const cached = path.join(cacheDir, `${id}.mp4`)
+  try {
+    await access(cached)
+    await copyFile(cached, dest)
+    return
+  } catch {
+    // cache miss
+  }
+  try {
+    await reverseUsefulRange(inputPath, cached, range)
+    await copyFile(cached, dest)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "falha ao inverter"
+    throw new Error(`não foi possível gerar a volta (${message})`)
+  }
+  await pruneReverseCache(cacheDir)
+}
 
 export type RenderEngine = {
   bundle: () => Promise<{ serveUrl: string; version: string }>
@@ -264,14 +294,40 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       const controller = new AbortController()
       activeAbort = controller
       sendJson(res, 202, { jobId })
-      void runJob(
-        job,
-        applyUploadedAudio(
-          applyUploadedVideo(props, inputPath ? mediaUrlForJob(url, jobId) : null),
-          audioSrcById,
-        ),
-        controller,
+      let renderProps = applyUploadedAudio(
+        applyUploadedVideo(props, inputPath ? mediaUrlForJob(url, jobId) : null),
+        audioSrcById,
       )
+      try {
+        const aligned = alignRenderTimeline(renderProps)
+        renderProps = aligned.props
+        if (aligned.needsReverse) {
+          if (!inputPath) throw new Error("não foi possível gerar a volta")
+          const start = renderProps.video.usefulStart ?? 0
+          const useful = renderProps.video.usefulDuration ?? 0
+          if (!(useful > 0)) throw new Error("não foi possível gerar a volta")
+          await materializeReverse(inputPath, paths.reversePath, { start, end: start + useful })
+          renderProps = {
+            ...renderProps,
+            video: {
+              ...renderProps.video,
+              reverseSrc: `${mediaUrlForJob(url, jobId)}/reverse`,
+            },
+          }
+        }
+        const segments = renderProps.video.segments ?? []
+        console.log(
+          `[render ${jobId}] ${aligned.log} volta=${renderProps.video.reverseSrc ?? "nenhuma"} n=${segments.length}`,
+        )
+      } catch (error) {
+        job.status = "error"
+        job.error = error instanceof Error ? error.message : "não foi possível gerar a volta"
+        console.error(`[render ${jobId}]`, job.error)
+        hub.emit(jobId, { progress: 0, stage: "error", error: job.error })
+        mutex.release()
+        return
+      }
+      void runJob(job, renderProps, controller)
     } catch (error) {
       mutex.release()
       if (!res.headersSent) {
@@ -311,6 +367,17 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
           hub.emit(job.id, { progress, stage: "rendering" })
         },
       })
+      const expected = inputProps.video.durationInSeconds
+      const actual = await probeDurationSeconds(job.outputPath)
+      const fps = inputProps.fps > 0 ? inputProps.fps : 30
+      console.log(
+        `[render ${job.id}] ffprobe ${actual.toFixed(3)}s esperado ${expected.toFixed(3)}s`,
+      )
+      if (!durationWithinFrame(actual, expected, fps)) {
+        throw new Error(
+          `duração do MP4 ${actual.toFixed(2)} s fora da composição ${expected.toFixed(2)} s`,
+        )
+      }
       if (job.saveToCapcut && options.capcutDir) {
         try {
           const extraFiles = await readCapcutAudioFiles(options.tmpDir, job.id, inputProps)
@@ -320,6 +387,17 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
             sourcePath: job.outputPath,
             extraFiles,
             audioPlan: capcutAudioPlan(inputProps.audio),
+            ...(inputProps.video.segments && inputProps.video.segments.length > 0
+              ? {
+                  timelineNote: {
+                    segments: inputProps.video.segments,
+                    playback: inputProps.video.playback ?? null,
+                  },
+                }
+              : {}),
+            ...(job.inputPath
+              ? { reverseSourcePath: job.inputPath.replace(/-in\.mp4$/, "-rev.mp4") }
+              : {}),
           })
           job.capcutFileName = copied.fileName
         } catch (error) {
@@ -429,9 +507,13 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
       sendJson(res, 404, { error: "vídeo de entrada não encontrado" })
       return
     }
-    const filePath = audioId
-      ? audioFilePath(jobPaths(options.tmpDir, jobId).audioDir, audioId)
-      : job.inputPath
+    const paths = jobPaths(options.tmpDir, jobId)
+    const filePath =
+      audioId === "reverse"
+        ? paths.reversePath
+        : audioId
+          ? audioFilePath(paths.audioDir, audioId)
+          : job.inputPath
     if (!filePath) {
       sendJson(res, 404, { error: "vídeo de entrada não encontrado" })
       return
@@ -446,7 +528,7 @@ export async function createRenderApp(options: RenderAppOptions): Promise<{
     }
 
     res.writeHead(200, {
-      "Content-Type": audioId ? "audio/mpeg" : "video/mp4",
+      "Content-Type": audioId && audioId !== "reverse" ? "audio/mpeg" : "video/mp4",
       "Content-Length": size,
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",

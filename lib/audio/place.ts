@@ -45,7 +45,12 @@ export function buildAudioTrack(input: {
   videoDuration: number
 }): AudioTrack {
   const video = input.videoDuration > 0 ? input.videoDuration : input.duration
-  const trimOut = Math.min(input.duration, video > 0 ? video : input.duration)
+  // A locução guarda o arquivo inteiro. Cortar trimOut no tamanho do vídeo
+  // jogava fora o final da fala sem avisar.
+  const trimOut =
+    input.kind === "voice"
+      ? input.duration
+      : Math.min(input.duration, video > 0 ? video : input.duration)
   return clampTrack(
     {
       id: input.id,

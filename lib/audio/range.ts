@@ -1,3 +1,4 @@
+import type { FitMode } from "../video/playback.ts"
 import { audioTrimFrames } from "./trim-frames.ts"
 import {
   AUDIO_VOLUME_MAX,
@@ -49,11 +50,23 @@ export function usableLength(track: Pick<AudioTrack, "trimIn" | "trimOut">): num
   return Math.max(0, track.trimOut - track.trimIn)
 }
 
-/** Intervalo em que a faixa ocupa a timeline, já cortado na duração do vídeo. */
-export function trackOutputRange(track: AudioTrack, videoDuration: number): OutputRange {
+/**
+ * Intervalo em que a faixa ocupa a timeline, cortado na duração da composição.
+ * Com `fit: "audio"` a locução não é cortada: o vídeo é que acompanha ela.
+ */
+export function trackOutputRange(
+  track: AudioTrack,
+  videoDuration: number,
+  options?: { fit?: FitMode },
+): OutputRange {
   const length = usableLength(track)
   const rawStart = Math.max(0, finite(track.start))
-  const limit = videoDuration > 0 ? videoDuration : Number.POSITIVE_INFINITY
+  const protectVoice = options?.fit === "audio" && track.kind === "voice" && !track.muted
+  const limit = protectVoice
+    ? Number.POSITIVE_INFINITY
+    : videoDuration > 0
+      ? videoDuration
+      : Number.POSITIVE_INFINITY
   const start = Math.min(rawStart, limit)
   if (!(length > 0) || !(start < limit)) return { start, end: start }
   const naturalEnd = track.loop ? limit : start + length

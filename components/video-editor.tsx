@@ -48,6 +48,18 @@ import { tracksForRender } from "@/lib/audio/upload"
 import { collectAudioWarnings } from "@/lib/audio/warnings"
 import { loadAudioPeaks, saveAudioPeaks } from "@/lib/audio/peaks-store"
 import { clampTrack } from "@/lib/audio/range"
+import { DEFAULT_PLAYBACK, clampPlaybackSpeed, isIdentityPlayback } from "@/lib/video/playback"
+import {
+  activeVoiceEnd,
+  editorDuration,
+  fitSuggestionFor,
+  voiceOverrun,
+  voiceOverrunMessage,
+  withPlayback,
+} from "@/lib/video/duration"
+import { suggestionPlayback } from "@/lib/video/suggest"
+import { buildVideoTimeline } from "@/lib/video/timeline"
+import { loadOrCreateReverseBlob } from "@/lib/video/reverse-client"
 import {
   beginInsertGesture,
   canRedo,
@@ -208,6 +220,7 @@ import {
   clearSegmentTransforms,
   removeSourceCut,
   setSegmentTransformAt,
+  segmentIndexAt,
   splitSourceAt,
   type SegmentedFraming,
 } from "@/lib/source-segments"
@@ -283,6 +296,7 @@ function historyPresent(composition: Composition): HistorySnapshot {
     sourceTransform: composition.source.transform,
     ...(composition.source.cuts ? { sourceCuts: composition.source.cuts } : {}),
     ...(composition.source.trim ? { sourceTrim: composition.source.trim } : {}),
+    sourcePlayback: composition.source.playback ?? DEFAULT_PLAYBACK,
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(composition.retention ? { retention: composition.retention } : {}),
     ...(composition.productData ? { productData: composition.productData } : {}),
@@ -402,6 +416,9 @@ export function VideoEditor() {
   const [exportMode, setExportMode] = useState<ExportMode>("final")
   const [liveMessage, setLiveMessage] = useState("")
   const [undoToast, setUndoToast] = useState<string | null>(null)
+  const [fitPrompt, setFitPrompt] = useState<string | null>(null)
+  const [reverseSrc, setReverseSrc] = useState<string | null>(null)
+  const [reverseStatus, setReverseStatus] = useState<"idle" | "preparing" | "ready" | "error">("idle")
   const dismissUndoToast = useCallback(() => setUndoToast(null), [])
   const [comboPreview, setComboPreview] = useState<Template | null>(null)
   const [comboChoice, setComboChoice] = useState(false)
@@ -452,6 +469,53 @@ export function VideoEditor() {
   const exportStartedRef = useRef(false)
   const importAbortRef = useRef<AbortController | null>(null)
   const fileStoreRef = useRef(createIndexedDbFileStore())
+  const reverseUrlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const playback = composition.source.playback
+    const fileId = composition.source.fileId
+    const wantsReverse = playback?.fill === "pingpong" && Boolean(fileId)
+    if (!wantsReverse || !fileId) {
+      if (reverseUrlRef.current) URL.revokeObjectURL(reverseUrlRef.current)
+      reverseUrlRef.current = null
+      setReverseSrc(null)
+      setReverseStatus("idle")
+      return
+    }
+    const trimWindow = resolveTrimWindow(composition.source)
+    let cancelled = false
+    setReverseStatus("preparing")
+    void (async () => {
+      try {
+        const blob = await loadOrCreateReverseBlob({
+          store: fileStoreRef.current,
+          fileId,
+          fileName: composition.source.fileName,
+          start: trimWindow.start,
+          end: trimWindow.end,
+        })
+        if (cancelled) return
+        if (!reverseUrlRef.current) {
+          const url = URL.createObjectURL(blob)
+          reverseUrlRef.current = url
+          setReverseSrc(url)
+        }
+        setReverseStatus("ready")
+      } catch (error) {
+        console.error("[editor] falha ao preparar a volta", error)
+        if (!cancelled) setReverseStatus("error")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    composition.source.fileId,
+    composition.source.playback?.fill,
+    composition.source.trim?.start,
+    composition.source.trim?.end,
+    composition.source.duration,
+  ])
   const presetStoreRef = useRef(createIndexedDbPresetStore())
   const [userPresets, setUserPresets] = useState<UserPreset[]>([])
   const stickerBlobUrlsRef = useRef(stickerBlobUrls)
@@ -988,6 +1052,7 @@ export function VideoEditor() {
       transform: _ignored,
       trim: _ignoredTrim,
       cuts: _ignoredCuts,
+      playback: _ignoredPlayback,
       ...sourceRest
     } = compositionRef.current.source
     const next = clampComposition({
@@ -1001,6 +1066,7 @@ export function VideoEditor() {
         ...(snapshot.sourceTransform ? { transform: snapshot.sourceTransform } : {}),
         ...(snapshot.sourceCuts ? { cuts: snapshot.sourceCuts } : {}),
         ...(snapshot.sourceTrim ? { trim: snapshot.sourceTrim } : {}),
+        ...(snapshot.sourcePlayback ? { playback: snapshot.sourcePlayback } : {}),
       },
       watermarkEnabled: snapshot.watermarkEnabled === true ? true : undefined,
       retention: snapshot.retention,
@@ -1085,6 +1151,52 @@ export function VideoEditor() {
     [applyComposition, beginInsertHistory],
   )
 
+  const changePlayback = useCallback(
+    (playback: Composition["source"]["playback"], mode: "discrete" | "gesture") => {
+      if (!playback) return
+      if (mode === "gesture" && !gestureRef.current.active) beginInsertHistory()
+      applyComposition((current) => withPlayback(current, playback), mode, "duração")
+    },
+    [applyComposition, beginInsertHistory],
+  )
+
+  const applyAudioFit = useCallback(() => {
+    applyComposition((current) => {
+      const audio = {
+        ...(current.audio ?? defaultCompositionAudio()),
+        tracks: (current.audio?.tracks ?? []).map((track) =>
+          track.kind === "voice" && !track.muted ? { ...track, trimOut: track.duration } : track,
+        ),
+      }
+      const suggestion = fitSuggestionFor(current.source, audio)
+      const voice = activeVoiceEnd(audio)
+      if (!suggestion || !(voice > 0)) return current
+      return withPlayback({ ...current, audio }, suggestionPlayback(suggestion, voice))
+    }, "discrete", "duração")
+    setFitPrompt(null)
+  }, [applyComposition])
+
+  const changeCutSpeed = useCallback(
+    (time: number, speed: number, mode: "discrete" | "gesture") => {
+      if (mode === "gesture" && !gestureRef.current.active) beginInsertHistory()
+      const nextSpeed = clampPlaybackSpeed(speed)
+      applyComposition((current) => {
+        const index = segmentIndexAt(current.source.cuts, time)
+        if (index <= 0) {
+          return withPlayback(current, {
+            ...(current.source.playback ?? DEFAULT_PLAYBACK),
+            speed: nextSpeed,
+          })
+        }
+        const cuts = (current.source.cuts ?? []).map((cut, cutIndex) =>
+          cutIndex === index - 1 ? { ...cut, speed: nextSpeed } : cut,
+        )
+        return { ...current, source: { ...current.source, cuts } }
+      }, mode, "duração")
+    },
+    [applyComposition, beginInsertHistory],
+  )
+
   const commitAudioFile = useCallback(
     async (input: {
       file: File
@@ -1137,7 +1249,10 @@ export function VideoEditor() {
                         fileName: input.file.name,
                         duration: input.duration,
                         trimIn: 0,
-                        trimOut: Math.min(input.duration, videoDuration > 0 ? videoDuration : input.duration),
+                        trimOut:
+                          input.kind === "voice"
+                            ? input.duration
+                            : Math.min(input.duration, videoDuration > 0 ? videoDuration : input.duration),
                       },
                       videoDuration,
                     )
@@ -1160,6 +1275,14 @@ export function VideoEditor() {
           }),
         }
       }, input.history === "gesture" ? "gesture" : "discrete")
+      if (input.kind === "voice") {
+        const current = compositionRef.current
+        const over = voiceOverrun(current.source, current.audio)
+        const suggestion = fitSuggestionFor(current.source, current.audio)
+        setFitPrompt(
+          over && suggestion ? `Ajustar o vídeo à locução? (${suggestion.label})` : null,
+        )
+      }
       setSelectedAudioId(trackId)
       setActiveTab("editor")
       setMissingAudioIds((current) => current.filter((id) => id !== trackId))
@@ -2850,6 +2973,27 @@ export function VideoEditor() {
         stickerBlobUrls,
         watermark: watermarkPaintInput(composition.watermarkEnabled, watermarkPrefs),
         audioUrls,
+        reverseUrl: reverseUrlRef.current,
+        ensureReverse: async () => {
+          if (reverseUrlRef.current) return reverseUrlRef.current
+          const source = compositionRef.current.source
+          if (!source.fileId) throw new Error("vídeo original ausente")
+          const trim = resolveTrimWindow(source)
+          const blob = await loadOrCreateReverseBlob({
+            store: fileStoreRef.current,
+            fileId: source.fileId,
+            fileName: source.fileName,
+            start: trim.start,
+            end: trim.end,
+          })
+          const url = URL.createObjectURL(blob)
+          if (!reverseUrlRef.current) {
+            reverseUrlRef.current = url
+            setReverseSrc(url)
+          }
+          setReverseStatus("ready")
+          return reverseUrlRef.current
+        },
       })
       setDraftPhase("saving")
       setDraftProgress(0.98)
@@ -2995,12 +3139,61 @@ export function VideoEditor() {
         })(),
         ...collectAudioWarnings({
           audio: composition.audio ?? defaultCompositionAudio(),
-          videoDuration: composition.source.duration,
+          videoDuration: editorDuration(composition.source, composition.audio),
           missingTrackIds: missingAudioIds,
           saveToCapcut,
           importing: audioImporting,
           fps: composition.output.fps,
         }),
+        ...(() => {
+          const playback = composition.source.playback ?? DEFAULT_PLAYBACK
+          const audio = composition.audio ?? defaultCompositionAudio()
+          const list: { id: string; code: "voice-cut" | "speed-slow" | "reverse-muted" | "pingpong-short"; insertIds: string[]; title: string }[] = []
+          const over = voiceOverrun(composition.source, audio)
+          if (over) {
+            list.push({
+              id: "voice-cut",
+              code: "voice-cut",
+              insertIds: [],
+              title: voiceOverrunMessage(over),
+            })
+          }
+          if (playback.speed < 0.8) {
+            list.push({
+              id: "speed-slow",
+              code: "speed-slow",
+              insertIds: [],
+              title: "Velocidade abaixo de 0,8× pode parecer câmera lenta",
+            })
+          }
+          if (!isIdentityPlayback(playback) && playback.fill === "pingpong") {
+            const timeline = buildVideoTimeline(
+              composition.source,
+              playback,
+              editorDuration(composition.source, audio),
+            )
+            const shortReturn = timeline.segments.some(
+              (segment) => segment.kind === "rev" && segment.outEnd - segment.outStart < 0.5,
+            )
+            if (shortReturn) {
+              list.push({
+                id: "pingpong-short",
+                code: "pingpong-short",
+                insertIds: [],
+                title: "A volta do ping-pong fica menor que 0,5 s",
+              })
+            }
+            if (timeline.segments.some((segment) => segment.kind === "rev") && !audio.original.muted) {
+              list.push({
+                id: "reverse-muted",
+                code: "reverse-muted",
+                insertIds: [],
+                title: "O áudio original fica mudo na volta",
+              })
+            }
+          }
+          return list
+        })(),
       ],
     [
       composition.brand.fontId,
@@ -3016,6 +3209,7 @@ export function VideoEditor() {
       composition.styleRef,
       composition.tracks,
       composition.audio,
+      composition.source.playback,
       composition.output.fps,
       missingAudioIds,
       saveToCapcut,
@@ -3402,7 +3596,7 @@ export function VideoEditor() {
             previousSource={previousSource}
             burnedInWarning={burnedInWarning}
             inserts={composition.inserts}
-            videoDuration={composition.source.duration}
+            videoDuration={editorDuration(composition.source, composition.audio)}
             videoUrl={backgroundUrl}
             missingFile={missingFile}
             exporting={exporting}
@@ -3535,6 +3729,13 @@ export function VideoEditor() {
             missingAudioIds={missingAudioIds}
             selectedAudioId={selectedAudioId}
             onChangeAudio={changeAudio}
+            onChangePlayback={changePlayback}
+            onChangeCutSpeed={changeCutSpeed}
+            onApplyAudioFit={applyAudioFit}
+            fitPrompt={fitPrompt}
+            onApplyFitPrompt={applyAudioFit}
+            onDismissFitPrompt={() => setFitPrompt(null)}
+            reverseStatus={reverseStatus}
             onCommitAudioFile={(input) => commitAudioFile(input)}
             onAudioImportingChange={setAudioImporting}
             captionVoice={
@@ -3570,7 +3771,7 @@ export function VideoEditor() {
               setSelection({ kind: "insert", id: created.id })
             }}
             onUndo={undoLast}
-            videoDuration={composition.source.duration}
+            videoDuration={editorDuration(composition.source, composition.audio)}
             videoUrl={backgroundUrl}
             videoId={composition.source.fileId}
             onSelectFont={(fontId) =>
@@ -3673,6 +3874,10 @@ export function VideoEditor() {
           customPresets={composition.customPresets}
           onPatchCaptionStyle={handlePreviewCaptionStyle}
           timelineDuration={composition.source.duration}
+          sourcePlayback={composition.source.playback}
+          sourceFps={composition.source.fps}
+          reverseSrc={reverseSrc ?? undefined}
+          reverseStatus={reverseStatus}
           showTimeline={hasPlayableSource(composition.source)}
           retentionCuts={composition.retention ?? null}
           exporting={exporting}

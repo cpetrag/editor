@@ -7,7 +7,8 @@ import type { Composition } from "../composition.ts"
 export type DraftAudioMix = {
   stream: MediaStream
   start: (sourceTime: number) => Promise<void>
-  tick: (sourceTime: number) => void
+  /** `muteOriginal` cala o áudio do clipe nos trechos de volta e congelados. */
+  tick: (sourceTime: number, muteOriginal?: boolean) => void
   close: () => void
 }
 
@@ -40,13 +41,18 @@ export function createDraftAudioMix(input: {
   video: HTMLVideoElement
   composition: Composition
   audioUrls: Record<string, string>
+  /** Relógio da composição. Sem isso, o mix corta no tamanho do arquivo. */
+  outputDuration?: number
 }): DraftAudioMix | null {
   const graph = graphFor(input.video)
   if (!graph) return null
   const destination = graph.context.createMediaStreamDestination()
   graph.gain.connect(destination)
   const audio = input.composition.audio ?? defaultCompositionAudio()
-  const duration = input.composition.source.duration
+  const duration =
+    input.outputDuration && input.outputDuration > 0
+      ? input.outputDuration
+      : input.composition.source.duration
   const volumeCtx = volumeContextFor(audio, duration)
   const extras: { id: string; element: HTMLAudioElement; gain: GainNode }[] = []
   for (const track of tracksForRender(audio)) {
@@ -67,8 +73,9 @@ export function createDraftAudioMix(input: {
     }
   }
 
-  const tick = (sourceTime: number) => {
-    graph.gain.gain.value = audio.original.muted || !(audio.original.volume > 0) ? 0 : audio.original.volume
+  const tick = (sourceTime: number, muteOriginal = false) => {
+    const originalAudible = !muteOriginal && !audio.original.muted && audio.original.volume > 0
+    graph.gain.gain.value = originalAudible ? audio.original.volume : 0
     for (const extra of extras) {
       const track = audio.tracks.find((item) => item.id === extra.id)
       if (!track) continue

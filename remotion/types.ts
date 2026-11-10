@@ -19,6 +19,9 @@ import {
 } from "../lib/watermark.ts"
 import { shiftAudioToTrim } from "../lib/audio/place.ts"
 import { defaultCompositionAudio, type AudioTrack, type CompositionAudio } from "../lib/audio/types.ts"
+import { isIdentityPlayback, type SourcePlayback } from "../lib/video/playback.ts"
+import { resolveOutputDuration } from "../lib/video/duration.ts"
+import { buildVideoTimeline, type VideoSegment } from "../lib/video/timeline.ts"
 
 export type RenderInsert = CompositionInsert & {
   text: string
@@ -44,11 +47,21 @@ export type RenderProps = {
     trimStartInSeconds?: number
     /** Duração do arquivo inteiro: as zonas de trilha (gancho/prova/CTA) usam ela, como no preview. */
     sourceDurationInSeconds?: number
+    /** fps do arquivo, para reconstruir a linha do tempo no render. */
+    sourceFps?: number
     width?: number
     height?: number
     transform?: Composition["source"]["transform"]
     /** Trechos com zoom próprio, em segundos do arquivo original. */
     cuts?: Composition["source"]["cuts"]
+    /** Saída esticada (velocidade, loop, ping-pong, congelar). Ausente = um clipe só. */
+    segments?: VideoSegment[]
+    playback?: SourcePlayback
+    /** Duração da faixa útil, para achar o trecho na cópia invertida. */
+    usefulDuration?: number
+    /** Entrada da faixa útil. A cópia invertida começa aqui. */
+    usefulStart?: number
+    reverseSrc?: string
   }
   audio?: RenderAudio
   fps: number
@@ -89,7 +102,10 @@ export function calculateShortMetadata(props: RenderProps): {
   height: number
 } {
   const fps = props.fps > 0 ? props.fps : DEFAULT_FPS
-  const duration = Math.max(0, props.video.durationInSeconds)
+  const segmentEnd = props.video.segments?.length
+    ? props.video.segments[props.video.segments.length - 1]?.outEnd
+    : 0
+  const duration = Math.max(0, segmentEnd && segmentEnd > 0 ? segmentEnd : props.video.durationInSeconds)
   return {
     durationInFrames: Math.max(1, Math.ceil(duration * fps)),
     fps,
@@ -160,11 +176,17 @@ export function toRenderProps(input: {
     composition.watermarkEnabled,
     normalizeWatermarkPrefs(input.watermarkPrefs ?? {}),
   )
+  const playback = composition.source.playback
+  const identity = isIdentityPlayback(playback)
   const trimWindow = resolveTrimWindow(composition.source)
+  const outputDuration = identity ? trimWindow.duration : resolveOutputDuration(composition.source, composition.audio)
+  const timeline = identity || !playback
+    ? null
+    : buildVideoTimeline(composition.source, playback, outputDuration)
   const mix = shiftAudioToTrim(
     composition.audio ?? defaultCompositionAudio(),
-    trimWindow.start,
-    trimWindow.duration,
+    identity ? trimWindow.start : 0,
+    outputDuration,
   )
   const audio: RenderAudio = {
     original: mix.original,
@@ -177,10 +199,17 @@ export function toRenderProps(input: {
   return {
     video: {
       src: videoSrc,
-      durationInSeconds: trimWindow.duration,
-      ...(trimWindow.start > 0 ? { trimStartInSeconds: trimWindow.start } : {}),
-      ...(trimWindow.duration !== composition.source.duration
-        ? { sourceDurationInSeconds: composition.source.duration }
+      durationInSeconds: outputDuration,
+      ...(identity && trimWindow.start > 0 ? { trimStartInSeconds: trimWindow.start } : {}),
+      sourceDurationInSeconds: composition.source.duration,
+      sourceFps: composition.source.fps > 0 ? composition.source.fps : DEFAULT_FPS,
+      ...(timeline && timeline.segments.length > 0
+        ? {
+            segments: timeline.segments,
+            playback,
+            usefulDuration: trimWindow.duration,
+            usefulStart: trimWindow.start,
+          }
         : {}),
       width: composition.source.width,
       height: composition.source.height,

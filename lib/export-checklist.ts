@@ -63,6 +63,10 @@ export type ExportWarningCode =
   | "audio-trim"
   | "insert-past-end"
   | "shopee-stale"
+  | "voice-cut"
+  | "speed-slow"
+  | "reverse-muted"
+  | "pingpong-short"
 
 export type ExportWarning = {
   id: string

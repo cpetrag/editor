@@ -139,10 +139,13 @@ export function drawFrame(
   blobUrls: Record<string, string> = {},
   scale?: number,
   watermark?: WatermarkPaint | null,
+  /** Tempo do arquivo para o zoom, quando `time` já é o relógio da composição. */
+  framingTime?: number,
+  outputDuration?: number,
 ): void {
   const { width, height } = ctx.canvas
   try {
-    drawVideoCover(ctx, video, width, height, sourceTransformAt(composition.source, time))
+    drawVideoCover(ctx, video, width, height, sourceTransformAt(composition.source, framingTime ?? time))
   } catch (error) {
     if (error instanceof DOMException && error.name === "SecurityError") {
       throw new CanvasTaintError()
@@ -165,7 +168,7 @@ export function drawFrame(
     composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
     {
       fps: composition.output.fps || composition.source.fps,
-      videoDuration: composition.source.duration,
+      videoDuration: outputDuration && outputDuration > 0 ? outputDuration : composition.source.duration,
       project: composition.styleRef ? { styleRef: composition.styleRef } : {},
       tracks: composition.tracks,
       customPresets: composition.customPresets

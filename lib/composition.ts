@@ -43,6 +43,8 @@ import {
   toAbsoluteCaptionWords,
 } from "./caption-time.ts"
 import { clampTrack } from "./audio/range.ts"
+import { isIdentityPlayback, parsePlayback, type SourcePlayback } from "./video/playback.ts"
+import { editorDuration, restoreVoiceClampedToVideo } from "./video/duration.ts"
 import {
   AUDIO_VOLUME_MAX,
   MAX_AUDIO_TRACKS,
@@ -53,7 +55,8 @@ import {
   type CompositionAudio,
 } from "./audio/types.ts"
 
-export const COMPOSITION_VERSION = 8 as const
+export const COMPOSITION_VERSION = 9 as const
+export const COMPOSITION_VERSION_V8 = 8 as const
 export const COMPOSITION_VERSION_V7 = 7 as const
 export const LEGACY_COMPOSITION_VERSION = 1 as const
 export const COMPOSITION_VERSION_V2 = 2 as const
@@ -223,6 +226,8 @@ export interface CompositionSource {
   trim?: SourceTrim
   /** Divisões em trechos com zoom próprio; `transform` vale para o trecho inicial. */
   cuts?: SourceCut[]
+  /** Velocidade, preenchimento e o que define a duração de saída. Ausente = v8. */
+  playback?: SourcePlayback
 }
 
 export interface CompositionBrand {
@@ -622,7 +627,8 @@ function clampCompositionAudio(audio: CompositionAudio | undefined, duration: nu
 }
 
 export function clampComposition(composition: Composition): Composition {
-  const duration = composition.source.duration
+  const outputDuration = editorDuration(composition.source, composition.audio)
+  const duration = outputDuration > 0 ? outputDuration : composition.source.duration
   const audio = clampCompositionAudio(composition.audio, duration)
   const audioSame = JSON.stringify(composition.audio) === JSON.stringify(audio)
   const nextAudio = audioSame ? composition.audio : audio
@@ -631,10 +637,12 @@ export function clampComposition(composition: Composition): Composition {
     ...composition,
     audio: nextAudio,
     source: clampSourceCutsOf(clampSourceWithTrim(composition.source)),
-    inserts: clampInsertsToTrimEnd(
-      composition.inserts.map((insert) => clampInsert(insert, duration)),
-      composition.source,
-    ),
+    inserts: isIdentityPlayback(composition.source.playback)
+      ? clampInsertsToTrimEnd(
+          composition.inserts.map((insert) => clampInsert(insert, composition.source.duration)),
+          composition.source,
+        )
+      : composition.inserts.map((insert) => clampInsert(insert, duration)),
   }
 }
 
@@ -987,6 +995,7 @@ function parseSource(raw: unknown): CompositionSource {
     ...(transform ? { transform } : {}),
     ...(trim ? { trim } : {}),
     ...(cuts ? { cuts } : {}),
+    playback: parsePlayback(record.playback),
   }
 }
 
@@ -1065,6 +1074,7 @@ function parseOutput(
 function isSupportedVersion(value: unknown): boolean {
   return (
     value === COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V8 ||
     value === COMPOSITION_VERSION_V7 ||
     value === COMPOSITION_VERSION_V6 ||
     value === COMPOSITION_VERSION_V5 ||
@@ -1238,8 +1248,21 @@ export function parseComposition(input: unknown): Composition {
     ...(isBrandKitValue(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
     ...(input.kitManual === true ? { kitManual: true } : {}),
     ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
-    audio: storedVersion >= COMPOSITION_VERSION_V7 ? parseAudio(input.audio, source.duration) : defaultCompositionAudio(),
+    audio:
+      storedVersion >= COMPOSITION_VERSION_V7
+        ? restoreAudioForVersion(parseAudio(input.audio, source.duration), storedVersion, source.duration)
+        : defaultCompositionAudio(),
   })
+}
+
+function restoreAudioForVersion(
+  audio: CompositionAudio,
+  storedVersion: number,
+  sourceDuration: number,
+): CompositionAudio {
+  if (storedVersion >= COMPOSITION_VERSION) return audio
+  const tracks = restoreVoiceClampedToVideo(audio.tracks, sourceDuration)
+  return tracks === audio.tracks ? audio : { ...audio, tracks }
 }
 
 function parseAudio(raw: unknown, videoDuration: number): CompositionAudio {
@@ -1412,6 +1435,7 @@ export function serializeComposition(composition: Composition): string {
       ...(composition.source.cuts && composition.source.cuts.length > 0
         ? { cuts: serializeSourceCuts(composition.source.cuts) }
         : {}),
+      ...(composition.source.playback ? { playback: composition.source.playback } : {}),
     },
     brand: { ...composition.brand },
     inserts: composition.inserts.map(serializeInsert),

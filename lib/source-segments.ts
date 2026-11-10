@@ -4,6 +4,7 @@ import {
   serializeSourceTransform,
   type SourceTransform,
 } from "./source-transform.ts"
+import { clampPlaybackSpeed } from "./video/playback.ts"
 
 /**
  * Divisão do vídeo de fundo, em segundos do arquivo original. Cada divisão abre
@@ -13,6 +14,8 @@ import {
 export interface SourceCut {
   time: number
   transform?: SourceTransform
+  /** Velocidade deste trecho. Ausente = a velocidade geral do vídeo. */
+  speed?: number
 }
 
 export interface SourceSegment {
@@ -38,7 +41,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function withTransform(cut: SourceCut, transform: SourceTransform | undefined): SourceCut {
-  return transform ? { time: cut.time, transform } : { time: cut.time }
+  const speed = cut.speed
+  return {
+    time: cut.time,
+    ...(transform ? { transform } : {}),
+    ...(speed ? { speed } : {}),
+  }
 }
 
 function meaningfulTransform(transform: SourceTransform | undefined): SourceTransform | undefined {
@@ -174,7 +182,11 @@ export function parseSourceCuts(
     const time = item.time
     if (typeof time !== "number" || !Number.isFinite(time) || time <= 0) continue
     const transform = parseSourceTransform(item.transform, sourceWidth, sourceHeight)
-    cuts.push(withTransform({ time }, transform))
+    const speed =
+      typeof item.speed === "number" && Number.isFinite(item.speed)
+        ? clampPlaybackSpeed(item.speed)
+        : undefined
+    cuts.push(withTransform({ time, ...(speed ? { speed } : {}) }, transform))
   }
   return duration > 0
     ? clampSourceCuts(cuts, duration)
@@ -185,12 +197,15 @@ export function parseSourceCuts(
 
 export function serializeSourceCuts(
   cuts: readonly SourceCut[],
-): Array<{ time: number; transform?: SourceTransform & { space: "offset" } }> {
+): Array<{ time: number; speed?: number; transform?: SourceTransform & { space: "offset" } }> {
   return cuts.map((cut) => {
     const transform = meaningfulTransform(cut.transform)
-    return transform
-      ? { time: cut.time, transform: serializeSourceTransform(transform) }
-      : { time: cut.time }
+    const speed = typeof cut.speed === "number" && cut.speed > 0 ? cut.speed : undefined
+    return {
+      time: cut.time,
+      ...(speed ? { speed } : {}),
+      ...(transform ? { transform: serializeSourceTransform(transform) } : {}),
+    }
   })
 }
 

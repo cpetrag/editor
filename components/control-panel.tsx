@@ -36,6 +36,11 @@ import type { ProductData } from "@/lib/content/runs"
 import type { ContentNiche } from "@/lib/content/presets"
 import type { ReadySpec } from "@/lib/content/gallery"
 import { hasAnySegmentTransform } from "@/lib/source-segments"
+import { VideoDurationSection, playbackHeaderSummary } from "@/components/video-duration-section"
+import type { SourcePlayback } from "@/lib/video/playback"
+import { voiceOverrun, voiceOverrunMessage } from "@/lib/video/duration"
+import { segmentIndexAt } from "@/lib/source-segments"
+import { clampPlaybackSpeed, DEFAULT_PLAYBACK } from "@/lib/video/playback"
 import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import {
@@ -153,6 +158,13 @@ interface ControlPanelProps {
   missingAudioIds?: readonly string[]
   selectedAudioId?: string | null
   onChangeAudio?: (audio: CompositionAudio, mode: "discrete" | "gesture") => void
+  onChangePlayback?: (playback: SourcePlayback, mode: "discrete" | "gesture") => void
+  onChangeCutSpeed?: (time: number, speed: number, mode: "discrete" | "gesture") => void
+  onApplyAudioFit?: () => void
+  fitPrompt?: string | null
+  onApplyFitPrompt?: () => void
+  onDismissFitPrompt?: () => void
+  reverseStatus?: "idle" | "preparing" | "ready" | "error"
   onCommitAudioFile?: (input: {
     file: File
     duration: number
@@ -278,6 +290,13 @@ export function ControlPanel({
   missingAudioIds = [],
   selectedAudioId = null,
   onChangeAudio,
+  onChangePlayback,
+  onChangeCutSpeed,
+  onApplyAudioFit,
+  fitPrompt = null,
+  onApplyFitPrompt,
+  onDismissFitPrompt,
+  reverseStatus = "idle",
   onCommitAudioFile,
   onAudioImportingChange,
   getPlayhead,
@@ -631,7 +650,7 @@ export function ControlPanel({
                 <>
                   <CollapsibleBlock
                     title="Enquadramento e trechos"
-                    summary={framingSummary(source)}
+                    summary={playbackHeaderSummary(source, mix) ?? framingSummary(source)}
                     open={videoBlocks.isOpen("framing")}
                     onToggle={() => videoBlocks.toggle("framing")}
                   >
@@ -648,6 +667,26 @@ export function ControlPanel({
                     <p className="text-xs text-muted-foreground">
                       Arraste o vídeo no preview. Divida ou junte trechos na timeline.
                     </p>
+                    {onChangePlayback && onApplyAudioFit ? (
+                      <VideoDurationSection
+                        source={source}
+                        audio={mix}
+                        onChange={onChangePlayback}
+                        onApplyFit={onApplyAudioFit}
+                        onBegin={onBeginInsertGesture}
+                        onEnd={onEndInsertGesture}
+                        reverseStatus={reverseStatus}
+                      />
+                    ) : null}
+                    {source.cuts && source.cuts.length > 0 && onChangeCutSpeed && getPlayhead ? (
+                      <CutSpeedField
+                        source={source}
+                        getPlayhead={getPlayhead}
+                        onChange={onChangeCutSpeed}
+                        onBegin={onBeginInsertGesture}
+                        onEnd={onEndInsertGesture}
+                      />
+                    ) : null}
                   </CollapsibleBlock>
                   <CollapsibleBlock
                     title="Marca d'água"
@@ -670,6 +709,20 @@ export function ControlPanel({
                     open={videoBlocks.isOpen("audio") || Boolean(selectedAudioId)}
                     onToggle={() => videoBlocks.toggle("audio")}
                   >
+                    {(() => {
+                      const over = voiceOverrun(source, mix)
+                      if (!over) return null
+                      return (
+                        <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-2 text-[0.7rem] text-amber-900 dark:text-amber-100">
+                          {voiceOverrunMessage(over)}
+                          {onApplyAudioFit ? (
+                            <Button type="button" size="xs" variant="outline" className="mt-2" onClick={onApplyAudioFit}>
+                              Ajustar ao áudio
+                            </Button>
+                          ) : null}
+                        </p>
+                      )
+                    })()}
                     <AudioPanel
                       audio={mix}
                       videoDuration={videoDuration}
@@ -937,6 +990,16 @@ export function ControlPanel({
             {exportStatus}
             {renderReplies > 0 ? ` · ${renderReplies} respostas do Mac` : ""}
           </p>
+        ) : fitPrompt ? (
+          <div className="flex flex-wrap items-center justify-center gap-2" role="status">
+            <span className="text-xs text-muted-foreground">{fitPrompt}</span>
+            <Button type="button" size="xs" onClick={onApplyFitPrompt}>
+              Aplicar
+            </Button>
+            <Button type="button" size="xs" variant="outline" onClick={onDismissFitPrompt}>
+              Agora não
+            </Button>
+          </div>
         ) : undoToast ? (
           <UndoToast message={undoToast} onUndo={onUndoToast} onDismiss={onDismissUndoToast} />
         ) : liveMessage && !finalExportError ? (
@@ -1042,6 +1105,45 @@ function UndoToast({
         Desfazer
       </Button>
     </div>
+  )
+}
+
+function CutSpeedField({
+  source,
+  getPlayhead,
+  onChange,
+  onBegin,
+  onEnd,
+}: {
+  source: CompositionSource
+  getPlayhead: () => number
+  onChange: (time: number, speed: number, mode: "discrete" | "gesture") => void
+  onBegin?: () => void
+  onEnd?: () => void
+}) {
+  const time = getPlayhead()
+  const index = segmentIndexAt(source.cuts, time)
+  const speed =
+    index <= 0
+      ? (source.playback?.speed ?? DEFAULT_PLAYBACK.speed)
+      : (source.cuts?.[index - 1]?.speed ?? source.playback?.speed ?? DEFAULT_PLAYBACK.speed)
+  return (
+    <label className="flex items-center justify-between gap-2 text-[0.7rem] text-muted-foreground">
+      Velocidade do trecho {index + 1}
+      <input
+        aria-label={`Velocidade do trecho ${index + 1}`}
+        className="w-16 rounded border border-border bg-background px-1 py-0.5 text-right font-mono text-xs text-foreground"
+        inputMode="decimal"
+        value={speed.toFixed(2).replace(".", ",")}
+        onFocus={() => onBegin?.()}
+        onBlur={() => onEnd?.()}
+        onChange={(event) => {
+          const parsed = Number(event.target.value.replace(",", "."))
+          if (!Number.isFinite(parsed)) return
+          onChange(getPlayhead(), clampPlaybackSpeed(parsed), "gesture")
+        }}
+      />
+    </label>
   )
 }
 

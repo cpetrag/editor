@@ -6,6 +6,7 @@ import type { SourceTransform } from "./source-transform.ts"
 import type { SourceTrim } from "./source-trim.ts"
 import type { SourceCut } from "./source-segments.ts"
 import type { CompositionAudio } from "./audio/types.ts"
+import type { SourcePlayback } from "./video/playback.ts"
 
 export const HISTORY_LIMIT = 50
 
@@ -17,6 +18,7 @@ export interface HistorySnapshot {
   sourceTransform?: SourceTransform
   sourceCuts?: SourceCut[]
   sourceTrim?: SourceTrim
+  sourcePlayback?: SourcePlayback
   watermarkEnabled?: boolean
   retention?: { ganchoEnd: number; ctaStart: number }
   productData?: ProductData

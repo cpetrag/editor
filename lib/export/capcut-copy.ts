@@ -17,6 +17,9 @@ export type CopyExportToCapcutInput = {
   /** Áudios ao lado do MP4. O draft do CapCut não aplica fade nem ducking. */
   extraFiles?: { fileName: string; bytes: Uint8Array }[]
   audioPlan?: { tracks: CapcutAudioPlacement[]; omissions: string[] }
+  /** Segmentos da duração (ida, volta, loop, congelar) para remontar no CapCut. */
+  timelineNote?: unknown
+  reverseSourcePath?: string
 }
 
 export type CopyExportToCapcutResult = {
@@ -62,6 +65,18 @@ export async function copyExportToCapcut(
         volume: match.volume,
         loop: match.loop,
       })
+    }
+  }
+  if (input.timelineNote) {
+    const notePath = path.join(input.destDir, `${stem}__timeline.json`)
+    if (isInsideCapcutDir(input.destDir, notePath)) {
+      await writeFile(notePath, JSON.stringify(input.timelineNote, null, 2))
+    }
+  }
+  if (input.reverseSourcePath && existsSync(input.reverseSourcePath)) {
+    const reverseDest = path.join(input.destDir, `${stem}__reverso.mp4`)
+    if (isInsideCapcutDir(input.destDir, reverseDest)) {
+      await copyFile(input.reverseSourcePath, reverseDest)
     }
   }
   if (placed.length > 0) {

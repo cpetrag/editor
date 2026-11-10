@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { parseComposition, type Composition } from "../composition.ts"
+import { COMPOSITION_VERSION, parseComposition, type Composition } from "../composition.ts"
 import { migrateV6toV7 } from "./migrate.ts"
 import { defaultCompositionAudio } from "./types.ts"
 
@@ -52,7 +52,7 @@ test("migrateV6toV7 preserva o projeto e cria o áudio padrão", () => {
 
 test("parseComposition de um v6 abre com o mesmo som de antes", () => {
   const parsed = parseComposition(v6)
-  assert.equal(parsed.version, 8)
+  assert.equal(parsed.version, COMPOSITION_VERSION)
   assert.equal(parsed.pricing, "off")
   assert.deepEqual(parsed.audio, defaultCompositionAudio())
   assert.equal(parsed.source.duration, 12.5)

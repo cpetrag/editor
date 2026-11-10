@@ -71,7 +71,10 @@ test("save and load composition JSON roundtrip through localStorage", () => {
   const storage = memoryStorage()
   saveCompositionJson(composition, storage)
   const loaded = loadCompositionJson(storage)
-  assert.deepEqual(loaded, composition)
+  assert.deepEqual(loaded, {
+    ...composition,
+    source: { ...composition.source, playback: { speed: 1, fill: "none", fit: "video" } },
+  })
   assert.ok(storage.snapshot[COMPOSITION_STORAGE_KEY])
 })
 

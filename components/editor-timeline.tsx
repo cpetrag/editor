@@ -7,6 +7,7 @@ import { AudioWaveform } from "@/components/audio-waveform"
 import { TimelineClipBar } from "@/components/timeline-clip"
 import { slicePeaks } from "@/lib/audio/peaks"
 import { moveAudioTrack, trackOutputRange, trimAudioInEdge, trimAudioOutEdge, usableLength } from "@/lib/audio/range"
+import type { VideoSegment } from "@/lib/video/timeline"
 import type { AudioTrack } from "@/lib/audio/types"
 import { formatTime, type Insert } from "@/lib/inserts"
 import { retentionZones, type RetentionCuts } from "@/lib/insert-ops"
@@ -56,6 +57,7 @@ export interface EditorTimelineProps {
   showRetention: boolean
   retentionCuts?: RetentionCuts | null
   segments: SourceSegment[]
+  playbackSegments?: VideoSegment[]
   activeSegmentIndex: number
   sourceCuts?: SourceCut[]
   onRemoveSourceCut?: (index: number) => void
@@ -101,6 +103,7 @@ export function EditorTimeline({
   showRetention,
   retentionCuts = null,
   segments,
+  playbackSegments,
   activeSegmentIndex,
   sourceCuts,
   onRemoveSourceCut,
@@ -543,7 +546,43 @@ export function EditorTimeline({
               ) : null}
 
               {segmentsTrack
-                ? segments.map((segment) => {
+                ? (playbackSegments && playbackSegments.length > 0 ? playbackSegments : null)?.map((segment, index, all) => {
+                    const widthPx = (pct(segment.outEnd - segment.outStart) / 100) * contentWidth
+                    const zoom = sourceZoomPercent(segments.find((item) => item.index === segment.cutIndex)?.transform)
+                    const label =
+                      segment.kind === "freeze"
+                        ? "Congelado"
+                        : segment.kind === "rev"
+                          ? `← Volta ${segment.speed.toFixed(2).replace(".", ",")}×`
+                          : all.slice(0, index).some((item) => item.kind === "fwd")
+                            ? "Loop"
+                            : `Ida ${segment.speed.toFixed(2).replace(".", ",")}×`
+                    return (
+                      <div
+                        key={`${segment.kind}-${index}`}
+                        className={cn(
+                          "pointer-events-none absolute flex items-center overflow-hidden rounded-[4px] border border-sky-400/40 bg-sky-400/15",
+                          segment.kind === "rev" &&
+                            "bg-[repeating-linear-gradient(-45deg,transparent,transparent_3px,rgba(14,165,233,0.28)_3px,rgba(14,165,233,0.28)_5px)]",
+                          segment.cutIndex === activeSegmentIndex && "border-sky-400 bg-sky-400/25",
+                        )}
+                        style={{
+                          left: `${pct(segment.outStart)}%`,
+                          width: `${pct(segment.outEnd - segment.outStart)}%`,
+                          top: segmentsTrack.top + 2,
+                          height: segmentsTrack.height - 4,
+                        }}
+                        aria-hidden
+                      >
+                        {clipShowsLabel(widthPx) ? (
+                          <span className="truncate px-2 font-mono text-[0.58rem] leading-none tabular-nums text-blue-900 dark:text-sky-200">
+                            {label} · {zoom}%
+                          </span>
+                        ) : null}
+                      </div>
+                    )
+                  }) ??
+                  segments.map((segment) => {
                     const widthPx = (pct(segment.end - segment.start) / 100) * contentWidth
                     return (
                       <div

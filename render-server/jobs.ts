@@ -9,6 +9,7 @@ export type JobPaths = {
   inputPath: string
   outputPath: string
   audioDir: string
+  reversePath: string
 }
 
 export function jobPaths(tmpDir: string, jobId: string): JobPaths {
@@ -16,6 +17,7 @@ export function jobPaths(tmpDir: string, jobId: string): JobPaths {
     inputPath: path.join(tmpDir, `${jobId}-in.mp4`),
     outputPath: path.join(tmpDir, `${jobId}.mp4`),
     audioDir: path.join(tmpDir, `${jobId}-audio`),
+    reversePath: path.join(tmpDir, `${jobId}-rev.mp4`),
   }
 }
 
@@ -31,6 +33,7 @@ export function isExpired(
 export async function cleanupJobFiles(paths: JobPaths): Promise<void> {
   await rm(paths.inputPath, { force: true })
   await rm(paths.outputPath, { force: true })
+  if (paths.reversePath) await rm(paths.reversePath, { force: true })
   if (paths.audioDir) await rm(paths.audioDir, { recursive: true, force: true })
 }
 
