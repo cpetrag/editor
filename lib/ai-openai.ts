@@ -1,4 +1,4 @@
-import { generateObject } from "ai"
+import { generateObject, generateText } from "ai"
 import { openai } from "@ai-sdk/openai"
 
 import { describeOpenAiError, extractAudioForWhisper, type WhisperAudio } from "./ai-audio.ts"
@@ -150,6 +150,17 @@ export async function completeInserts(input: {
     }
   }
   throw lastError instanceof Error ? lastError : new Error("json-invalid")
+}
+
+export async function completeShortCopy(system: string, prompt: string): Promise<string> {
+  const key = getOpenAiApiKey()
+  if (!key) throw new Error("missing-key")
+  const { text } = await generateText({
+    model: openai(textModel()),
+    system,
+    prompt,
+  })
+  return text.trim()
 }
 
 export async function completeHooks(prompt: string): Promise<string[]> {

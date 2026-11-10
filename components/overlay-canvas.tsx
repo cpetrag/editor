@@ -400,6 +400,17 @@ export function OverlayCanvas({
       if (insertKind(insert) !== "sticker") continue
       const src = stickerMediaSrc(insert, blobUrls)
       if (!src || imagesRef.current.has(insert.id)) continue
+      if (insert.type === "review-media" && insert.reviewKind === "video") {
+        const video = document.createElement("video")
+        video.muted = true
+        video.playsInline = true
+        video.preload = "auto"
+        video.onloadeddata = () => setImageTick((tick) => tick + 1)
+        video.onerror = () => console.error("[editor] falha ao carregar vídeo da avaliação")
+        video.src = src
+        imagesRef.current.set(insert.id, video as unknown as HTMLImageElement)
+        continue
+      }
       const image = new Image()
       image.onload = () => setImageTick((tick) => tick + 1)
       image.onerror = () => {

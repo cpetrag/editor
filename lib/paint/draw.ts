@@ -5,8 +5,11 @@ import { backgroundEnvelope } from "../motion/engine.ts"
 import { hashSeed } from "../motion/hash.ts"
 import { animatedPoseAt, IDENTITY_POSE } from "../style/anim-engine.ts"
 import type { InsertStyle } from "../style/types.ts"
-import { layoutMarkedText, strikeLine, type InsertPaintLayout, type LayoutMeasure, type PaintPiece } from "./layout.ts"
+import { fitMarkedLayout, strikeLine, type InsertPaintLayout, type LayoutMeasure, type PaintPiece } from "./layout.ts"
 import type { ProductData } from "../content/runs.ts"
+
+/** Rabinho do balão, em px do quadro. A caixa de colisão usa o mesmo valor. */
+export const BALLOON_TAIL = 26
 
 function roundRect(
   ctx: CanvasRenderingContext2D,
@@ -76,7 +79,7 @@ function paintShape(
     return
   }
   if (shape === "balao") {
-    const tail = 26
+    const tail = BALLOON_TAIL
     roundRect(ctx, box.x, box.y, box.w, box.h, style.text.background.radius)
     ctx.fill()
     const tipX = box.x + box.w * 0.22
@@ -472,7 +475,7 @@ export function paintMarkedInsert(
   },
 ): InsertPaintLayout {
   const style = resolveStyleColors(input.style, brandKitOf(input.brandKitId))
-  const layout = layoutMarkedText({ ...input, style })
-  paintInsertLayout(ctx, layout, style, input.origin, input.motion)
-  return layout
+  const fitted = fitMarkedLayout({ ...input, style })
+  paintInsertLayout(ctx, fitted.layout, fitted.style, input.origin, input.motion)
+  return fitted.layout
 }

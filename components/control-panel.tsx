@@ -173,6 +173,18 @@ interface ControlPanelProps {
   onProductData?: (data: ProductData) => void
   onNiche?: (niche: ContentNiche) => void
   onBrandKit?: (id: string) => void
+  pricing?: "off" | "on"
+  shopee?: import("@/lib/shopee/types").ShopeeProduct
+  nicheManual?: boolean
+  autoShopeeUrl?: string | null
+  onShopeeProduct?: (product: import("@/lib/shopee/types").ShopeeProduct) => void
+  onMountProof?: () => void
+  onUseReviewMedia?: (
+    review: import("@/lib/shopee/types").ShopeeReview,
+    media: import("@/lib/shopee/types").ShopeeMedia,
+  ) => void
+  onReviews?: (reviews: import("@/lib/shopee/types").ShopeeReview[]) => void
+  onAttachReviewPhoto?: (review: import("@/lib/shopee/types").ShopeeReview, file: File) => void
 }
 
 export function ControlPanel({
@@ -277,6 +289,15 @@ export function ControlPanel({
   onProductData,
   onNiche,
   onBrandKit,
+  pricing = "off",
+  shopee,
+  nicheManual,
+  autoShopeeUrl,
+  onShopeeProduct,
+  onMountProof,
+  onUseReviewMedia,
+  onReviews,
+  onAttachReviewPhoto,
 }: ControlPanelProps) {
   const [newProjectArmed, setNewProjectArmed] = useState(false)
 
@@ -672,6 +693,8 @@ export function ControlPanel({
                       <ProductDataFields
                         data={productData ?? {}}
                         niche={niche}
+                        pricing={pricing}
+                        emptyDash={Boolean(shopee)}
                         onChange={(data) => onProductData?.(data)}
                         onNiche={(next) => onNiche?.(next)}
                       />
@@ -871,6 +894,15 @@ export function ControlPanel({
                   onNiche={onNiche}
                   onBrandKit={onBrandKit}
                   onProductData={onProductData}
+                  pricing={pricing}
+                  shopee={shopee}
+                  nicheManual={nicheManual}
+                  autoShopeeUrl={autoShopeeUrl}
+                  onShopeeProduct={onShopeeProduct}
+                  onMountProof={onMountProof}
+                  onUseReviewMedia={onUseReviewMedia}
+                  onReviews={onReviews}
+                  onAttachPhoto={onAttachReviewPhoto}
                 />
               )}
             </>

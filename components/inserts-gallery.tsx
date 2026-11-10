@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { AIGenerateButton } from "@/components/ai-generate-button"
 import { ElementPicker } from "@/components/element-picker"
 import { BrandKitPicker, ProductDataFields } from "@/components/insert-content"
+import { ShopeeProductPanel } from "@/components/shopee-panel"
 import { PaintedInsertThumb } from "@/components/painted-insert-thumb"
 import { Button } from "@/components/ui/button"
 import type { GeneratePipelineResult } from "@/lib/ai-generate"
@@ -13,6 +14,7 @@ import {
   FIELD_LABEL,
   galleryRecipes,
   galleryStyles,
+  priceGapCount,
   markerAtTime,
   missingFieldLabels,
   MOMENT_PACK,
@@ -25,6 +27,8 @@ import {
   type ReadySpec,
 } from "@/lib/content/gallery"
 import { fillVars, type ProductData } from "@/lib/content/runs"
+import { buildProofInserts, quoteText } from "@/lib/shopee/proof"
+import type { ShopeeProduct, ShopeeReview } from "@/lib/shopee/types"
 import type { RetentionCuts } from "@/lib/insert-ops"
 import type { InsertType, Template } from "@/lib/inserts"
 import { brandKitOf } from "@/lib/brand/kits"
@@ -136,6 +140,15 @@ export function InsertsGallery({
   onNiche,
   onBrandKit,
   onProductData,
+  pricing = "off",
+  shopee,
+  nicheManual,
+  autoShopeeUrl,
+  onShopeeProduct,
+  onMountProof,
+  onUseReviewMedia,
+  onReviews,
+  onAttachPhoto,
 }: {
   videoDuration: number
   niche: ContentNiche
@@ -155,7 +168,18 @@ export function InsertsGallery({
   onNiche?: (niche: ContentNiche) => void
   onBrandKit?: (id: string) => void
   onProductData?: (data: ProductData) => void
+  pricing?: "off" | "on"
+  shopee?: ShopeeProduct
+  nicheManual?: boolean
+  autoShopeeUrl?: string | null
+  onShopeeProduct?: (product: ShopeeProduct) => void
+  onMountProof?: () => void
+  onUseReviewMedia?: (review: ShopeeReview, media: ShopeeReview["media"][number]) => void
+  onReviews?: (reviews: ShopeeReview[]) => void
+  onAttachPhoto?: (review: ShopeeReview, file: File) => void
 }) {
+  const [shopeeBusy, setShopeeBusy] = useState(false)
+  const [shopeeError, setShopeeError] = useState("")
   const [query, setQuery] = useState("")
   const [slotPick, setSlotPick] = useState<ContentSlot | "todos" | null>(null)
   const [mode, setMode] = useState<"prontos" | "estilos">("prontos")
@@ -168,6 +192,13 @@ export function InsertsGallery({
   useEffect(() => {
     setUsedStyles(readUsedStyles())
   }, [])
+
+  const autoImported = useRef(false)
+  useEffect(() => {
+    if (!autoShopeeUrl || autoImported.current || shopee) return
+    autoImported.current = true
+    void importShopee(autoShopeeUrl, false)
+  }, [autoShopeeUrl, shopee])
 
   useEffect(() => {
     const node = gridRef.current
@@ -196,14 +227,34 @@ export function InsertsGallery({
 
   const marker = markerAtTime(playhead, videoDuration, retentionCuts)
   const slot = slotPick ?? marker.slot
-  const recipes = galleryRecipes({ niche, slot, query, productData })
+  const recipes = galleryRecipes({ niche, slot, query, productData, pricing })
   const styles = galleryStyles(slot)
   const styleNames = new Map(listOfferPresets().map((preset) => [preset.id, preset.label]))
   const summaryName = productData?.produto?.trim() || "Produto sem nome"
   const nicheLabel = NICHES.find((item) => item.id === niche)?.label ?? "Geral"
   const kitLabel = brandKitOf(brandKitId).label
   const frame = usePlayheadFrame(videoUrl, playhead)
-  const priceGaps = recipes.filter((preset) => missingFieldLabels(preset.text, productData).includes("preço")).length
+  const priceGaps = priceGapCount(recipes, productData, pricing)
+  const proofCards = shopee ? buildProofInserts(shopee) : []
+  async function importShopee(url: string, refresh: boolean) {
+    setShopeeBusy(true)
+    setShopeeError("")
+    try {
+      const response = await fetch("/api/shopee/product", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url, refresh }),
+      })
+      const body = (await response.json()) as ShopeeProduct & { error?: string }
+      if (!response.ok) throw new Error(body.error || "Não foi possível importar.")
+      onShopeeProduct?.(body)
+    } catch (error) {
+      console.error("[editor] importar Shopee", error)
+      setShopeeError(error instanceof Error ? error.message : "Não foi possível importar.")
+    } finally {
+      setShopeeBusy(false)
+    }
+  }
   function setContextOpen(open: boolean) {
     setProductOpen(open)
     try {
@@ -301,11 +352,42 @@ export function InsertsGallery({
               <span className="text-xs text-muted-foreground">Cores</span>
               <BrandKitPicker kitId={brandKitId} onChange={(id) => onBrandKit?.(id)} />
             </div>
+            <ShopeeProductPanel
+              product={shopee}
+              nicheManual={nicheManual}
+              busy={shopeeBusy}
+              error={shopeeError}
+              onImport={(url, refresh) => void importShopee(url, refresh)}
+              onMountProof={() => onMountProof?.()}
+              onUsePhrase={(review) => {
+                const text = quoteText({ ...review, phrase: review.phrase || review.text })
+                onAddReady({
+                  text,
+                  styleId: "balao",
+                  packId: MOMENT_PACK.prova,
+                  y: 58,
+                  role: "prova",
+                  source: {
+                    kind: "shopee",
+                    field: "quote",
+                    reviewId: review.id,
+                    fetchedAt: shopee?.fetchedAt || review.source?.pastedAt || "",
+                    snapshot: text,
+                    ...(review.source?.kind === "manual" ? { pasted: true } : {}),
+                  },
+                }, false)
+              }}
+              onUseMedia={(review, media) => onUseReviewMedia?.(review, media)}
+              onReviews={onReviews}
+              onAttachPhoto={onAttachPhoto}
+            />
             <ProductDataFields
               data={productData ?? {}}
               niche={niche}
               markEmpty
               hideNiche
+              pricing={pricing}
+              emptyDash={Boolean(shopee)}
               onChange={(data) => onProductData?.(data)}
               onNiche={(next) => onNiche?.(next)}
             />
@@ -344,6 +426,44 @@ export function InsertsGallery({
           </button>
         ) : null}
       </div>
+
+      {mode === "prontos" && proofCards.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-medium text-foreground">Prova real</h3>
+          <div className="grid grid-cols-1 gap-2">
+            {proofCards.map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                className="rounded-md border border-border px-2 py-2 text-left"
+                onClick={() =>
+                  onAddReady(
+                    {
+                      text: card.text,
+                      styleId: card.styleId,
+                      packId: MOMENT_PACK.prova,
+                      y: card.y,
+                      role: "prova",
+                      source: {
+                        kind: "shopee",
+                        field: card.field,
+                        fetchedAt: shopee?.fetchedAt || "",
+                        snapshot: card.snapshot,
+                        ...(card.reviewId ? { reviewId: card.reviewId } : {}),
+                        ...(card.pasted ? { pasted: true } : {}),
+                      },
+                    },
+                    false,
+                  )
+                }
+              >
+                {card.pasted ? <p className="text-[0.65rem] text-muted-foreground">colada</p> : null}
+                <p className="whitespace-pre-line text-sm text-foreground">{card.text}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {mode === "prontos" && recipes.length === 0 ? (
         <p className="text-xs text-muted-foreground">Nada com esse filtro. Tente “Todos” ou outra palavra.</p>

@@ -76,6 +76,8 @@ export type PickedAudioFile = {
   voiceTaken: boolean
   /** "Substituir áudio": muta o original no mesmo passo em que a faixa nasce. */
   muteOriginal: boolean
+  /** Quando o chamador já sabe o tipo (locução vinda do UGC). */
+  kind?: AudioKind
 }
 
 /**
@@ -87,7 +89,7 @@ export function audioAfterFileChoice(
   picked: PickedAudioFile | null,
 ): CompositionAudio {
   if (!picked) return audio
-  const guessed = guessAudioKind(picked.duration)
+  const guessed = picked.kind ?? guessAudioKind(picked.duration)
   const kind: AudioKind = guessed === "voice" && picked.voiceTaken ? "sfx" : guessed
   const track = buildAudioTrack({
     id: picked.id,

@@ -2,7 +2,7 @@ import type { CompositionInsert } from "../composition.ts"
 import type { ProductData } from "../content/runs.ts"
 import { offerStylePatch } from "../style/offer-styles.ts"
 import { resolveInsertStyle } from "../style/resolve-insert-style.ts"
-import { layoutMarkedText } from "../paint/layout.ts"
+import { fitMarkedLayout, PAINT_MAX_WIDTH_PCT } from "../paint/layout.ts"
 import { PLAY_H, PLAY_W } from "./layout.ts"
 import { resolveLayerStyle } from "./resolve-style.ts"
 import { wrapLines } from "./wrap-lines.ts"
@@ -118,8 +118,9 @@ export function layoutInsertText(
     (Boolean(offerStylePatch(insert.styleRef?.presetId)) || /[*~{]/.test(insert.text ?? ""))
   if (marked) {
     const painted = resolveInsertStyle(insert, { frameWidth: frame.width })
-    const maxW = (painted.text.maxWidth / 100) * frame.width
-    const laid = layoutMarkedText({
+    const pct = Math.min(PAINT_MAX_WIDTH_PCT, painted.text.maxWidth > 0 ? painted.text.maxWidth : PAINT_MAX_WIDTH_PCT)
+    const maxW = (pct / 100) * frame.width
+    const fitted = fitMarkedLayout({
       text: insert.text ?? "",
       style: painted,
       maxWidth: maxW,
@@ -129,14 +130,15 @@ export function layoutInsertText(
       measure: (text, font) =>
         measureWidth ? measureWidth(font.size, text) : text.length * font.size * 0.55,
     })
+    const laid = fitted.layout
     const anchorX = (painted.text.x / 100) * frame.width
     const anchorY = (painted.text.y / 100) * frame.height
     return {
       lines: laid.lines.map((line) => line.pieces.map((piece) => piece.text).join(" ")),
       blockW: laid.bbox.w,
       blockH: laid.bbox.h,
-      effectiveFontSize: painted.text.fontSize,
-      overflow: laid.blockW > maxW + 0.5,
+      effectiveFontSize: fitted.style.text.fontSize,
+      overflow: laid.lines.some((line) => line.width > maxW + 0.5),
       cx: anchorX + laid.bbox.x + laid.bbox.w / 2,
       cy: anchorY + laid.bbox.y + laid.bbox.h / 2,
       rotation: painted.text.rotation,
@@ -146,7 +148,7 @@ export function layoutInsertText(
   const style = resolveLayerStyle(insert, brandFontId)
   const raw = style.uppercase ? style.text.toUpperCase() : style.text
   if (!raw.trim()) return null
-  const maxW = (style.maxWidthPct / 100) * frame.width
+  const maxW = (Math.min(PAINT_MAX_WIDTH_PCT, style.maxWidthPct) / 100) * frame.width
   const measure = measureWidth ?? fallbackTextMeasure
   const laid = layoutTextBlock({
     text: raw,

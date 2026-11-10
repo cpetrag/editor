@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { BRAND_KITS } from "@/lib/brand/kits"
 import {
@@ -89,6 +89,8 @@ export function ProductDataFields({
   onNiche,
   markEmpty = false,
   hideNiche = false,
+  pricing = "off",
+  emptyDash = false,
 }: {
   data: ProductData
   niche: ContentNiche
@@ -96,7 +98,11 @@ export function ProductDataFields({
   onNiche: (niche: ContentNiche) => void
   markEmpty?: boolean
   hideNiche?: boolean
+  pricing?: "off" | "on"
+  emptyDash?: boolean
 }) {
+  const [showPrice, setShowPrice] = useState(false)
+  const priceFields = new Set(["preco", "preco_de", "desconto", "cupom"])
   return (
     <div className="flex flex-col gap-2">
       {hideNiche ? null : (
@@ -113,7 +119,12 @@ export function ProductDataFields({
         </select>
       </label>
       )}
-      {PRODUCT_FIELDS.map((field) => {
+      {pricing === "off" && !showPrice ? (
+        <button type="button" className="text-left text-[0.7rem] text-muted-foreground underline" onClick={() => setShowPrice(true)}>
+          Mostrar campos de preço
+        </button>
+      ) : null}
+      {PRODUCT_FIELDS.filter((field) => pricing === "on" || showPrice || !priceFields.has(field)).map((field) => {
         const meta = FIELD_LABELS[field]
         const invalid = (field === "preco" || field === "preco_de") ? priceError(data[field] ?? "") : null
         const empty = markEmpty && !(data[field] ?? "").trim()
@@ -122,7 +133,7 @@ export function ProductDataFields({
             {meta?.label ?? field}
             <input
               className={`h-8 rounded-md border bg-background px-2 text-sm text-foreground ${invalid ? "border-red-500" : empty ? "border-amber-400 bg-amber-50" : "border-border"}`}
-              placeholder={meta?.placeholder}
+              placeholder={emptyDash && !(data[field] ?? "").trim() ? "—" : meta?.placeholder}
               value={data[field] ?? ""}
               onChange={(event) => onChange({ ...data, [field]: event.target.value })}
               onBlur={(event) => {

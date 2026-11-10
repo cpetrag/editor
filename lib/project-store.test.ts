@@ -63,6 +63,7 @@ const composition: Composition = {
   output: { width: 1080, height: 1920, fps: 30, videoBitrate: 8_000_000 },
   captionPreset: "viral",
   captionStyle: DEFAULT_CAPTION_STYLE,
+  pricing: "off",
   audio: defaultCompositionAudio(),
 }
 

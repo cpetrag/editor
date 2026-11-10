@@ -215,6 +215,15 @@ export const INSERT_TYPES: InsertTypeMeta[] = [
     defaultText: "NOVO",
   },
   {
+    value: "review-media",
+    label: "Mídia de avaliação",
+    category: "prova",
+    colorClass: "bg-track-sticker",
+    dotVar: "var(--track-sticker)",
+    hasText: false,
+    libraryAddable: false,
+  },
+  {
     value: "sticker-png",
     label: "Insert PNG",
     category: "atencao",
@@ -445,6 +454,24 @@ export function createInsert(type: InsertType = "logo-shopee"): Insert {
       textAlign: "center",
     }
     return applyTextPreset(created, DEFAULT_TEXT_PRESET_ID)
+  }
+  if (type === "review-media") {
+    return {
+      ...newInsertId(),
+      type,
+      kind: "sticker",
+      start: 0,
+      duration: 3,
+      animIn: DEFAULT_ANIM_IN,
+      animOut: DEFAULT_ANIM_OUT,
+      anchor: "center",
+      x: 62,
+      y: 58,
+      scale: 0.32,
+      sourceKind: "upload",
+      reviewKind: "image",
+      label: "foto de cliente",
+    }
   }
   if (type === STICKER_INSERT_TYPE) {
     return {

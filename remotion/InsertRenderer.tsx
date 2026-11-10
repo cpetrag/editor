@@ -10,6 +10,7 @@ import type { RenderProps } from "./types.ts"
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve) => {
     const image = new Image()
+    if (/^https?:\/\//i.test(src)) image.crossOrigin = "anonymous"
     image.onload = () => resolve(image)
     image.onerror = () => resolve(image)
     image.src = src

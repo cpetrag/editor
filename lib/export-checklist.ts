@@ -62,6 +62,7 @@ export type ExportWarningCode =
   | "audio-capcut"
   | "audio-trim"
   | "insert-past-end"
+  | "shopee-stale"
 
 export type ExportWarning = {
   id: string

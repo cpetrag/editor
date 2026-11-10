@@ -52,7 +52,8 @@ test("migrateV6toV7 preserva o projeto e cria o áudio padrão", () => {
 
 test("parseComposition de um v6 abre com o mesmo som de antes", () => {
   const parsed = parseComposition(v6)
-  assert.equal(parsed.version, 7)
+  assert.equal(parsed.version, 8)
+  assert.equal(parsed.pricing, "off")
   assert.deepEqual(parsed.audio, defaultCompositionAudio())
   assert.equal(parsed.source.duration, 12.5)
   assert.equal(parsed.inserts[0]?.id, "t1")

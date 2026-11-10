@@ -8,6 +8,9 @@ import { getPresetStyle } from "../style/presets.ts"
 import type { Animation } from "../style/types.ts"
 import { applyContentRecipe } from "./recipes.ts"
 import { CONTENT_PRESETS, contentPresetById, type ContentNiche, type ContentPreset, type ContentSlot } from "./presets.ts"
+import { presetUsesPrice } from "../shopee/format.ts"
+import { shapeQuoteInsert } from "../shopee/quote-fit.ts"
+import type { ShopeeInsertSource } from "../shopee/types.ts"
 import { fillVars, type ProductData, type ProductField } from "./runs.ts"
 
 export const MOMENT_PACK: Record<ContentSlot, string> = {
@@ -93,10 +96,13 @@ export function galleryRecipes(input: {
   slot: ContentSlot | "todos"
   query: string
   productData?: ProductData
+  pricing?: "off" | "on"
 }): ContentPreset[] {
   const query = input.query.trim().toLowerCase()
+  const hidePrice = input.pricing === "off"
   const styles = new Map(listOfferPresets().map((preset) => [preset.id, preset.label.toLowerCase()]))
   const rows = CONTENT_PRESETS.map((preset, index) => ({ preset, index })).filter(({ preset }) => {
+    if (hidePrice && presetUsesPrice(preset.text)) return false
     if (input.slot !== "todos" && preset.slot !== input.slot) return false
     if (input.niche !== "shopee" && preset.niche !== input.niche && preset.niche !== "shopee") return false
     if (!query) return true
@@ -145,12 +151,23 @@ export function missingFieldLabels(text: string, data: ProductData | undefined):
   return fillVars(text, data).empty.map((field) => FIELD_LABEL[field].toLowerCase())
 }
 
+export function priceGapCount(
+  recipes: ContentPreset[],
+  data: ProductData | undefined,
+  pricing: "off" | "on" = "on",
+): number {
+  if (pricing !== "on") return 0
+  return recipes.filter((preset) => missingFieldLabels(preset.text, data).includes("preço")).length
+}
+
 export type ReadySpec = {
   text: string
   styleId: string
   packId: string
   y: number
   contentId?: string
+  source?: ShopeeInsertSource
+  role?: "gancho" | "prova" | "cta"
 }
 
 export function buildReadyInsert(
@@ -163,14 +180,17 @@ export function buildReadyInsert(
   const created = createInsert("texto-livre")
   const recipe = spec.contentId ? contentPresetById(spec.contentId) : undefined
   const styled = recipe ? applyContentRecipe(created, recipe) : paintLoose(created, spec)
-  return {
+  const ready: CompositionInsert = {
     ...styled,
     text: spec.text,
     y: spec.y,
     x: typeof styled.x === "number" ? styled.x : 50,
     start: timing.start,
     duration: timing.duration,
+    ...(spec.role ? { role: spec.role } : {}),
+    ...(spec.source ? { source: spec.source } : {}),
   }
+  return ready.text.includes("\n") ? shapeQuoteInsert(ready) : ready
 }
 
 function paintLoose(insert: CompositionInsert, spec: ReadySpec): CompositionInsert {

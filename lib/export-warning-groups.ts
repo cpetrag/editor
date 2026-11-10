@@ -25,6 +25,7 @@ const GROUP_LABELS: Record<ExportWarningCode, string> = {
   "audio-capcut": "CapCut sem automação",
   "audio-trim": "Corte inválido",
   "insert-past-end": "Passa do fim do vídeo",
+  "shopee-stale": "Dado da Shopee desatualizado",
 }
 
 /** Agrupa avisos do mesmo tipo, na ordem em que o primeiro de cada tipo aparece. */

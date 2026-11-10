@@ -223,6 +223,10 @@ test("FONT_IDS lists the families in spec order", () => {
     "titan",
     "caveat",
     "courier",
+    "archivo-black",
+    "permanent-marker",
+    "pacifico",
+    "fredoka",
   ])
 })
 

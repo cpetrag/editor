@@ -33,6 +33,7 @@ import {
   mergeCaptionStylePatch,
   mergeInsertPatch,
   outputFromQuality,
+  parseComposition,
   qualityFromOutput,
   MAX_STICKERS,
   type CaptionStyle,
@@ -138,6 +139,11 @@ import {
 } from "@/lib/source-url"
 import { isEditableTarget } from "@/lib/is-editable-target"
 import { emptyVariableWarnings } from "@/lib/content/empty-vars"
+import { applyImportedProduct, shopeeStaleWarning } from "@/lib/shopee/apply"
+import { withPastedReviews } from "@/lib/shopee/paste"
+import { buildProofInserts } from "@/lib/shopee/proof"
+import { placeProofInserts } from "@/lib/shopee/place"
+import type { ShopeeMedia, ShopeeProduct, ShopeeReview } from "@/lib/shopee/types"
 import { checklistItemsFromComposition, collectExportWarnings } from "@/lib/export-checklist"
 import { committedInlineText, DEFAULT_INLINE_TEXT } from "@/lib/compose/inline-editor-style"
 import { assembleInserts, type GeneratePipelineResult } from "@/lib/ai-generate"
@@ -369,6 +375,8 @@ export function VideoEditor() {
   const [missingFile, setMissingFile] = useState(false)
   const [quotaWarning, setQuotaWarning] = useState("")
   const [hydrated, setHydrated] = useState(false)
+  const [autoShopeeUrl, setAutoShopeeUrl] = useState<string | null>(null)
+  const openedProject = useRef("")
   const [watermarkPrefs, setWatermarkPrefs] = useState(() => loadWatermarkPrefs())
   const [saveToCapcut, setSaveToCapcut] = useState(() => loadExportPrefs().saveToCapcut)
   const [exportFileName, setExportFileName] = useState("")
@@ -539,6 +547,13 @@ export function VideoEditor() {
   useEffect(() => {
     let cancelled = false
     async function hydrate() {
+      if (new URLSearchParams(window.location.search).get("project")) {
+        if (!cancelled) {
+          setRecentSources(readRecentSources())
+          setHydrated(true)
+        }
+        return
+      }
       const stored = loadCompositionJson()
       if (cancelled) return
       if (stored) {
@@ -1141,6 +1156,7 @@ export function VideoEditor() {
             videoDuration,
             voiceTaken: audio.tracks.some((track) => track.kind === "voice"),
             muteOriginal: input.muteOriginal === true,
+            kind: input.kind,
           }),
         }
       }, input.history === "gesture" ? "gesture" : "discrete")
@@ -1150,6 +1166,183 @@ export function VideoEditor() {
     },
     [applyComposition],
   )
+
+  useEffect(() => {
+    if (!hydrated) return
+    const params = new URLSearchParams(window.location.search)
+    const projectId = params.get("project")
+    const shopeeLink = params.get("shopee")
+    if (!projectId) {
+      if (shopeeLink && !compositionRef.current.shopee) setAutoShopeeUrl(shopeeLink)
+      return
+    }
+    if (openedProject.current === projectId) return
+    openedProject.current = projectId
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch(`/api/projects/${projectId}`)
+        if (!response.ok) throw new Error("projeto inexistente")
+        const project = (await response.json()) as {
+          composition: unknown
+          videoJobId: string
+          videoFileName?: string
+          voiceJobId?: string
+          voiceFileName?: string
+        }
+        if (cancelled) return
+        const loaded = parseComposition(project.composition)
+        const videoResponse = await fetch(`/api/import/media/${project.videoJobId}`)
+        if (!videoResponse.ok) throw new Error("vídeo do projeto indisponível")
+        const videoBlob = await videoResponse.blob()
+        const videoFile = new File([videoBlob], project.videoFileName || "video.mp4", {
+          type: videoBlob.type || "video/mp4",
+        })
+        const probe = await probeVideoBlob(videoFile)
+        const fileId = crypto.randomUUID()
+        await fileStoreRef.current.save(fileId, videoFile, {
+          fileName: videoFile.name,
+          mimeType: videoFile.type || "video/mp4",
+        })
+        const opened = clampComposition({
+          ...loaded,
+          source: {
+            ...loaded.source,
+            duration: probe.duration,
+            fps: loaded.source.fps || DEFAULT_FPS,
+            width: probe.width,
+            height: probe.height,
+            fileName: videoFile.name,
+            fileId,
+          },
+        })
+        compositionRef.current = opened
+        setComposition(opened)
+        sourceBlobRef.current = videoFile
+        const objectUrl = URL.createObjectURL(videoFile)
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = objectUrl
+        setBackgroundUrl(objectUrl)
+        setFileName(videoFile.name)
+        setMissingFile(false)
+        if (project.voiceJobId) {
+          const voiceResponse = await fetch(`/api/import/media/${project.voiceJobId}`)
+          if (voiceResponse.ok) {
+            const voiceBlob = await voiceResponse.blob()
+            const voiceFile = new File([voiceBlob], project.voiceFileName || "locucao.mp3", {
+              type: voiceBlob.type || "audio/mpeg",
+            })
+            const { inspectAudioBlob } = await import("@/lib/audio/decode")
+            const inspected = await inspectAudioBlob(voiceFile)
+            await commitAudioFile({
+              file: voiceFile,
+              duration: inspected.duration,
+              kind: "voice",
+              muteOriginal: true,
+            })
+          }
+        }
+      } catch (error) {
+        console.error("[editor] projeto importado", error)
+        setLiveMessage(error instanceof Error ? error.message : "Não foi possível abrir o projeto.")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [hydrated, commitAudioFile])
+
+  const acceptShopeeProduct = useCallback((product: ShopeeProduct) => {
+    applyComposition((current) => applyImportedProduct(current, product), "discrete", "Importar Shopee")
+  }, [applyComposition])
+
+  const mountProof = useCallback(() => {
+    applyComposition((current) => {
+      if (!current.shopee) return current
+      const placed = placeProofInserts(
+        buildProofInserts(current.shopee),
+        current.inserts,
+        current.source.duration,
+        current.retention,
+        current.shopee.fetchedAt,
+        resolveTrimWindow(current.source).end,
+      )
+      if (placed.length === 0) return current
+      return { ...current, inserts: [...current.inserts, ...placed] }
+    }, "discrete", "Montar prova")
+  }, [applyComposition])
+
+  const useReviewMedia = useCallback(async (review: ShopeeReview, media: ShopeeMedia) => {
+    try {
+      const response = await fetch("/api/import/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: media.url }),
+      })
+      const body = (await response.json()) as { id?: string; mime?: string; error?: string }
+      if (!response.ok || !body.id) throw new Error(body.error || "Não foi possível baixar a mídia.")
+      const fileResponse = await fetch(`/api/import/media/${body.id}`)
+      if (!fileResponse.ok) throw new Error("Mídia indisponível.")
+      const blob = await fileResponse.blob()
+      const fileId = crypto.randomUUID()
+      const fileName = media.type === "video" ? "avaliacao.mp4" : "avaliacao.jpg"
+      await fileStoreRef.current.save(fileId, blob, { fileName, mimeType: body.mime || blob.type || "image/jpeg" })
+      const objectUrl = URL.createObjectURL(blob)
+      setStickerBlobUrls((current) => ({ ...current, [fileId]: objectUrl }))
+      const created = createInsert("review-media")
+      created.reviewKind = media.type
+      created.fileId = fileId
+      created.assetJobId = body.id
+      created.label = "foto de cliente"
+      created.role = "prova"
+      created.source = {
+        kind: "shopee",
+        field: "reviewMedia",
+        reviewId: review.id,
+        fetchedAt: compositionRef.current.shopee?.fetchedAt || new Date().toISOString(),
+        ...(review.source?.kind === "manual" ? { pasted: true } : {}),
+      }
+      applyComposition((current) => ({ ...current, inserts: [...current.inserts, created] }), "discrete", "Mídia de avaliação")
+    } catch (error) {
+      console.error("[editor] mídia de avaliação", error)
+      setLiveMessage(error instanceof Error ? error.message : "Não foi possível usar a mídia.")
+    }
+  }, [applyComposition])
+
+  const savePastedReviews = useCallback((reviews: ShopeeReview[]) => {
+    applyComposition((current) => ({
+      ...current,
+      shopee: withPastedReviews(current.shopee, reviews),
+    }), "discrete", "Avaliações")
+  }, [applyComposition])
+
+  const attachReviewPhoto = useCallback(async (review: ShopeeReview, file: File) => {
+    try {
+      const fileId = crypto.randomUUID()
+      await fileStoreRef.current.save(fileId, file, {
+        fileName: file.name || "avaliacao.jpg",
+        mimeType: file.type || "image/jpeg",
+      })
+      const objectUrl = URL.createObjectURL(file)
+      setStickerBlobUrls((current) => ({ ...current, [fileId]: objectUrl }))
+      const created = createInsert("review-media")
+      created.reviewKind = "image"
+      created.fileId = fileId
+      created.label = "foto de cliente"
+      created.role = "prova"
+      created.source = {
+        kind: "shopee",
+        field: "reviewMedia",
+        reviewId: review.id,
+        fetchedAt: review.source?.pastedAt || compositionRef.current.shopee?.fetchedAt || new Date().toISOString(),
+        ...(review.source?.kind === "manual" ? { pasted: true } : {}),
+      }
+      applyComposition((current) => ({ ...current, inserts: [...current.inserts, created] }), "discrete", "Foto de avaliação")
+    } catch (error) {
+      console.error("[editor] foto colada", error)
+      setLiveMessage(error instanceof Error ? error.message : "Não foi possível anexar a foto.")
+    }
+  }, [applyComposition])
 
   const editAudioTrack = useCallback(
     (id: string, patch: Partial<AudioTrack>, phase: "start" | "move" | "end") => {
@@ -2477,6 +2670,11 @@ export function VideoEditor() {
         setExportFileName(sanitizeExportStem(stemName))
         setLiveMessage("")
         const audios = await loadRenderAudios(composition)
+        const stickerSrcs = { ...stickerBlobUrls }
+        for (const insert of composition.inserts) {
+          if (insert.type !== "review-media" || !insert.fileId || !insert.assetJobId) continue
+          stickerSrcs[insert.fileId] = `${window.location.origin}/api/import/media/${insert.assetJobId}`
+        }
         finalExportTask.start({
           video: videoBlob,
           props: toCliRenderProps(
@@ -2486,7 +2684,7 @@ export function VideoEditor() {
                 output: outputFromQuality("1080", composition.source),
               }),
               videoSrc: "",
-              stickerSrcs: stickerBlobUrls,
+              stickerSrcs,
               audioSrcs: audioUrls,
               watermarkPrefs,
             }),
@@ -2782,7 +2980,8 @@ export function VideoEditor() {
             brand: { fontId: composition.brand.fontId, logo: composition.brand.logo },
           }),
         ),
-        ...emptyVariableWarnings(composition.inserts, composition.productData),
+        ...emptyVariableWarnings(composition.inserts, composition.productData, composition.pricing),
+        ...(shopeeStaleWarning(composition.shopee) ? [shopeeStaleWarning(composition.shopee)!] : []),
         ...(() => {
           const late = insertsPastEnd(composition.inserts, resolveTrimWindow(composition.source).end)
           return late.length
@@ -2812,6 +3011,8 @@ export function VideoEditor() {
       composition.source.duration,
       composition.source.trim,
       composition.productData,
+      composition.pricing,
+      composition.shopee,
       composition.styleRef,
       composition.tracks,
       composition.audio,
@@ -3314,8 +3515,17 @@ export function VideoEditor() {
               if (textHistoryTimer.current) clearTimeout(textHistoryTimer.current)
               textHistoryTimer.current = setTimeout(() => endInsertHistory(), 800)
             }}
-            onNiche={(niche) => applyComposition((prev) => ({ ...prev, niche }), "discrete")}
-            onBrandKit={(brandKitId) => applyComposition((prev) => ({ ...prev, brandKitId }), "discrete")}
+            onNiche={(niche) => applyComposition((prev) => ({ ...prev, niche, nicheManual: true }), "discrete")}
+            onBrandKit={(brandKitId) => applyComposition((prev) => ({ ...prev, brandKitId, kitManual: true }), "discrete")}
+            pricing={composition.pricing}
+            shopee={composition.shopee}
+            nicheManual={composition.nicheManual}
+            autoShopeeUrl={autoShopeeUrl}
+            onShopeeProduct={acceptShopeeProduct}
+            onMountProof={mountProof}
+            onUseReviewMedia={(review, media) => void useReviewMedia(review, media)}
+            onReviews={savePastedReviews}
+            onAttachReviewPhoto={(review, file) => void attachReviewPhoto(review, file)}
             watermarkEnabled={composition.watermarkEnabled === true}
             watermarkPrefs={watermarkPrefs}
             onWatermarkEnabledChange={handleWatermarkEnabled}

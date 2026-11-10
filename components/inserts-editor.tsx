@@ -42,6 +42,7 @@ import { getPresetStyle } from "@/lib/style/presets"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import type { CaptionPreset, CaptionStyle } from "@/lib/composition"
 import type { PanelBlockController } from "@/components/use-panel-blocks"
+import { importedOnLabel, sourceDrifted } from "@/lib/shopee/drift"
 import { cn } from "@/lib/utils"
 
 const POSITIONS = [
@@ -199,6 +200,14 @@ export function InsertsEditor({
           <p className="text-[0.7rem] text-muted-foreground">
             {formatClockTenths(insert.start)}–{formatClockTenths(insert.start + insert.duration)}
           </p>
+          {insert.source?.pasted ? (
+            <p className="text-[0.7rem] text-muted-foreground">colada</p>
+          ) : insert.source?.kind === "shopee" ? (
+            <p className="text-[0.7rem] text-muted-foreground">{importedOnLabel(insert.source.fetchedAt)}</p>
+          ) : null}
+          {sourceDrifted(insert.text ?? "", insert.source) ? (
+            <p className="text-[0.7rem] text-amber-700">o texto não bate mais com o dado importado</p>
+          ) : null}
         </div>
         {onHookVariations ? (
           <Button type="button" variant="ghost" size="sm" onClick={onHookVariations}>

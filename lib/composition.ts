@@ -22,7 +22,7 @@ import {
   serializeSourceTransform,
   type SourceTransform,
 } from "./source-transform.ts"
-import { clampSourceTrim, parseSourceTrim, type SourceTrim } from "./source-trim.ts"
+import { clampSourceTrim, parseSourceTrim, resolveTrimWindow, type SourceTrim } from "./source-trim.ts"
 import {
   clampSourceCuts,
   parseSourceCuts,
@@ -32,6 +32,8 @@ import {
 import type { BrandKitId } from "./brand/kits.ts"
 import type { ContentNiche } from "./content/presets.ts"
 import type { ProductData } from "./content/runs.ts"
+import { parseStoredShopee } from "./shopee/stored.ts"
+import type { ShopeeInsertSource, ShopeeProduct } from "./shopee/types.ts"
 import { parseCustomPresets } from "./style/user-presets.ts"
 import { getPresetStyle, LEGADO_PRESET_ID } from "./style/presets.ts"
 import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
@@ -51,7 +53,8 @@ import {
   type CompositionAudio,
 } from "./audio/types.ts"
 
-export const COMPOSITION_VERSION = 7 as const
+export const COMPOSITION_VERSION = 8 as const
+export const COMPOSITION_VERSION_V7 = 7 as const
 export const LEGACY_COMPOSITION_VERSION = 1 as const
 export const COMPOSITION_VERSION_V2 = 2 as const
 export const PREVIOUS_COMPOSITION_VERSION = 3 as const
@@ -103,6 +106,7 @@ export type InsertType =
   | "tarja-espera"
   | "texto-livre"
   | "sticker-png"
+  | "review-media"
   | "legenda"
 
 export type InsertAnchor = "top" | "center" | "bottom"
@@ -116,6 +120,7 @@ export type AnimPresetId =
 
 export const TEXT_INSERT_TYPE = "texto-livre" as const
 export const STICKER_INSERT_TYPE = "sticker-png" as const
+export const REVIEW_MEDIA_TYPE = "review-media" as const
 export const CAPTION_INSERT_TYPE = "legenda" as const
 export const MAX_STICKERS = 20
 export const DEFAULT_TEXT_PRESET = "bold-outline"
@@ -185,6 +190,9 @@ export interface CompositionInsert {
   textAlign?: OverlayTextAlign
   role?: "gancho" | "prova" | "cta"
   contentId?: string
+  source?: ShopeeInsertSource
+  reviewKind?: "image" | "video"
+  assetJobId?: string
   scale?: number
   fillColor?: string
   accentColor?: string
@@ -330,8 +338,12 @@ export interface Composition {
   watermarkEnabled?: boolean
   retention?: { ganchoEnd: number; ctaStart: number }
   productData?: ProductData
+  pricing: "off" | "on"
+  shopee?: ShopeeProduct
   niche?: ContentNiche
+  nicheManual?: boolean
   brandKitId?: BrandKitId
+  kitManual?: boolean
   projectSeed?: string
   audio: CompositionAudio
 }
@@ -355,6 +367,7 @@ const INSERT_TYPES: readonly InsertType[] = [
   "tarja-espera",
   "texto-livre",
   "sticker-png",
+  "review-media",
   "legenda",
 ]
 
@@ -417,7 +430,7 @@ function isSourceKind(value: unknown): value is StickerSourceKind {
 export function insertKind(insert: Pick<CompositionInsert, "kind" | "type">): InsertKind {
   if (isKind(insert.kind)) return insert.kind
   if (insert.type === TEXT_INSERT_TYPE) return "text"
-  if (insert.type === STICKER_INSERT_TYPE) return "sticker"
+  if (insert.type === STICKER_INSERT_TYPE || insert.type === REVIEW_MEDIA_TYPE) return "sticker"
   if (insert.type === CAPTION_INSERT_TYPE) return "caption"
   return "chip"
 }
@@ -453,17 +466,17 @@ function resolvedKind(type: InsertType, rawKind: unknown): InsertKind | null {
     ? rawKind
     : type === TEXT_INSERT_TYPE
       ? "text"
-      : type === STICKER_INSERT_TYPE
-        ? "sticker"
-        : type === CAPTION_INSERT_TYPE
-          ? "caption"
-          : "chip"
+    : type === STICKER_INSERT_TYPE || type === REVIEW_MEDIA_TYPE
+      ? "sticker"
+      : type === CAPTION_INSERT_TYPE
+        ? "caption"
+        : "chip"
   if (kind === "text" && type !== TEXT_INSERT_TYPE) return null
-  if (kind === "sticker" && type !== STICKER_INSERT_TYPE) return null
+  if (kind === "sticker" && type !== STICKER_INSERT_TYPE && type !== REVIEW_MEDIA_TYPE) return null
   if (kind === "caption" && type !== CAPTION_INSERT_TYPE) return null
   if (
     kind === "chip" &&
-    (type === TEXT_INSERT_TYPE || type === STICKER_INSERT_TYPE || type === CAPTION_INSERT_TYPE)
+    (type === TEXT_INSERT_TYPE || type === STICKER_INSERT_TYPE || type === REVIEW_MEDIA_TYPE || type === CAPTION_INSERT_TYPE)
   ) {
     return null
   }
@@ -618,8 +631,30 @@ export function clampComposition(composition: Composition): Composition {
     ...composition,
     audio: nextAudio,
     source: clampSourceCutsOf(clampSourceWithTrim(composition.source)),
-    inserts: composition.inserts.map((insert) => clampInsert(insert, duration)),
+    inserts: clampInsertsToTrimEnd(
+      composition.inserts.map((insert) => clampInsert(insert, duration)),
+      composition.source,
+    ),
   }
+}
+
+/** b.6 — o insert termina no máximo na Saída (source.trim.end). */
+function clampInsertsToTrimEnd(inserts: CompositionInsert[], source: CompositionSource): CompositionInsert[] {
+  const end = resolveTrimWindow(source).end
+  if (!(end > 0)) return inserts
+  let changed = false
+  const tenthDown = (value: number) => Math.floor(Math.max(0, value) * 10 + 1e-6) / 10
+  const next = inserts.map((insert) => {
+    if (insert.kind === "caption") return insert
+    if (!(insert.start + insert.duration > end + 0.001)) return insert
+    changed = true
+    if (insert.start >= end - 0.5) {
+      const start = tenthDown(Math.max(0, end - 1.5))
+      return { ...insert, start, duration: Math.max(0.5, tenthDown(end - start)) }
+    }
+    return { ...insert, duration: Math.max(0.5, tenthDown(end - insert.start)) }
+  })
+  return changed ? next : inserts
 }
 
 /** Mantém a identidade do objeto quando o corte já está válido (evita re-render). */
@@ -795,6 +830,7 @@ function parseInsert(raw: unknown): CompositionInsert | null {
     animIn: isAnim(raw.animIn) ? raw.animIn : kind === "caption" ? "none" : "pop",
     animOut: isAnim(raw.animOut) ? raw.animOut : "none",
     ...(style ? { style } : {}),
+    ...provenanceOf(raw),
   }
 
   if (kind === "chip") {
@@ -910,6 +946,8 @@ function parseInsert(raw: unknown): CompositionInsert | null {
       ...(libraryId ? { libraryId } : {}),
       ...(fileId ? { fileId } : {}),
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
+      ...(raw.reviewKind === "image" || raw.reviewKind === "video" ? { reviewKind: raw.reviewKind } : {}),
+      ...(typeof raw.assetJobId === "string" && raw.assetJobId ? { assetJobId: raw.assetJobId } : {}),
     },
     raw,
   )
@@ -1027,6 +1065,7 @@ function parseOutput(
 function isSupportedVersion(value: unknown): boolean {
   return (
     value === COMPOSITION_VERSION ||
+    value === COMPOSITION_VERSION_V7 ||
     value === COMPOSITION_VERSION_V6 ||
     value === COMPOSITION_VERSION_V5 ||
     value === COMPOSITION_VERSION_V4 ||
@@ -1048,6 +1087,34 @@ function isBrandKitValue(value: unknown): value is BrandKitId {
     value === "moda" ||
     value === "contraste"
   )
+}
+
+const SOURCE_FIELDS = ["rating", "sold", "quote", "sizes", "colors", "badge", "reviewMedia"] as const
+
+function parseInsertSource(raw: unknown): ShopeeInsertSource | undefined {
+  if (!isRecord(raw) || raw.kind !== "shopee" || typeof raw.fetchedAt !== "string") return undefined
+  const field = typeof raw.field === "string" && SOURCE_FIELDS.includes(raw.field as (typeof SOURCE_FIELDS)[number])
+    ? (raw.field as ShopeeInsertSource["field"])
+    : undefined
+  return {
+    kind: "shopee",
+    fetchedAt: raw.fetchedAt,
+    ...(field ? { field } : {}),
+    ...(typeof raw.reviewId === "string" && raw.reviewId ? { reviewId: raw.reviewId } : {}),
+    ...(typeof raw.snapshot === "string" ? { snapshot: raw.snapshot } : {}),
+    ...(raw.pasted === true ? { pasted: true } : {}),
+  }
+}
+
+function provenanceOf(raw: Record<string, unknown>): Pick<CompositionInsert, "source" | "reviewKind" | "assetJobId"> {
+  const source = parseInsertSource(raw.source)
+  const reviewKind = raw.reviewKind === "image" || raw.reviewKind === "video" ? raw.reviewKind : undefined
+  const assetJobId = typeof raw.assetJobId === "string" && raw.assetJobId ? raw.assetJobId : undefined
+  return {
+    ...(source ? { source } : {}),
+    ...(reviewKind ? { reviewKind } : {}),
+    ...(assetJobId ? { assetJobId } : {}),
+  }
 }
 
 function parseProductData(raw: unknown): ProductData | undefined {
@@ -1164,10 +1231,14 @@ export function parseComposition(input: unknown): Composition {
     ...(input.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(retention ? { retention } : {}),
     ...(productData ? { productData } : {}),
+    pricing: input.pricing === "on" ? "on" : "off",
+    ...(parseStoredShopee(input.shopee) ? { shopee: parseStoredShopee(input.shopee)! } : {}),
     ...(isContentNicheValue(input.niche) ? { niche: input.niche } : {}),
+    ...(input.nicheManual === true ? { nicheManual: true } : {}),
     ...(isBrandKitValue(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
+    ...(input.kitManual === true ? { kitManual: true } : {}),
     ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
-    audio: storedVersion >= COMPOSITION_VERSION ? parseAudio(input.audio, source.duration) : defaultCompositionAudio(),
+    audio: storedVersion >= COMPOSITION_VERSION_V7 ? parseAudio(input.audio, source.duration) : defaultCompositionAudio(),
   })
 }
 
@@ -1267,6 +1338,7 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
         : {}),
       ...(insert.role ? { role: insert.role } : {}),
       ...(insert.contentId ? { contentId: insert.contentId } : {}),
+      ...(insert.source ? { source: insert.source } : {}),
     }
   }
   if (kind === "caption") {
@@ -1283,6 +1355,7 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
       words: insert.words ?? [],
       ...(insert.styleRef ? { styleRef: insert.styleRef } : {}),
       ...(insert.transform ? { transform: insert.transform } : {}),
+      ...(insert.source ? { source: insert.source } : {}),
     }
   }
   return {
@@ -1295,6 +1368,9 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
     ...(asStoredString(insert.libraryId) ? { libraryId: insert.libraryId } : {}),
     ...(asStoredString(insert.fileId) ? { fileId: insert.fileId } : {}),
     ...(insert.label ? { label: insert.label } : {}),
+    ...(insert.reviewKind ? { reviewKind: insert.reviewKind } : {}),
+    ...(insert.assetJobId ? { assetJobId: insert.assetJobId } : {}),
+    ...(insert.source ? { source: insert.source } : {}),
   }
 }
 
@@ -1354,8 +1430,12 @@ export function serializeComposition(composition: Composition): string {
     ...(composition.watermarkEnabled === true ? { watermarkEnabled: true } : {}),
     ...(composition.retention ? { retention: composition.retention } : {}),
     ...(composition.productData ? { productData: composition.productData } : {}),
+    pricing: composition.pricing === "on" ? "on" : "off",
+    ...(composition.shopee ? { shopee: composition.shopee } : {}),
     ...(composition.niche ? { niche: composition.niche } : {}),
+    ...(composition.nicheManual ? { nicheManual: true } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    ...(composition.kitManual ? { kitManual: true } : {}),
     ...(composition.projectSeed ? { projectSeed: composition.projectSeed } : {}),
     audio: composition.audio ?? defaultCompositionAudio(),
   }
@@ -1387,6 +1467,7 @@ export function createDefaultComposition(): Composition {
     captionPreset: DEFAULT_CAPTION_PRESET,
     captionStyle: DEFAULT_CAPTION_STYLE,
     tracks: { cta: { styleRef: DEFAULT_CTA_STYLE_REF } },
+    pricing: "off",
     audio: defaultCompositionAudio(),
   }
 }

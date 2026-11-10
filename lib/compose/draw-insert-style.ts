@@ -1,5 +1,6 @@
 import { offerStylePatch } from "../style/offer-styles.ts"
 import { paintMarkedInsert } from "../paint/draw.ts"
+import { PAINT_MAX_WIDTH_PCT } from "../paint/layout.ts"
 import { brandKitOf } from "../brand/kits.ts"
 import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { displayRuns, tagToken, type ProductData } from "../content/runs.ts"
@@ -578,7 +579,9 @@ export function drawResolvedInsertText(
   const painted = resolveStyleColors(paintedInput, brandKitOf(paintContext?.brandKitId))
   const marked = Boolean(offerStylePatch(insert.styleRef?.presetId)) || /[*~{]/.test(insert.text ?? "")
   if (marked && insert.kind !== "caption") {
-    const maxWidth = (painted.text.maxWidth / 100) * frame.width
+    const rawPct = Number.isFinite(painted.text.maxWidth) ? painted.text.maxWidth : PAINT_MAX_WIDTH_PCT
+    const pct = Math.min(PAINT_MAX_WIDTH_PCT, Math.max(20, rawPct))
+    const maxWidth = (pct / 100) * frame.width
     ctx.save()
     paintMarkedInsert(ctx, {
       text: insert.text ?? "",

@@ -173,6 +173,84 @@ function chunksForRun(
   return chunks.filter((chunk) => chunk.text.length > 0)
 }
 
+export const PAINT_MAX_WIDTH_PCT = 86
+export const PAINT_FONT_MIN = 40
+export const PAINT_MAX_LINES = 3
+
+function styleAtSize(style: InsertStyle, size: number): InsertStyle {
+  const factor = size / Math.max(1, style.text.fontSize)
+  if (Math.abs(factor - 1) < 1e-4) return style
+  const text = style.text
+  return {
+    ...style,
+    text: {
+      ...text,
+      fontSize: size,
+      stroke: { ...text.stroke, width: text.stroke.width * factor },
+      ...(text.outerStroke
+        ? { outerStroke: { ...text.outerStroke, width: text.outerStroke.width * factor } }
+        : {}),
+      background: {
+        ...text.background,
+        paddingX: text.background.paddingX * factor,
+        paddingY: text.background.paddingY * factor,
+        radius: text.background.radius >= 999 ? text.background.radius : text.background.radius * factor,
+      },
+      shadows: text.shadows.map((shadow) => ({
+        ...shadow,
+        x: shadow.x * factor,
+        y: shadow.y * factor,
+        blur: shadow.blur * factor,
+      })),
+      ...(text.longShadow
+        ? { longShadow: { ...text.longShadow, length: text.longShadow.length * factor } }
+        : {}),
+    },
+  }
+}
+
+function overflowsPaint(layout: InsertPaintLayout, maxWidth: number): boolean {
+  if (layout.lines.length > PAINT_MAX_LINES) return true
+  return layout.lines.some((line) => line.width > maxWidth + 0.5)
+}
+
+function clipToLines(layout: InsertPaintLayout, maxLines: number): InsertPaintLayout {
+  if (layout.lines.length <= maxLines) return layout
+  const lines = layout.lines.slice(0, maxLines)
+  const pieces = lines.flatMap((line) => line.pieces)
+  const height = lines.reduce((sum, line) => sum + line.height, 0)
+  return { ...layout, lines, pieces, blockH: height }
+}
+
+/** Quebra em até 3 linhas e reduz a fonte até 40 antes de cortar. */
+export function fitMarkedLayout(input: {
+  text: string
+  style: InsertStyle
+  maxWidth: number
+  measure: LayoutMeasure
+  productData?: ProductData
+  editPreview?: boolean
+  brandKitId?: string
+}): { layout: InsertPaintLayout; style: InsertStyle } {
+  const original = input.style
+  const start = Math.max(PAINT_FONT_MIN, original.text.fontSize)
+  let size = start
+  const attempt = (fontSize: number, breakOverflow: boolean) => {
+    const style = styleAtSize(original, fontSize)
+    const layout = layoutMarkedText({ ...input, style, breakOverflow })
+    return { style, layout }
+  }
+  let fitted = attempt(size, false)
+  while (overflowsPaint(fitted.layout, input.maxWidth) && size > PAINT_FONT_MIN) {
+    const next = Math.max(PAINT_FONT_MIN, size - Math.max(2, Math.round(start * 0.04)))
+    if (next >= size - 0.01) break
+    size = next
+    fitted = attempt(size, false)
+  }
+  if (overflowsPaint(fitted.layout, input.maxWidth)) fitted = attempt(Math.max(PAINT_FONT_MIN, size), true)
+  return { style: fitted.style, layout: clipToLines(fitted.layout, PAINT_MAX_LINES) }
+}
+
 export function layoutMarkedText(input: {
   text: string
   style: InsertStyle
@@ -181,6 +259,7 @@ export function layoutMarkedText(input: {
   productData?: ProductData
   editPreview?: boolean
   brandKitId?: string
+  breakOverflow?: boolean
 }): InsertPaintLayout {
   const style = resolveStyleColors(input.style, brandKitOf(input.brandKitId))
   const filled = fillVars(input.text, input.productData, { stripEmpty: !input.editPreview })
@@ -235,26 +314,48 @@ export function layoutMarkedText(input: {
     currentWidth += usedGap + width
   }
 
+  const pushWord = (chunk: Chunk) => {
+    const width = widthOf(chunk.text, chunk.font, input.measure)
+    if (input.breakOverflow && input.maxWidth > 0 && width > input.maxWidth && [...chunk.text].length > 1) {
+      let buffer = ""
+      for (const char of chunk.text) {
+        const next = buffer + char
+        if (buffer && widthOf(next, chunk.font, input.measure) > input.maxWidth) {
+          pushChunk({ ...chunk, text: buffer }, widthOf(buffer, chunk.font, input.measure))
+          buffer = char
+          continue
+        }
+        buffer = next
+      }
+      if (buffer) pushChunk({ ...chunk, text: buffer }, widthOf(buffer, chunk.font, input.measure))
+      return
+    }
+    pushChunk(chunk, width)
+  }
+
+  const pushWrapped = (chunk: Chunk) => {
+    if (chunk.strike) {
+      pushWord(chunk)
+      return
+    }
+    const words = chunk.text.split(/(\s+)/)
+    for (const word of words) {
+      if (!word || /^\s+$/.test(word)) continue
+      pushWord({ ...chunk, text: word })
+    }
+  }
+
   for (const chunk of chunks) {
     if (chunk.text.includes("\n")) {
       const bits = chunk.text.split("\n")
       bits.forEach((bit, index) => {
         if (index > 0) flush()
         if (!bit) return
-        pushChunk({ ...chunk, text: bit }, widthOf(bit, chunk.font, input.measure))
+        pushWrapped({ ...chunk, text: bit })
       })
       continue
     }
-    if (chunk.strike) {
-      pushChunk(chunk, widthOf(chunk.text, chunk.font, input.measure))
-      continue
-    }
-    const words = chunk.text.split(/(\s+)/)
-    for (const word of words) {
-      if (!word) continue
-      if (/^\s+$/.test(word)) continue
-      pushChunk({ ...chunk, text: word }, widthOf(word, chunk.font, input.measure))
-    }
+    pushWrapped(chunk)
   }
   if (current.length > 0 || lines.length === 0) flush()
 

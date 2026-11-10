@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import { Readable } from "node:stream"
 
-import { mp4Path } from "@/lib/import/store"
+import { getMeta, mp4Path } from "@/lib/import/store"
 
 export const runtime = "nodejs"
 
@@ -16,13 +16,15 @@ export async function GET(
   }
 
   const { size } = fs.statSync(filePath)
+  const mime = getMeta(id)?.mime || "video/mp4"
   const stream = Readable.toWeb(fs.createReadStream(filePath)) as ReadableStream<Uint8Array>
   return new Response(stream, {
     headers: {
-      "content-type": "video/mp4",
+      "content-type": mime,
       "content-length": String(size),
       "accept-ranges": "bytes",
       "cache-control": "private, no-store",
+      "access-control-allow-origin": "*",
     },
   })
 }

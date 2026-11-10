@@ -31,6 +31,8 @@ tmp/
 
 # Downloads de import (MP4s locais, crescem sem TTL)
 data/import-downloads/
+data/shopee-cache.sqlite
+data/editor-projects/
 
 # TypeScript incremental
 *.tsbuildinfo

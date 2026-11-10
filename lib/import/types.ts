@@ -15,7 +15,7 @@ export interface ImportJob {
 
 export interface ImportMeta {
   title: string
-  platform: ImportPlatform
+  platform: ImportPlatform | "asset"
   sourceUrl: string
   createdAt: number
   bytes: number
@@ -28,4 +28,5 @@ export interface ImportMeta {
   coverUrl?: string | null
   canonicalUrl?: string | null
   watermarked?: boolean
+  mime?: string
 }

@@ -20,21 +20,50 @@ function isActive(insert: CompositionInsert, time: number): boolean {
   return time >= insert.start && time < insert.start + insert.duration
 }
 
+type Paintable = CanvasImageSource & {
+  naturalWidth?: number
+  naturalHeight?: number
+  videoWidth?: number
+  videoHeight?: number
+  width?: number
+  height?: number
+}
+
+function traceRoundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2))
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + width, y, x + width, y + height, r)
+  ctx.arcTo(x + width, y + height, x, y + height, r)
+  ctx.arcTo(x, y + height, x, y, r)
+  ctx.arcTo(x, y, x + width, y, r)
+  ctx.closePath()
+}
+
 function drawSticker(
   ctx: CanvasRenderingContext2D,
   insert: CompositionInsert,
   frame: { width: number; height: number },
-  image: CanvasImageSource & { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number },
+  image: Paintable,
   time: number,
 ): void {
-  const naturalW = image.naturalWidth || image.width || 0
-  const naturalH = image.naturalHeight || image.height || 0
+  const naturalW = image.naturalWidth || image.videoWidth || image.width || 0
+  const naturalH = image.naturalHeight || image.videoHeight || image.height || 0
   if (!(naturalW > 0 && naturalH > 0)) return
   const scale = insert.scale ?? DEFAULT_STICKER_SCALE
   const width = frame.width * scale
   const height = width * (naturalH / naturalW)
   const cx = ((insert.x ?? DEFAULT_STICKER_X) / 100) * frame.width
   const cy = ((insert.y ?? DEFAULT_STICKER_Y) / 100) * frame.height
+  const left = cx - width / 2
+  const top = cy - height / 2
   ctx.save()
   applyAnimPose(ctx, animAt(insert, time), { cx, cy, w: width, h: height })
   const rotation = insert.rotation ?? 0
@@ -43,7 +72,26 @@ function drawSticker(
     ctx.rotate((rotation * Math.PI) / 180)
     ctx.translate(-cx, -cy)
   }
-  ctx.drawImage(image, cx - width / 2, cy - height / 2, width, height)
+  if (insert.type === "review-media") {
+    const radius = Math.min(width, height) * 0.08
+    traceRoundRect(ctx, left, top, width, height, radius)
+    ctx.save()
+    ctx.clip()
+    ctx.drawImage(image, left, top, width, height)
+    ctx.restore()
+    ctx.lineWidth = Math.max(4, width * 0.035)
+    ctx.strokeStyle = "#ffffff"
+    traceRoundRect(ctx, left, top, width, height, radius)
+    ctx.stroke()
+    if (insert.label?.trim()) {
+      ctx.font = `${Math.max(18, Math.round(frame.width * 0.028))}px sans-serif`
+      ctx.fillStyle = "#ffffff"
+      ctx.textAlign = "center"
+      ctx.fillText(insert.label.trim(), cx, top + height + Math.max(22, frame.width * 0.03))
+    }
+  } else {
+    ctx.drawImage(image, left, top, width, height)
+  }
   ctx.restore()
 }
 
