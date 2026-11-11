@@ -245,6 +245,7 @@ export function OverlayCanvas({
   project,
   productData,
   brandKitId,
+  brandColors,
   videoDuration = 0,
   trimStart = 0,
   customPresets,
@@ -281,6 +282,7 @@ export function OverlayCanvas({
   project?: StyleLayer
   productData?: import("@/lib/content/runs").ProductData
   brandKitId?: string
+  brandColors?: import("@/lib/brand/kits").BrandColors
   videoDuration?: number
   trimStart?: number
   customPresets?: UserPreset[]
@@ -482,7 +484,7 @@ export function OverlayCanvas({
           },
           captionPreset,
           captionStyle,
-          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId, trimStart },
+          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId, brandColors, trimStart },
           watermark ?? null,
         )
       }
@@ -513,7 +515,7 @@ export function OverlayCanvas({
     return () => {
       cancelled = true
     }
-  }, [captionPreset, captionStyle, customPresets, editingTextId, fontFamily, fontId, hasLayer, imageTick, inserts, logoSrc, paintVisual, project, time, tracks, videoDuration, watermark])
+  }, [brandColors, brandKitId, captionPreset, captionStyle, customPresets, editingTextId, fontFamily, fontId, hasLayer, imageTick, inserts, logoSrc, paintVisual, project, time, tracks, videoDuration, watermark])
 
   useEffect(() => {
     const host = hostRef.current
@@ -658,6 +660,7 @@ export function OverlayCanvas({
         brandFontId: fontId,
         scale: metrics.displayScale,
         brandKitId,
+        brandColors,
       }),
       placement: inlineEditorPlacement(layout, metrics, hostBox),
     }

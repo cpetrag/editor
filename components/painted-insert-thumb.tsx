@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import { brandKitOf } from "@/lib/brand/kits"
+import { brandKitOf, type BrandColors } from "@/lib/brand/kits"
 import { resolveStyleColors } from "@/lib/brand/resolve-style-colors"
 import { ensureComposeFontsReady } from "@/lib/compose/fonts"
 import { fillVars, type ProductData } from "@/lib/content/runs"
@@ -33,6 +33,7 @@ export function PaintedInsertThumb({
   styleId,
   packId,
   kitId,
+  colors,
   productData,
   animate = "hover",
   paintScale,
@@ -44,6 +45,7 @@ export function PaintedInsertThumb({
   styleId: string
   packId?: string
   kitId: string
+  colors?: BrandColors
   productData?: ProductData
   /** `hover` anima no foco. `loop` roda enquanto está na tela. */
   animate?: "hover" | "loop" | "still"
@@ -143,7 +145,7 @@ export function PaintedInsertThumb({
       if (photo) ctx.drawImage(photo, 0, 0, cssW, cssH)
       const filled = fillVars(text, productData).text || " "
       const resolved = scalePaintStyle(
-        resolveStyleColors({ ...base, animation, text: { ...base.text } }, brandKitOf(kitId)),
+        resolveStyleColors({ ...base, animation, text: { ...base.text } }, colors ?? brandKitOf(kitId)),
         scale,
       )
       const measure = (sample: string, font: MeasureFont) => {
@@ -178,7 +180,7 @@ export function PaintedInsertThumb({
       cancelled = true
       cancelAnimationFrame(raf)
     }
-  }, [animate, backdrop, kitId, maxTextWidth, packId, paintScale, photoTick, playing, productData, scale, styleId, text, textWidth])
+  }, [animate, backdrop, colors, kitId, maxTextWidth, packId, paintScale, photoTick, playing, productData, scale, styleId, text, textWidth])
 
   return (
     <canvas

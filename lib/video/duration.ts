@@ -51,6 +51,14 @@ export function editorDuration(
   return output > 0 ? output : source.duration
 }
 
+/** Duração de saída da timeline. Sem segmentos, é o tamanho do arquivo. */
+export function getOutputDuration(composition: {
+  source: TimelineSource & { playback?: SourcePlayback }
+  audio?: CompositionAudio
+}): number {
+  return editorDuration(composition.source, composition.audio)
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }

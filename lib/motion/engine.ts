@@ -299,11 +299,13 @@ export function motionAt(
   }
 
   if (!coverFrame && legacyLoop(animation.loop)) {
-    pose = applyLegacyLoop(pose, animation.loop, frame, fps, intensity)
+    const timed = { ...animation.loop, speed: animation.loop.speed * speed }
+    pose = applyLegacyLoop(pose, timed, frame, fps, intensity)
   } else if (!coverFrame) {
     const seconds = cardLocal / Math.max(1e-6, fps)
     const envelope = loopEnvelope(cardLocal, phases, animation, unitCount, spec.durationInFrames, speed)
-    pose = applyCatalogLoop(pose, animation.loop, seconds, unitRank, seed, envelope, intensity)
+    const timed = { ...animation.loop, speed: animation.loop.speed * speed }
+    pose = applyCatalogLoop(pose, timed, seconds, unitRank, seed, envelope, intensity)
   }
 
   if (!coverFrame) pose = applyEmphasis(pose, animation, cardLocal, intensity)

@@ -1,7 +1,7 @@
 import { offerStylePatch } from "../style/offer-styles.ts"
 import { paintMarkedInsert } from "../paint/draw.ts"
 import { PAINT_MAX_WIDTH_PCT } from "../paint/layout.ts"
-import { brandKitOf } from "../brand/kits.ts"
+import { paintBrandKit, type BrandColors } from "../brand/kits.ts"
 import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { displayRuns, tagToken, type ProductData } from "../content/runs.ts"
 import { clipRect, frameGlowRadius } from "../motion/css.ts"
@@ -561,6 +561,7 @@ export function resolvedTextInsertForPlay(
 export type InsertPaintContext = {
   productData?: ProductData
   brandKitId?: string
+  brandColors?: BrandColors
   editPreview?: boolean
   trimStart?: number
 }
@@ -576,7 +577,14 @@ export function drawResolvedInsertText(
   skipEnter = false,
   paintContext?: InsertPaintContext,
 ): void {
-  const painted = resolveStyleColors(paintedInput, brandKitOf(paintContext?.brandKitId))
+  const painted = resolveStyleColors(
+    paintedInput,
+    paintBrandKit({
+      brandKitId: paintContext?.brandKitId,
+      brandColors: paintContext?.brandColors,
+      paletteOverride: insert.paletteOverride,
+    }),
+  )
   const marked = Boolean(offerStylePatch(insert.styleRef?.presetId)) || /[*~{]/.test(insert.text ?? "")
   if (marked && insert.kind !== "caption") {
     const rawPct = Number.isFinite(painted.text.maxWidth) ? painted.text.maxWidth : PAINT_MAX_WIDTH_PCT
@@ -602,6 +610,7 @@ export function drawResolvedInsertText(
       productData: paintContext?.productData,
       editPreview: paintContext?.editPreview,
       brandKitId: paintContext?.brandKitId,
+      brandColors: paintContext?.brandColors,
       motion: skipEnter
         ? undefined
         : {

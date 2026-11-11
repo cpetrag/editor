@@ -66,6 +66,28 @@ function applyTiming(
   return { start: clamped.start, duration: clamped.duration }
 }
 
+/**
+ * Teto de start/duration de insert e legenda.
+ *
+ * Com Ida/Volta/Loop ou velocidade diferente de 1×, a timeline está em tempo
+ * de saída e já inclui o corte (`buildVideoTimeline` recebe o trim).
+ * `sourceTrimEnd` é tempo do arquivo: compará-lo com o insert prende o clipe
+ * no fim da fonte.
+ *
+ * Sem esse relógio separado, os dois tempos coincidem e o corte explícito
+ * continua sendo o teto.
+ */
+export function insertOutputLimit(input: {
+  timelineDuration: number
+  sourceTrimEnd: number
+  separateOutputClock: boolean
+}): number {
+  if (input.separateOutputClock) {
+    return input.timelineDuration > 0 ? input.timelineDuration : 0
+  }
+  return input.sourceTrimEnd > 0 ? input.sourceTrimEnd : Math.max(0, input.timelineDuration)
+}
+
 export function moveInsertTiming(
   current: TimingSpan,
   nextStart: number,

@@ -1,4 +1,4 @@
-import { brandKitOf } from "../brand/kits.ts"
+import { paintBrandKit, type BrandColors } from "../brand/kits.ts"
 import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { PLAY_W } from "../compose/layout.ts"
 import { backgroundEnvelope } from "../motion/engine.ts"
@@ -471,10 +471,14 @@ export function paintMarkedInsert(
     productData?: ProductData
     editPreview?: boolean
     brandKitId?: string
+    brandColors?: BrandColors
     motion?: PaintMotion
   },
 ): InsertPaintLayout {
-  const style = resolveStyleColors(input.style, brandKitOf(input.brandKitId))
+  const style = resolveStyleColors(
+    input.style,
+    paintBrandKit({ brandKitId: input.brandKitId, brandColors: input.brandColors }),
+  )
   const fitted = fitMarkedLayout({ ...input, style })
   paintInsertLayout(ctx, fitted.layout, fitted.style, input.origin, input.motion)
   return fitted.layout

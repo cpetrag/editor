@@ -395,6 +395,39 @@ export function finalizeCaptionInsert(
   }
 }
 
+/**
+ * Corta só o que passa do fim da timeline. Uma linha que começa depois do fim
+ * sai inteira; não é puxada para trás (isso empilhava as legendas no fim da fonte).
+ */
+export function fitCaptionLinesToOutput(
+  lines: readonly CaptionLine[],
+  outputDuration: number,
+): { lines: CaptionLine[]; dropped: number } {
+  if (!(outputDuration > 0)) {
+    return { lines: lines.map((line) => ({ ...line, words: line.words.map((word) => ({ ...word })) })), dropped: 0 }
+  }
+  const min = 0.05
+  const kept: CaptionLine[] = []
+  let dropped = 0
+  for (const line of lines) {
+    if (!(line.start < outputDuration - min)) {
+      dropped += 1
+      continue
+    }
+    const duration = Math.min(line.duration, outputDuration - line.start)
+    if (!(duration >= min)) {
+      dropped += 1
+      continue
+    }
+    const end = line.start + duration
+    const words = line.words
+      .filter((word) => word.start < end - 0.01)
+      .map((word) => (word.end > end ? { ...word, end } : { ...word }))
+    kept.push({ ...line, duration, words })
+  }
+  return { lines: kept, dropped }
+}
+
 export function linesToCaptionInserts(lines: CaptionLine[], videoDuration: number): CompositionInsert[] {
   return lines.map((line) => {
     const created = createInsert(CAPTION_INSERT_TYPE)

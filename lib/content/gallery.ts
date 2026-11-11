@@ -11,7 +11,7 @@ import { CONTENT_PRESETS, contentPresetById, type ContentNiche, type ContentPres
 import { presetUsesPrice } from "../shopee/format.ts"
 import { shapeQuoteInsert } from "../shopee/quote-fit.ts"
 import type { ShopeeInsertSource } from "../shopee/types.ts"
-import { fillVars, type ProductData, type ProductField } from "./runs.ts"
+import { fillVars, parseRuns, type ProductData, type ProductField } from "./runs.ts"
 
 export const MOMENT_PACK: Record<ContentSlot, string> = {
   gancho: "estouro",
@@ -241,14 +241,25 @@ function styleIdOf(insert: CompositionInsert): string {
 }
 
 function carriedText(insert: CompositionInsert, fontSize: number) {
-  const previous = insert.styleRef?.overrides.text
   return {
     y: insert.y,
     fontSize,
-    ...(previous?.color ? { color: previous.color } : {}),
-    ...(previous?.stroke ? { stroke: previous.stroke } : {}),
-    ...(previous?.background ? { background: previous.background } : {}),
   }
+}
+
+/** Cor, destaque, fundo ou contorno que o usuário gravou por cima do preset. */
+export function hasCustomPaint(insert: CompositionInsert): boolean {
+  const text = insert.styleRef?.overrides.text
+  if (!text) return false
+  if (text.color || text.accent) return true
+  if (text.highlight?.color) return true
+  if (text.background && (text.background.color || typeof text.background.opacity === "number")) return true
+  if (text.stroke?.color) return true
+  return false
+}
+
+export function textHasAccentMark(text: string): boolean {
+  return parseRuns(text).some((run) => run.accent)
 }
 
 /** Troca o estilo e conserva texto, tempo, posição e o pacote. */
@@ -361,6 +372,7 @@ export function backgroundEnabled(insert: CompositionInsert): boolean {
 
 export function insertWithStroke(insert: CompositionInsert, enabled: boolean): CompositionInsert {
   const base = getPresetStyle(styleIdOf(insert)).text.stroke
+  const previous = insert.styleRef?.overrides.text?.stroke
   return {
     ...insert,
     styleRef: {
@@ -370,10 +382,81 @@ export function insertWithStroke(insert: CompositionInsert, enabled: boolean): C
         text: {
           ...insert.styleRef?.overrides.text,
           stroke: {
+            ...base,
+            ...previous,
             enabled,
-            width: base.width || 8,
-            color: base.color || "slot:ink",
+            width: previous?.width || base.width || 8,
+            color: previous?.color || base.color || "slot:ink",
           },
+        },
+      },
+    },
+  }
+}
+
+/** Destaque de *texto*: o mesmo par que o preset grava em accent e highlight.color. */
+export function insertWithAccentColor(insert: CompositionInsert, color: string | null): CompositionInsert {
+  const text = { ...insert.styleRef?.overrides.text }
+  const highlight = { ...text.highlight }
+  if (color) {
+    text.accent = color
+    highlight.color = color
+    text.highlight = highlight
+  } else {
+    delete text.accent
+    delete highlight.color
+    text.highlight = highlight
+  }
+  return {
+    ...insert,
+    styleRef: {
+      presetId: styleIdOf(insert),
+      overrides: { ...insert.styleRef?.overrides, text },
+    },
+  }
+}
+
+export function insertWithBackgroundPatch(
+  insert: CompositionInsert,
+  patch: { color?: string | null; opacity?: number | null },
+): CompositionInsert {
+  const previous = insert.styleRef?.overrides.text?.background
+  const background = {
+    enabled: previous?.enabled ?? backgroundEnabled(insert),
+    ...previous,
+  }
+  if (patch.color === null) delete background.color
+  else if (typeof patch.color === "string") background.color = patch.color
+  if (patch.opacity === null) delete background.opacity
+  else if (typeof patch.opacity === "number") background.opacity = patch.opacity
+  return {
+    ...insert,
+    styleRef: {
+      presetId: styleIdOf(insert),
+      overrides: {
+        ...insert.styleRef?.overrides,
+        text: {
+          ...insert.styleRef?.overrides.text,
+          background,
+        },
+      },
+    },
+  }
+}
+
+export function insertWithStrokeColor(insert: CompositionInsert, color: string | null): CompositionInsert {
+  const stroke = { ...insert.styleRef?.overrides.text?.stroke }
+  if (color) stroke.color = color
+  else delete stroke.color
+  return {
+    ...insert,
+    styleRef: {
+      presetId: styleIdOf(insert),
+      overrides: {
+        ...insert.styleRef?.overrides,
+        text: {
+          ...insert.styleRef?.overrides.text,
+          stroke,
         },
       },
     },
@@ -382,6 +465,7 @@ export function insertWithStroke(insert: CompositionInsert, enabled: boolean): C
 
 export function insertWithBackground(insert: CompositionInsert, enabled: boolean): CompositionInsert {
   const base = getPresetStyle(styleIdOf(insert)).text.background
+  const previous = insert.styleRef?.overrides.text?.background
   return {
     ...insert,
     styleRef: {
@@ -391,13 +475,9 @@ export function insertWithBackground(insert: CompositionInsert, enabled: boolean
         text: {
           ...insert.styleRef?.overrides.text,
           background: {
+            ...base,
+            ...previous,
             enabled,
-            color: base.color || "slot:primary",
-            opacity: base.opacity || 100,
-            paddingX: base.paddingX,
-            paddingY: base.paddingY,
-            radius: base.radius,
-            mode: base.mode,
           },
         },
       },

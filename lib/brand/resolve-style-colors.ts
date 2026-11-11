@@ -1,12 +1,12 @@
 import type { InsertStyle } from "../style/types.ts"
-import { resolveColor, type BrandKit } from "./kits.ts"
+import { resolveColor, type BrandColors } from "./kits.ts"
 
-function paint(color: string, kit: BrandKit): string {
+function paint(color: string, kit: BrandColors): string {
   return resolveColor(color, kit)
 }
 
 /** Troca `slot:*` pelas cores do kit. Hex literal permanece. */
-export function resolveStyleColors(style: InsertStyle, kit: BrandKit): InsertStyle {
+export function resolveStyleColors(style: InsertStyle, kit: BrandColors): InsertStyle {
   const text = style.text
   return {
     ...style,

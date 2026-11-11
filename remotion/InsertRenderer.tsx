@@ -82,6 +82,7 @@ function paintInserts(
       customPresets: props.customPresets ? Object.values(props.customPresets) : undefined,
       productData: props.productData,
       brandKitId: props.brandKitId,
+      brandColors: props.brandColors,
     },
     props.watermark ?? null,
   )

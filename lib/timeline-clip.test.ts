@@ -2,9 +2,12 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import { MIN_DURATION } from "./composition.ts"
+import { resolveTrimWindow } from "./source-trim.ts"
+import { buildVideoTimeline } from "./video/timeline.ts"
 import {
   clientXToTime,
   hitTimelineHandle,
+  insertOutputLimit,
   moveInsertTiming,
   trimInsertIn,
   formatTimecode,
@@ -43,6 +46,61 @@ test("clientXToTime clamps outside the track and rounds to tenths", () => {
   assert.equal(clientXToTime(-40, rect, 15), 0)
   assert.equal(clientXToTime(180, rect, 15), 15)
   assert.equal(clientXToTime(33, rect, 10), 3.3)
+})
+
+test("insertOutputLimit uses the output timeline when playback separates the clocks", () => {
+  const sourceTrimEnd = 5.733
+  const timelineDuration = 14.6
+  const limit = insertOutputLimit({
+    timelineDuration,
+    sourceTrimEnd,
+    separateOutputClock: true,
+  })
+  assert.equal(limit, timelineDuration)
+
+  const endingAtSource = { start: 3.733, duration: 2 }
+  const stuck = moveInsertTiming(endingAtSource, 30, sourceTrimEnd)
+  assert.ok(stuck.start + stuck.duration <= sourceTrimEnd + 0.02)
+
+  const freed = moveInsertTiming(endingAtSource, 30, limit)
+  assert.equal(freed.duration, 2)
+  assert.ok(freed.start + freed.duration > sourceTrimEnd + 1)
+  assert.ok(freed.start + freed.duration <= timelineDuration + 0.001)
+})
+
+test("insertOutputLimit on a 0.85× boomerang is the output duration, not the source end", () => {
+  const media = { duration: 5.73, fps: 30 }
+  const timeline = buildVideoTimeline(
+    media,
+    { speed: 0.85, fill: "pingpong", fit: "audio" },
+    13.48,
+  )
+  const sourceTrimEnd = resolveTrimWindow(media).end
+  assert.ok(timeline.duration > sourceTrimEnd + 1)
+  const limit = insertOutputLimit({
+    timelineDuration: timeline.duration,
+    sourceTrimEnd,
+    separateOutputClock: true,
+  })
+  assert.equal(limit, timeline.duration)
+  const clip = { start: 3.7, duration: 2 }
+  const moved = moveInsertTiming(clip, timeline.duration, limit)
+  assert.ok(moved.start + moved.duration > sourceTrimEnd + 1)
+})
+
+test("insertOutputLimit keeps the source trim when the timeline clock is the file", () => {
+  assert.equal(
+    insertOutputLimit({ timelineDuration: 12, sourceTrimEnd: 12, separateOutputClock: false }),
+    12,
+  )
+  assert.equal(
+    insertOutputLimit({ timelineDuration: 12, sourceTrimEnd: 8, separateOutputClock: false }),
+    8,
+  )
+  assert.equal(
+    insertOutputLimit({ timelineDuration: 0, sourceTrimEnd: 0, separateOutputClock: false }),
+    0,
+  )
 })
 
 test("moveInsertTiming keeps duration and clamps inside the video", () => {

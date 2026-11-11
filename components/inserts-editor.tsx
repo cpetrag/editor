@@ -1,20 +1,27 @@
 "use client"
 
 import { useEffect, useRef, useState, type ReactNode } from "react"
+import { RotateCcw } from "lucide-react"
 
 import { BrandKitPicker } from "@/components/insert-content"
 import { MotionThumb } from "@/components/motion-thumb"
 import { PaintedInsertThumb } from "@/components/painted-insert-thumb"
 import { StyleCustomizePanel, type PresetLibraryHandlers } from "@/components/style-customize-panel"
 import { Button } from "@/components/ui/button"
-import { brandKitOf, resolveColor } from "@/lib/brand/kits"
+import { mergeBrandColors, type BrandColors } from "@/lib/brand/kits"
+import { PaletteCustomizer, type PaletteController } from "@/components/palette-customizer"
+import { FineColorRow } from "@/components/fine-color-row"
+import { MotionTempo } from "@/components/motion-tempo"
 import {
   backgroundEnabled,
   FIELD_LABEL,
   formatClockTenths,
   galleryStyles,
+  hasCustomPaint,
   insertToken,
+  insertWithAccentColor,
   insertWithBackground,
+  insertWithBackgroundPatch,
   insertWithColor,
   insertWithEdge,
   insertWithPack,
@@ -22,10 +29,11 @@ import {
   INSERT_SIZE_PERCENT_MIN,
   insertWithSize,
   insertWithStroke,
+  insertWithStrokeColor,
   insertWithStyle,
+  textHasAccentMark,
   markerAtTime,
   packLabel,
-  passesVideoEnd,
   sizePercentOf,
   stillAnimation,
   stripMarks,
@@ -39,31 +47,32 @@ import { selectPack } from "@/lib/motion/select"
 import { listOfferPresets } from "@/lib/style/offer-styles"
 import { isFreshOfferStyle, markStyleUsed } from "@/lib/style/fresh-styles"
 import { getPresetStyle } from "@/lib/style/presets"
+import { resolveStyleForEditor } from "@/lib/style/editor-style"
+import { trackStyleForInsert } from "@/lib/style-preset"
+import { hasCustomTiming } from "@/lib/motion/timing"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import type { CaptionPreset, CaptionStyle } from "@/lib/composition"
 import type { PanelBlockController } from "@/components/use-panel-blocks"
 import { importedOnLabel, sourceDrifted } from "@/lib/shopee/drift"
 import { cn } from "@/lib/utils"
 
-const POSITIONS = [
-  { y: 20, label: "Topo" },
-  { y: 50, label: "Meio" },
-  { y: 72, label: "Baixo" },
-] as const
-
-const DURATIONS = [2, 3, 4, 5] as const
-
 export function InsertsEditor({
   insert,
   videoDuration,
   productData,
   brandKitId,
+  palette,
+  paletteScope = "project",
+  onPaletteScope,
   retentionCuts,
-  getPlayhead,
   focus,
   onFocusDone,
   onBack,
   onChange,
+  onPaint,
+  onColorsReplaced,
+  onTimingsReplaced,
+  onPlayRange,
   onDuplicate,
   onRemove,
   onHookVariations,
@@ -88,12 +97,19 @@ export function InsertsEditor({
   videoDuration: number
   productData?: ProductData
   brandKitId: string
+  palette?: PaletteController
+  paletteScope?: "project" | "insert"
+  onPaletteScope?: (scope: "project" | "insert") => void
   retentionCuts?: RetentionCuts | null
   getPlayhead?: () => number
   focus?: { id: string; selectMarked: boolean } | null
   onFocusDone?: () => void
   onBack: () => void
   onChange: (patch: Partial<Insert>) => void
+  onPaint?: (map: (insert: Insert) => Insert) => void
+  onColorsReplaced?: () => void
+  onTimingsReplaced?: () => void
+  onPlayRange?: (start: number, end: number) => void
   onDuplicate: () => void
   onRemove: () => void
   onHookVariations?: () => void
@@ -123,9 +139,43 @@ export function InsertsEditor({
   const title = stripMarks(displayRuns(insert.text ?? "", productData).plain) || "Texto vazio"
   const styles = visualMode === "sug" ? galleryStyles(marker.slot) : galleryStyles("todos")
   const visibleStyles = styles.some((item) => item.id === styleId) ? styles : galleryStyles("todos")
-  const kit = brandKitOf(brandKitId)
-  const baseColor = getPresetStyle(styleId).text.color
-  const over = passesVideoEnd(insert.start, insert.duration, videoDuration)
+  const kit: BrandColors = palette
+    ? paletteScope === "insert"
+      ? mergeBrandColors(palette.projectColors, insert.paletteOverride)
+      : palette.projectColors
+    : { primary: "#EE4D2D", onPrimary: "#FFFFFF", accent: "#FFD400", ink: "#111111", paper: "#FFFFFF" }
+  const presetStyle = getPresetStyle(styleId).text
+  const paint = onPaint ?? ((map: (insert: Insert) => Insert) => onChange(map(insert)))
+  const textStored = insert.styleRef?.overrides.text?.color ?? null
+  const accentStored = insert.styleRef?.overrides.text?.accent ?? insert.styleRef?.overrides.text?.highlight?.color ?? null
+  const backgroundStored = insert.styleRef?.overrides.text?.background?.color ?? null
+  const strokeStored = insert.styleRef?.overrides.text?.stroke?.color ?? null
+  const backgroundOpacity = insert.styleRef?.overrides.text?.background?.opacity ?? presetStyle.background.opacity
+  const showAccent = textHasAccentMark(insert.text ?? "")
+  const motionTrack = trackStyleForInsert(insert, tracks, videoDuration)
+  const resolvedAnimation = resolveStyleForEditor(insert, motionTrack, projectStyle ?? {}).animation
+  const plainMotion = stripMarks(insert.text ?? "")
+  const motionUnits =
+    resolvedAnimation.unit === "letra"
+      ? Math.max(1, plainMotion.replace(/\s/g, "").length)
+      : resolvedAnimation.unit === "palavra"
+        ? Math.max(1, plainMotion.split(/\s+/).filter(Boolean).length)
+        : 1
+  function playMotion() {
+    onBeginGesture?.()
+    onPlayRange?.(insert.start, insert.start + insert.duration)
+  }
+  function writeAnimation(next: typeof resolvedAnimation) {
+    paint((item) => ({
+      ...item,
+      styleRef: {
+        presetId: item.styleRef?.presetId || styleId,
+        overrides: { ...item.styleRef?.overrides, animation: next },
+      },
+    }))
+  }
+  const showBackground = backgroundEnabled(insert)
+  const showStroke = strokeOnSafe(insert)
 
   useEffect(() => {
     if (!focus || focus.id !== insert.id) return
@@ -299,8 +349,35 @@ export function InsertsEditor({
               Todos
             </button>
           </div>
-          <BrandKitPicker kitId={brandKitId} onChange={(id) => onBrandKit?.(id)} />
+          <BrandKitPicker
+            kitId={brandKitId}
+            customKits={palette?.customKits}
+            onChange={(id) => (palette ? palette.onSelectKit(id) : onBrandKit?.(id))}
+          />
+          {palette && onPaletteScope ? (
+            <PaletteCustomizer
+              palette={palette}
+              insertIds={[insert.id]}
+              presetId={styleId}
+              override={insert.paletteOverride}
+              styleOverrides={insert.styleRef?.overrides}
+              scope={paletteScope}
+              onScope={onPaletteScope}
+            />
+          ) : null}
         </div>
+        {insert.paletteOverride && palette ? (
+          <p className="flex flex-wrap items-center gap-2 text-[0.7rem] text-muted-foreground">
+            Este insert tem cores próprias.
+            <button
+              type="button"
+              className="underline"
+              onClick={() => palette.onInsertOverride([insert.id], null, "discrete")}
+            >
+              Voltar à paleta do projeto
+            </button>
+          </p>
+        ) : null}
         <div className="flex gap-2 overflow-x-auto pb-1">
           {visibleStyles.map((preset) => (
             <button
@@ -313,10 +390,12 @@ export function InsertsEditor({
               )}
               onClick={() => {
                 if (isFreshOfferStyle(preset.id)) markStyleUsed(preset.id)
+                const custom = hasCustomPaint(insert)
                 onChange(insertWithStyle(insert, preset.id))
+                if (custom) onColorsReplaced?.()
               }}
             >
-              <PaintedInsertThumb text={sample} styleId={preset.id} kitId={brandKitId} productData={productData} animate="still" />
+              <PaintedInsertThumb text={sample} styleId={preset.id} kitId={brandKitId} colors={kit} productData={productData} animate="still" />
               <span className="block truncate px-1 py-0.5 text-[0.65rem]">{preset.label}</span>
             </button>
           ))}
@@ -341,7 +420,13 @@ export function InsertsEditor({
                     ? "border-blue-500 ring-2 ring-blue-500"
                     : "border-border",
                 )}
-                onClick={() => onChange(insertWithPack(insert, pack.id))}
+                onClick={() => {
+                  const base = getPresetStyle(styleId).animation
+                  const defaults = !packId || packId === "parado" ? stillAnimation(base) : selectPack(base, packId)
+                  const custom = Boolean(packId) && hasCustomTiming(resolvedAnimation, defaults)
+                  paint((item) => insertWithPack(item, pack.id))
+                  if (custom) onTimingsReplaced?.()
+                }}
               >
                 {animation ? (
                   <MotionThumb animation={animation} />
@@ -353,74 +438,15 @@ export function InsertsEditor({
             )
           })}
         </div>
-      </section>
-
-      <section className="flex flex-col gap-2">
-        <h3 className="text-xs font-medium text-foreground">Posição e tempo</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-md border border-border p-0.5">
-            {POSITIONS.map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                aria-pressed={Math.abs((insert.y ?? 50) - item.y) < 5}
-                className={cn(
-                  "rounded px-2 py-1 text-xs",
-                  Math.abs((insert.y ?? 50) - item.y) < 5 ? "bg-foreground text-background" : "text-muted-foreground",
-                )}
-                onClick={() => onChange({ y: item.y })}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <input
-            type="range"
-            min={6}
-            max={94}
-            aria-label="Altura"
-            value={Math.round(insert.y ?? 50)}
-            onPointerDown={() => onBeginGesture?.()}
-            onPointerUp={() => onEndGesture?.()}
-            onChange={(event) => onChange({ y: Number(event.target.value) })}
-          />
-          <span className="text-xs text-muted-foreground">{Math.round(insert.y ?? 50)}%</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Dura</span>
-          <div className="inline-flex rounded-md border border-border p-0.5">
-            {DURATIONS.map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={Math.abs(insert.duration - item) < 0.05}
-                className={cn(
-                  "rounded px-2 py-1 text-xs",
-                  Math.abs(insert.duration - item) < 0.05 ? "bg-foreground text-background" : "text-muted-foreground",
-                )}
-                onClick={() => onChange({ duration: item })}
-              >
-                {item} s
-              </button>
-            ))}
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            onClick={() => {
-              const at = getPlayhead?.() ?? insert.start
-              onChange({ start: Math.max(0, Math.floor(at * 10) / 10) })
-            }}
-          >
-            Começar no playhead
-          </Button>
-        </div>
-        {over ? (
-          <p className="text-xs text-amber-700">
-            Passa {(insert.start + insert.duration - videoDuration).toFixed(1).replace(".", ",")} s do fim do vídeo ({formatClockTenths(videoDuration)}).
-          </p>
-        ) : null}
+        <MotionTempo
+          animation={resolvedAnimation}
+          insertSeconds={insert.duration}
+          unitCount={motionUnits}
+          onChange={writeAnimation}
+          onRestore={() => paint((item) => insertWithPack(item, packId || "parado"))}
+          onBegin={playMotion}
+          onEnd={onEndGesture}
+        />
       </section>
 
       <details open className="rounded-md border border-border px-3 py-2">
@@ -441,28 +467,84 @@ export function InsertsEditor({
             />
             <span className="text-muted-foreground">{sizePercentOf(insert)}%</span>
           </span>
-          <span>Cor do texto</span>
-          <span className="flex flex-wrap gap-1">
-            {colorChoices(baseColor, kit).map((choice) => (
-              <button
-                key={choice.label}
-                type="button"
-                title={choice.label}
-                aria-label={choice.label}
-                aria-pressed={(insert.styleRef?.overrides.text?.color ?? null) === choice.value}
-                className={cn(
-                  "size-5 rounded-full border",
-                  (insert.styleRef?.overrides.text?.color ?? null) === choice.value ? "border-blue-500 ring-2 ring-blue-500" : "border-black/20",
-                )}
-                style={{ background: choice.swatch }}
-                onClick={() => onChange(insertWithColor(insert, choice.value))}
-              />
-            ))}
-          </span>
+          <FineColorRow
+            label="Cor do texto"
+            stored={textStored}
+            fallback={presetStyle.color}
+            kit={kit}
+            onChange={(value) => paint((item) => insertWithColor(item, value))}
+            onReset={() => paint((item) => insertWithColor(item, null))}
+            onBegin={onBeginGesture}
+            onEnd={onEndGesture}
+          />
+          {showAccent ? (
+            <FineColorRow
+              label="Cor do destaque"
+              stored={accentStored}
+              fallback={presetStyle.accent || presetStyle.highlight.color}
+              kit={kit}
+              onChange={(value) => paint((item) => insertWithAccentColor(item, value))}
+              onReset={() => paint((item) => insertWithAccentColor(item, null))}
+              onBegin={onBeginGesture}
+              onEnd={onEndGesture}
+            />
+          ) : null}
           <span>Contorno</span>
-          <YesNo on={strokeOnSafe(insert)} onChange={(next) => onChange(insertWithStroke(insert, next))} />
+          <YesNo on={showStroke} onChange={(next) => paint((item) => insertWithStroke(item, next))} />
+          {showStroke ? (
+            <FineColorRow
+              label="Cor do contorno"
+              stored={strokeStored}
+              fallback={presetStyle.stroke.color}
+              kit={kit}
+              onChange={(value) => paint((item) => insertWithStrokeColor(item, value))}
+              onReset={() => paint((item) => insertWithStrokeColor(item, null))}
+              onBegin={onBeginGesture}
+              onEnd={onEndGesture}
+            />
+          ) : null}
           <span>Fundo</span>
-          <YesNo on={backgroundEnabled(insert)} onChange={(next) => onChange(insertWithBackground(insert, next))} />
+          <YesNo on={showBackground} onChange={(next) => paint((item) => insertWithBackground(item, next))} />
+          {showBackground ? (
+            <>
+              <FineColorRow
+                label="Cor do fundo"
+                stored={backgroundStored}
+                fallback={presetStyle.background.color}
+                kit={kit}
+                opacity={backgroundOpacity}
+                onChange={(value) => paint((item) => insertWithBackgroundPatch(item, { color: value }))}
+                onReset={() => paint((item) => insertWithBackgroundPatch(item, { color: null }))}
+                onBegin={onBeginGesture}
+                onEnd={onEndGesture}
+              />
+              <span>Opacidade</span>
+              <span className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  aria-label="Opacidade do fundo"
+                  value={backgroundOpacity}
+                  onPointerDown={() => onBeginGesture?.()}
+                  onPointerUp={() => onEndGesture?.()}
+                  onChange={(event) => paint((item) => insertWithBackgroundPatch(item, { opacity: Number(event.target.value) }))}
+                />
+                <span className="text-muted-foreground">{backgroundOpacity}%</span>
+                {typeof insert.styleRef?.overrides.text?.background?.opacity === "number" ? (
+                  <button
+                    type="button"
+                    aria-label="Voltar a opacidade ao padrão do preset"
+                    title="Voltar ao padrão do preset"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => paint((item) => insertWithBackgroundPatch(item, { opacity: null }))}
+                  >
+                    <RotateCcw className="size-3" />
+                  </button>
+                ) : null}
+              </span>
+            </>
+          ) : null}
           <span>Entrada</span>
           <select
             aria-label="Entrada"
@@ -564,18 +646,6 @@ function YesNo({ on, onChange }: { on: boolean; onChange: (next: boolean) => voi
       ))}
     </span>
   )
-}
-
-function colorChoices(base: string, kit: ReturnType<typeof brandKitOf>) {
-  const resolved = resolveColor(base, kit)
-  return [
-    { value: null, label: "Do estilo", swatch: resolved === "transparent" ? "#dddddd" : resolved },
-    { value: "slot:primary", label: "Principal do kit", swatch: kit.primary },
-    { value: "slot:accent", label: "Destaque do kit", swatch: kit.accent },
-    { value: "slot:ink", label: "Tinta do kit", swatch: kit.ink },
-    { value: "#FFFFFF", label: "Branco", swatch: "#FFFFFF" },
-    { value: "#111111", label: "Preto", swatch: "#111111" },
-  ]
 }
 
 function renderRuns(text: string, data: ProductData | undefined): ReactNode {

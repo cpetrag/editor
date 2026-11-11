@@ -75,6 +75,7 @@ export type RenderProps = {
   styleRef?: Composition["styleRef"]
   productData?: Composition["productData"]
   brandKitId?: Composition["brandKitId"]
+  brandColors?: Composition["brandColors"]
   tracks?: Composition["tracks"]
   customPresets?: Composition["customPresets"]
   watermark?: WatermarkPaint
@@ -235,6 +236,7 @@ export function toRenderProps(input: {
     ...(composition.styleRef ? { styleRef: composition.styleRef } : {}),
     ...(composition.productData ? { productData: composition.productData } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    ...(composition.brandColors ? { brandColors: composition.brandColors } : {}),
     ...(composition.tracks ? { tracks: composition.tracks } : {}),
     ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),
     ...(paint ? { watermark: paint } : {}),

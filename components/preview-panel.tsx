@@ -47,6 +47,7 @@ import { trackStyleForInsert } from "@/lib/style-preset"
 import { ShortcutHelpDialog } from "@/components/shortcut-help-dialog"
 import {
   clientXToTime,
+  insertOutputLimit,
   moveInsertTiming,
   stepFrameIndex,
   trimInsertIn,
@@ -110,7 +111,8 @@ interface PreviewPanelProps {
   backgroundUrl: string
   inserts: Insert[]
   fontFamily: string
-  timelineDuration: number
+  /** Duração do arquivo de origem. O relógio da timeline é calculado por cima disso. */
+  sourceDuration: number
   sourcePlayback?: SourcePlayback
   sourceFps?: number
   reverseSrc?: string
@@ -136,6 +138,7 @@ interface PreviewPanelProps {
   styleRef?: StyleRef
   productData?: Composition["productData"]
   brandKitId?: Composition["brandKitId"]
+  brandColors?: Composition["brandColors"]
   tracks?: Partial<Record<TrackId, TrackStyle>>
   customPresets?: Composition["customPresets"]
   watermark?: WatermarkPaint | null
@@ -201,7 +204,7 @@ export const PreviewPanel = memo(
       backgroundUrl,
       inserts,
       fontFamily,
-      timelineDuration,
+      sourceDuration,
       sourcePlayback,
       sourceFps = 30,
       reverseSrc,
@@ -226,6 +229,7 @@ export const PreviewPanel = memo(
       styleRef,
       productData,
       brandKitId,
+      brandColors,
       tracks,
       customPresets,
       watermark,
@@ -313,8 +317,8 @@ export const PreviewPanel = memo(
   videoReadyRef.current = videoReady
 
   const fileDuration =
-    timelineDuration > 0
-      ? timelineDuration
+    sourceDuration > 0
+      ? sourceDuration
       : videoDuration && videoDuration > 0
         ? videoDuration
         : 0
@@ -347,6 +351,14 @@ export const PreviewPanel = memo(
   playbackClockRef.current = playbackClock
   const trimWindowRef = useRef(trimWindow)
   trimWindowRef.current = trimWindow
+  // trimWindow é tempo da fonte. Com Ida/Volta/Loop o teto do insert é a saída.
+  const insertLimit = insertOutputLimit({
+    timelineDuration: totalDuration,
+    sourceTrimEnd: trimWindow.end,
+    separateOutputClock: !isIdentityPlayback(sourcePlayback),
+  })
+  const insertLimitRef = useRef(insertLimit)
+  insertLimitRef.current = insertLimit
   const totalDurationRef = useRef(totalDuration)
   totalDurationRef.current = totalDuration
   const motionById = useMemo(() => {
@@ -458,14 +470,20 @@ export const PreviewPanel = memo(
       ...(styleRef ? { styleRef } : {}),
       ...(tracks ? { tracks } : {}),
       ...(customPresets ? { customPresets } : {}),
+      ...(brandKitId ? { brandKitId } : {}),
+      ...(brandColors ? { brandColors } : {}),
+      ...(productData ? { productData } : {}),
     }),
     [
       backgroundUrl,
+      brandColors,
+      brandKitId,
       captionPreset,
       captionStyle,
       customPresets,
       fontId,
       inserts,
+      productData,
       logoSrc,
       playableUrl,
       sourceCuts,
@@ -573,7 +591,7 @@ export const PreviewPanel = memo(
         onPatchInsert?.(drag.id, next)
         return
       }
-      const limit = trimWindowRef.current.end > 0 ? trimWindowRef.current.end : totalDuration
+      const limit = insertLimitRef.current
       const proposed = moveInsertTiming(drag.base, time - drag.grabOffset, limit)
       const moved = moveTimelineGroup({
         items: drag.items,
@@ -623,15 +641,15 @@ export const PreviewPanel = memo(
 
   const markTrim = useCallback(
     (edge: "in" | "out") => {
-      if (!onChangeTrim || !(timelineDuration > 0)) return
+      if (!onChangeTrim || !(sourceDuration > 0)) return
       const time = toSourceTime(currentTimeRef.current)
       const next =
         edge === "in"
-          ? markTrimIn(activeTrim, time, timelineDuration)
-          : markTrimOut(activeTrim, time, timelineDuration)
+          ? markTrimIn(activeTrim, time, sourceDuration)
+          : markTrimOut(activeTrim, time, sourceDuration)
       onChangeTrim(next, "discrete")
     },
-    [activeTrim, onChangeTrim, timelineDuration, toSourceTime],
+    [activeTrim, onChangeTrim, sourceDuration, toSourceTime],
   )
 
   const stepFrames = useCallback(
@@ -664,17 +682,17 @@ export const PreviewPanel = memo(
   }, [exporting, playableUrl, selection, stepFrames, totalDuration])
 
   const splitAtPlayhead = useCallback(() => {
-    if (!onSplitSource || !(timelineDuration > 0)) return
+    if (!onSplitSource || !(sourceDuration > 0)) return
     const time = toSourceTime(currentTimeRef.current)
-    if (!canSplitSourceAt(framing, time, timelineDuration)) return
+    if (!canSplitSourceAt(framing, time, sourceDuration)) return
     onSplitSource(time)
-  }, [framing, onSplitSource, timelineDuration, toSourceTime])
+  }, [framing, onSplitSource, sourceDuration, toSourceTime])
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
       const drag = trimDragRef.current
       const track = trackRef.current
-      if (!drag || !track || !onChangeTrim || !(timelineDuration > 0)) return
+      if (!drag || !track || !onChangeTrim || !(sourceDuration > 0)) return
       drag.dragging = true
       const outputTime = clientXToTime(event.clientX, track.getBoundingClientRect(), totalDuration)
       const time = playbackClockRef.current
@@ -683,14 +701,14 @@ export const PreviewPanel = memo(
       const span = trimWindowRef.current
       const next =
         drag.edge === "in"
-          ? clampSourceTrim({ start: time, end: span.end }, timelineDuration)
-          : clampSourceTrim({ start: span.start, end: time }, timelineDuration)
+          ? clampSourceTrim({ start: time, end: span.end }, sourceDuration)
+          : clampSourceTrim({ start: span.start, end: time }, sourceDuration)
       onChangeTrim(next, "gesture")
       const shown = playbackClockRef.current
         ? outputTime
         : drag.edge === "in"
           ? (next?.start ?? 0)
-          : (next?.end ?? timelineDuration)
+          : (next?.end ?? sourceDuration)
       currentTimeRef.current = shown
       setCurrentTime(shown)
       playerRef.current?.seekToFrame(Math.round(shown * renderFps))
@@ -710,7 +728,7 @@ export const PreviewPanel = memo(
       window.removeEventListener("pointerup", onUp)
       window.removeEventListener("pointercancel", onUp)
     }
-  }, [onChangeTrim, onEndInsertGesture, timelineDuration, totalDuration])
+  }, [onChangeTrim, onEndInsertGesture, sourceDuration, totalDuration])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -1292,6 +1310,7 @@ export const PreviewPanel = memo(
             tracks={tracks}
             productData={productData}
             brandKitId={brandKitId}
+            brandColors={brandColors}
             project={styleRef ? { styleRef } : {}}
             videoDuration={totalDuration}
             trimStart={trimWindow.start}
@@ -1332,6 +1351,7 @@ export const PreviewPanel = memo(
             styleRef={styleRef}
             productData={productData}
             brandKitId={brandKitId}
+            brandColors={brandColors}
             videoDuration={totalDuration}
             customPresets={customPresets ? Object.values(customPresets) : undefined}
             watermark={watermark}
@@ -1466,7 +1486,7 @@ export const PreviewPanel = memo(
                 Entrada
               </Button>
               <Button
-                variant={activeTrim && activeTrim.end < timelineDuration ? "secondary" : "outline"}
+                variant={activeTrim && activeTrim.end < sourceDuration ? "secondary" : "outline"}
                 size="xs"
                 disabled={exporting || !playableUrl}
                 onClick={() => markTrim("out")}

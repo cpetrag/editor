@@ -18,6 +18,7 @@ import { PanelOverflowMenu } from "@/components/panel-overflow-menu"
 import { StyleCustomizePanel } from "@/components/style-customize-panel"
 import { InsertsGallery } from "@/components/inserts-gallery"
 import { InsertsEditor } from "@/components/inserts-editor"
+import { PaletteCustomizer } from "@/components/palette-customizer"
 import { usePanelBlocks, usePanelTab } from "@/components/use-panel-blocks"
 import type { PresetLibraryHandlers } from "@/components/style-customize-panel"
 import { GenerateCaptionsButton } from "@/components/generate-captions-button"
@@ -121,6 +122,9 @@ interface ControlPanelProps {
   onApplyTemplate: (template: Template) => void
   activeTemplateId: string | null
   onChangeInsert: (id: string, patch: Partial<Insert>) => void
+  onChangeInsertGroup?: (ids: readonly string[], map: (insert: Insert) => Insert) => void
+  onColorsReplaced?: () => void
+  onTimingsReplaced?: () => void
   onRemoveInsert: (id: string) => void
   onSelectInsert: (id: string) => void
   onMergeDuplicates: (ids: string[]) => void
@@ -181,6 +185,9 @@ interface ControlPanelProps {
   productData?: ProductData
   niche?: ContentNiche
   brandKitId?: string
+  palette?: import("@/components/palette-customizer").PaletteController
+  paletteScope?: "project" | "insert"
+  onPaletteScope?: (scope: "project" | "insert") => void
   projectSeed?: string
   onProductData?: (data: ProductData) => void
   onNiche?: (niche: ContentNiche) => void
@@ -253,6 +260,9 @@ export function ControlPanel({
   onApplyTemplate,
   activeTemplateId,
   onChangeInsert,
+  onChangeInsertGroup,
+  onColorsReplaced,
+  onTimingsReplaced,
   onRemoveInsert,
   onSelectInsert,
   onMergeDuplicates,
@@ -305,6 +315,9 @@ export function ControlPanel({
   productData,
   niche = "shopee",
   brandKitId = "shopee",
+  palette,
+  paletteScope,
+  onPaletteScope,
   onProductData,
   onNiche,
   onBrandKit,
@@ -357,7 +370,7 @@ export function ControlPanel({
     [inserts],
   )
   const selectedInsert =
-    selectedIds.length < 2 ? orderedInserts.find((item) => item.id === selectedId) ?? null : null
+    orderedInserts.find((item) => item.id === (selectedIds[0] ?? selectedId)) ?? null
   const styleHost = useMemo(
     () => captionStyleHost(inserts, selectedId),
     [inserts, selectedId],
@@ -618,6 +631,9 @@ export function ControlPanel({
             <SelectionSummaryCard
               inserts={inserts}
               selectedIds={selectedIds}
+              palette={palette}
+              paletteScope={paletteScope}
+              onPaletteScope={onPaletteScope}
               onDuplicate={onDuplicateSelection}
               onDelete={onDeleteSelection}
               onClear={onClearSelection}
@@ -856,12 +872,23 @@ export function ControlPanel({
                   videoDuration={videoDuration}
                   productData={productData}
                   brandKitId={brandKitId}
+                  palette={palette}
+                  paletteScope={paletteScope}
+                  onPaletteScope={onPaletteScope}
                   retentionCuts={retentionCuts}
                   getPlayhead={getPlayhead}
                   focus={insertFocus}
                   onFocusDone={onInsertFocusDone}
                   onBack={() => onClearSelection?.()}
                   onChange={(patch) => onChangeInsert(selectedInsert.id, patch)}
+                  onPaint={
+                    onChangeInsertGroup
+                      ? (map) => onChangeInsertGroup(selectedIds.length > 1 ? selectedIds : [selectedInsert.id], map)
+                      : undefined
+                  }
+                  onColorsReplaced={onColorsReplaced}
+                  onTimingsReplaced={onTimingsReplaced}
+                  onPlayRange={onPlayRange}
                   onDuplicate={() => onDuplicateSelection?.()}
                   onRemove={() => onRemoveInsert(selectedInsert.id)}
                   onHookVariations={
@@ -1024,20 +1051,40 @@ export function ControlPanel({
 function SelectionSummaryCard({
   inserts,
   selectedIds,
+  palette,
+  paletteScope,
+  onPaletteScope,
   onDuplicate,
   onDelete,
   onClear,
 }: {
   inserts: Insert[]
   selectedIds: readonly string[]
+  palette?: import("@/components/palette-customizer").PaletteController
+  paletteScope?: "project" | "insert"
+  onPaletteScope?: (scope: "project" | "insert") => void
   onDuplicate?: () => void
   onDelete?: () => void
   onClear?: () => void
 }) {
   const summary = describeSelection(selectionKindCounts(selectableItems(inserts), selectedIds))
+  const primary = inserts.find((insert) => insert.id === selectedIds[0])
   return (
     <div className="rounded-lg border border-brand bg-card px-3 py-2 ring-1 ring-brand/40">
       <p className="text-sm font-medium text-foreground">{summary}</p>
+      {palette && paletteScope && onPaletteScope ? (
+        <div className="mt-2">
+          <PaletteCustomizer
+            palette={palette}
+            insertIds={selectedIds}
+            presetId={primary?.styleRef?.presetId}
+            override={primary?.paletteOverride}
+            styleOverrides={primary?.styleRef?.overrides}
+            scope={paletteScope}
+            onScope={onPaletteScope}
+          />
+        </div>
+      ) : null}
       <div className="mt-2 flex items-center gap-1">
         <Button type="button" variant="outline" size="xs" onClick={onDuplicate}>
           Duplicar

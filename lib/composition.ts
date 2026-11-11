@@ -29,7 +29,13 @@ import {
   serializeSourceCuts,
   type SourceCut,
 } from "./source-segments.ts"
-import type { BrandKitId } from "./brand/kits.ts"
+import {
+  isBrandKitId,
+  isCustomBrandKitId,
+  parseBrandColors,
+  parsePaletteOverride,
+  type BrandColors,
+} from "./brand/kits.ts"
 import type { ContentNiche } from "./content/presets.ts"
 import type { ProductData } from "./content/runs.ts"
 import { parseStoredShopee } from "./shopee/stored.ts"
@@ -205,6 +211,8 @@ export interface CompositionInsert {
   fileId?: string
   style?: InsertStyle
   styleRef?: StyleRef
+  /** Cores deste insert por cima da paleta do projeto. Slots ausentes seguem o projeto. */
+  paletteOverride?: Partial<BrandColors>
   transform?: InsertTransform
 }
 
@@ -347,7 +355,9 @@ export interface Composition {
   shopee?: ShopeeProduct
   niche?: ContentNiche
   nicheManual?: boolean
-  brandKitId?: BrandKitId
+  brandKitId?: string
+  /** Cores usadas no preview e no export. Não mudam se a paleta da biblioteca for editada depois. */
+  brandColors?: BrandColors
   kitManual?: boolean
   projectSeed?: string
   audio: CompositionAudio
@@ -1089,14 +1099,13 @@ function isContentNicheValue(value: unknown): value is ContentNiche {
   return value === "shopee" || value === "moda" || value === "beleza" || value === "bebe"
 }
 
-function isBrandKitValue(value: unknown): value is BrandKitId {
-  return (
-    value === "shopee" ||
-    value === "beleza" ||
-    value === "bebe" ||
-    value === "moda" ||
-    value === "contraste"
-  )
+function isStoredBrandKitId(value: unknown): value is string {
+  return typeof value === "string" && (isBrandKitId(value) || isCustomBrandKitId(value))
+}
+
+function withPaletteOverride(insert: CompositionInsert, raw: Record<string, unknown>): CompositionInsert {
+  const paletteOverride = parsePaletteOverride(raw.paletteOverride)
+  return paletteOverride ? { ...insert, paletteOverride } : insert
 }
 
 const SOURCE_FIELDS = ["rating", "sold", "quote", "sizes", "colors", "badge", "reviewMedia"] as const
@@ -1195,7 +1204,10 @@ export function parseComposition(input: unknown): Composition {
   const storedVersion = typeof input.version === "number" ? input.version : LEGACY_COMPOSITION_VERSION
   const inserts = Array.isArray(input.inserts)
     ? input.inserts
-        .map(parseInsert)
+        .map((item) => {
+          const insert = parseInsert(item)
+          return insert && isRecord(item) ? withPaletteOverride(insert, item) : insert
+        })
         .filter((insert): insert is CompositionInsert => insert !== null)
         .map((insert) => migrateLayoutRotation(insert, storedVersion))
         .map((insert) => migrateInsertTransform(insert, captionStyle))
@@ -1245,7 +1257,8 @@ export function parseComposition(input: unknown): Composition {
     ...(parseStoredShopee(input.shopee) ? { shopee: parseStoredShopee(input.shopee)! } : {}),
     ...(isContentNicheValue(input.niche) ? { niche: input.niche } : {}),
     ...(input.nicheManual === true ? { nicheManual: true } : {}),
-    ...(isBrandKitValue(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
+    ...(isStoredBrandKitId(input.brandKitId) ? { brandKitId: input.brandKitId } : {}),
+    ...(parseBrandColors(input.brandColors) ? { brandColors: parseBrandColors(input.brandColors) } : {}),
     ...(input.kitManual === true ? { kitManual: true } : {}),
     ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
     audio:
@@ -1328,6 +1341,7 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
     animOut: insert.animOut,
     ...(insert.style ? { style: insert.style } : {}),
     ...(insert.styleRef ? { styleRef: insert.styleRef } : {}),
+    ...(insert.paletteOverride ? { paletteOverride: insert.paletteOverride } : {}),
     ...(insert.transform ? { transform: insert.transform } : {}),
   }
   if (kind === "chip") {
@@ -1459,6 +1473,7 @@ export function serializeComposition(composition: Composition): string {
     ...(composition.niche ? { niche: composition.niche } : {}),
     ...(composition.nicheManual ? { nicheManual: true } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    ...(composition.brandColors ? { brandColors: composition.brandColors } : {}),
     ...(composition.kitManual ? { kitManual: true } : {}),
     ...(composition.projectSeed ? { projectSeed: composition.projectSeed } : {}),
     audio: composition.audio ?? defaultCompositionAudio(),

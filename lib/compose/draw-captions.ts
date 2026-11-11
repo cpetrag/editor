@@ -1,3 +1,4 @@
+import type { BrandColors } from "../brand/kits.ts"
 import type { ProductData } from "../content/runs.ts"
 import type { CaptionPreset, CaptionStyle, CompositionInsert } from "../composition.ts"
 import { DEFAULT_FPS, insertKind } from "../composition.ts"
@@ -23,6 +24,7 @@ export type PlayStyleContext = {
   editPreview?: boolean
   productData?: ProductData
   brandKitId?: string
+  brandColors?: BrandColors
   trimStart?: number
 }
 

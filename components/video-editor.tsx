@@ -52,6 +52,7 @@ import { DEFAULT_PLAYBACK, clampPlaybackSpeed, isIdentityPlayback } from "@/lib/
 import {
   activeVoiceEnd,
   editorDuration,
+  getOutputDuration,
   fitSuggestionFor,
   voiceOverrun,
   voiceOverrunMessage,
@@ -163,6 +164,7 @@ import { pngFileFromBase64 } from "@/lib/ai-client"
 import {
   applyCaptionPatch,
   finalizeCaptionInsert,
+  fitCaptionLinesToOutput,
   linesToCaptionInserts,
   replaceCaptionInserts,
   type CaptionLine,
@@ -225,6 +227,18 @@ import {
   type SegmentedFraming,
 } from "@/lib/source-segments"
 import { clampSourceTrim, resolveTrimWindow, type SourceTrim } from "@/lib/source-trim"
+import { insertOutputLimit } from "@/lib/timeline-clip"
+import {
+  colorsOf,
+  originKitId,
+  projectBrandColors,
+  resolveBrandKit,
+  type BrandColors,
+  type CustomBrandKit,
+} from "@/lib/brand/kits"
+import { createIndexedDbPaletteStore } from "@/lib/brand/palette-store"
+import { insertWithSlotHex } from "@/lib/brand/slot-colors"
+import type { PaletteController } from "@/components/palette-customizer"
 
 function presetCatalogOf(library: UserPreset[], composition: Composition) {
   return mergePresetCatalog(library, composition.customPresets)
@@ -235,7 +249,7 @@ function resolvedInsertLook(
   insert: Insert,
   catalog: ReturnType<typeof presetCatalogOf>,
 ) {
-  const track = trackStyleForInsert(insert, composition.tracks, composition.source.duration, catalog)
+  const track = trackStyleForInsert(insert, composition.tracks, getOutputDuration(composition), catalog)
   const project = { styleRef: composition.styleRef }
   if (insertKind(insert) === "caption") {
     return resolveCaptionInsertStyle(
@@ -302,6 +316,7 @@ function historyPresent(composition: Composition): HistorySnapshot {
     ...(composition.productData ? { productData: composition.productData } : {}),
     ...(composition.niche ? { niche: composition.niche } : {}),
     ...(composition.brandKitId ? { brandKitId: composition.brandKitId } : {}),
+    ...(composition.brandColors ? { brandColors: composition.brandColors } : {}),
     audio: composition.audio ?? defaultCompositionAudio(),
   }
 }
@@ -344,6 +359,15 @@ function captionContentFromPatch(patch: Partial<Insert>): Partial<Insert> | null
   if (typeof patch.duration === "number") content.duration = patch.duration
   if (patch.words) content.words = patch.words
   return Object.keys(content).length > 0 ? content : null
+}
+
+/** Teto de insert/legenda no relógio da timeline. Com segmentos, ignora o fim da fonte. */
+function insertTimelineLimit(composition: Composition): number {
+  return insertOutputLimit({
+    timelineDuration: editorDuration(composition.source, composition.audio),
+    sourceTrimEnd: resolveTrimWindow(composition.source).end,
+    separateOutputClock: !isIdentityPlayback(composition.source.playback),
+  })
 }
 
 function applyTimingPatches(
@@ -459,6 +483,9 @@ export function VideoEditor() {
   const finishTextEditRef = useRef<(outcome: "commit" | "cancel") => void>(() => {})
   const compositionRef = useRef(composition)
   compositionRef.current = composition
+  const outputDuration = useMemo(() => getOutputDuration(composition), [composition])
+  const outputDurationRef = useRef(outputDuration)
+  outputDurationRef.current = outputDuration
   const objectUrlRef = useRef<string | null>(null)
   const sourceBlobRef = useRef<Blob | null>(null)
   const previewRef = useRef<PreviewHandle>(null)
@@ -517,7 +544,10 @@ export function VideoEditor() {
     composition.source.duration,
   ])
   const presetStoreRef = useRef(createIndexedDbPresetStore())
+  const paletteStoreRef = useRef(createIndexedDbPaletteStore())
   const [userPresets, setUserPresets] = useState<UserPreset[]>([])
+  const [customKits, setCustomKits] = useState<CustomBrandKit[]>([])
+  const [paletteScope, setPaletteScope] = useState<"project" | "insert">("project")
   const stickerBlobUrlsRef = useRef(stickerBlobUrls)
   stickerBlobUrlsRef.current = stickerBlobUrls
 
@@ -748,6 +778,16 @@ export function VideoEditor() {
       }
     }
     void hydratePresets()
+    async function hydratePalettes() {
+      try {
+        const listed = await paletteStoreRef.current.list()
+        if (!cancelled) setCustomKits(listed)
+      } catch (error) {
+        console.error("[editor] falha ao reabrir paletas", error)
+      }
+    }
+    void hydratePresets()
+    void hydratePalettes()
     return () => {
       cancelled = true
     }
@@ -1073,6 +1113,7 @@ export function VideoEditor() {
       productData: snapshot.productData,
       niche: snapshot.niche,
       brandKitId: snapshot.brandKitId,
+      brandColors: snapshot.brandColors,
       audio: snapshot.audio ?? compositionRef.current.audio ?? defaultCompositionAudio(),
     })
     compositionRef.current = next
@@ -1129,6 +1170,107 @@ export function VideoEditor() {
     },
     [],
   )
+
+  const liveBrandColors = projectBrandColors(composition.brandKitId, composition.brandColors, customKits)
+
+  const selectBrandKit = useCallback((id: string) => {
+    const kit = resolveBrandKit(id, customKits)
+    applyComposition((prev) => ({
+      ...prev,
+      brandKitId: id,
+      brandColors: colorsOf(kit),
+      kitManual: true,
+    }), "discrete")
+  }, [applyComposition, customKits])
+
+  const paintProjectColors = useCallback((colors: BrandColors, phase: "gesture" | "discrete") => {
+    if (phase === "gesture" && !gestureRef.current.active) beginInsertHistory()
+    applyComposition((prev) => ({ ...prev, brandColors: colors, kitManual: true }), phase)
+  }, [applyComposition, beginInsertHistory])
+
+  const paintInsertOverride = useCallback((
+    ids: readonly string[],
+    override: Partial<BrandColors> | null,
+    phase: "gesture" | "discrete",
+  ) => {
+    if (phase === "gesture" && !gestureRef.current.active) beginInsertHistory()
+    applyInserts((inserts) => inserts.map((insert) => {
+      if (!ids.includes(insert.id)) return insert
+      if (!override) {
+        const { paletteOverride: _drop, ...rest } = insert
+        return rest
+      }
+      return { ...insert, paletteOverride: override }
+    }), phase)
+  }, [applyInserts, beginInsertHistory])
+
+  const paintSlotHex = useCallback((
+    ids: readonly string[],
+    slot: Parameters<typeof insertWithSlotHex>[1],
+    hex: string,
+    phase: "gesture" | "discrete",
+  ) => {
+    if (phase === "gesture" && !gestureRef.current.active) beginInsertHistory()
+    applyInserts((inserts) => inserts.map((insert) => (
+      ids.includes(insert.id) ? insertWithSlotHex(insert, slot, hex) : insert
+    )), phase)
+  }, [applyInserts, beginInsertHistory])
+
+  const saveBrandKit = useCallback((name: string, colors: BrandColors) => {
+    const current = compositionRef.current
+    const kit: CustomBrandKit = {
+      id: `custom-${crypto.randomUUID()}`,
+      label: name.trim().slice(0, 40),
+      baseKitId: originKitId(current.brandKitId, customKits),
+      ...colors,
+    }
+    void paletteStoreRef.current.save(kit).then(() => {
+      setCustomKits((list) => [...list.filter((item) => item.id !== kit.id), kit])
+      applyComposition((prev) => ({
+        ...prev,
+        brandKitId: kit.id,
+        brandColors: colorsOf(kit),
+        kitManual: true,
+      }), "discrete")
+    }).catch((error: unknown) => {
+      console.error("[editor] falha ao salvar paleta", error)
+      setLiveMessage("Não foi possível salvar a paleta.")
+    })
+  }, [applyComposition, customKits])
+
+  const renameBrandKit = useCallback((id: string, label: string) => {
+    const current = customKits.find((kit) => kit.id === id)
+    if (!current) return
+    const next = { ...current, label: label.trim().slice(0, 40) }
+    void paletteStoreRef.current.save(next).then(() => {
+      setCustomKits((list) => list.map((kit) => (kit.id === id ? next : kit)))
+    }).catch((error: unknown) => {
+      console.error("[editor] falha ao renomear paleta", error)
+    })
+  }, [customKits])
+
+  const deleteBrandKit = useCallback((id: string) => {
+    void paletteStoreRef.current.delete(id).then(() => {
+      setCustomKits((list) => list.filter((kit) => kit.id !== id))
+    }).catch((error: unknown) => {
+      console.error("[editor] falha ao excluir paleta", error)
+    })
+  }, [])
+
+  const paletteController: PaletteController = {
+    kitId: composition.brandKitId ?? "shopee",
+    customKits,
+    projectColors: liveBrandColors,
+    onSelectKit: selectBrandKit,
+    onProjectColors: paintProjectColors,
+    onInsertOverride: paintInsertOverride,
+    onSlotHex: paintSlotHex,
+    onSaveKit: saveBrandKit,
+    onRenameKit: renameBrandKit,
+    onDeleteKit: deleteBrandKit,
+    onBegin: beginInsertHistory,
+    onEnd: endInsertHistory,
+  }
 
   const handleWatermarkEnabled = useCallback((enabled: boolean) => {
     applyComposition((current) => ({
@@ -1233,7 +1375,7 @@ export function VideoEditor() {
       setAudioUrls(audioUrlsRef.current)
       applyComposition((current) => {
         const audio = current.audio ?? defaultCompositionAudio()
-        const videoDuration = current.source.duration
+        const videoDuration = getOutputDuration(current)
         if (input.replaceTrackId) {
           return {
             ...current,
@@ -1385,10 +1527,10 @@ export function VideoEditor() {
       const placed = placeProofInserts(
         buildProofInserts(current.shopee),
         current.inserts,
-        current.source.duration,
+        getOutputDuration(current),
         current.retention,
         current.shopee.fetchedAt,
-        resolveTrimWindow(current.source).end,
+        insertTimelineLimit(current),
       )
       if (placed.length === 0) return current
       return { ...current, inserts: [...current.inserts, ...placed] }
@@ -1484,7 +1626,7 @@ export function VideoEditor() {
           audio: {
             ...audio,
             tracks: audio.tracks.map((track) =>
-              track.id === id ? clampTrack({ ...track, ...patch }, current.source.duration) : track,
+              track.id === id ? clampTrack({ ...track, ...patch }, getOutputDuration(current)) : track,
             ),
           },
         }
@@ -1676,7 +1818,7 @@ export function VideoEditor() {
   }, [activeTab])
 
   const fitToCut = useCallback((created: Insert) => {
-    const end = resolveTrimWindow(compositionRef.current.source).end
+    const end = insertTimelineLimit(compositionRef.current)
     const timing = fitReadyWindow(created.start, created.duration, end)
     created.start = timing.start
     created.duration = timing.duration
@@ -1692,7 +1834,7 @@ export function VideoEditor() {
 
   const addTextInsert = useCallback(() => {
     finishTextEditRef.current("commit")
-    const end = resolveTrimWindow(compositionRef.current.source).end
+    const end = insertTimelineLimit(compositionRef.current)
     const created = createInsert("texto-livre")
     const timing = fitReadyWindow(playheadRef.current, created.duration, end)
     created.start = timing.start
@@ -1703,7 +1845,7 @@ export function VideoEditor() {
 
   const addReadyInsert = useCallback((spec: ReadySpec, selectMarked: boolean) => {
     finishTextEditRef.current("commit")
-    const end = resolveTrimWindow(compositionRef.current.source).end
+    const end = insertTimelineLimit(compositionRef.current)
     const created = buildReadyInsert(spec, playheadRef.current, end)
     placeReady(created, selectMarked, true)
   }, [placeReady])
@@ -1734,7 +1876,7 @@ export function VideoEditor() {
         label: item.name,
         libraryId: item.id,
       })
-      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      created.start = nextInsertStart(playheadRef.current, insertTimelineLimit(compositionRef.current))
       fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
@@ -1770,7 +1912,7 @@ export function VideoEditor() {
         label: file.name || "colar",
         fileId,
       })
-      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      created.start = nextInsertStart(playheadRef.current, insertTimelineLimit(compositionRef.current))
       fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
@@ -1796,7 +1938,7 @@ export function VideoEditor() {
   const addElement = useCallback(
     (type: InsertType) => {
       const created = createInsert(type)
-      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      created.start = nextInsertStart(playheadRef.current, insertTimelineLimit(compositionRef.current))
       fitToCut(created)
       applyInserts((inserts) => [...inserts, created], "discrete")
       setSelection({ kind: "insert", id: created.id })
@@ -1827,7 +1969,7 @@ export function VideoEditor() {
               baselineInsert && insertKind(baselineInsert) === "caption" ? baselineInsert : insert
             return finalizeCaptionInsert(
               applyCaptionPatch(source, content),
-              compositionRef.current.source.duration,
+              editorDuration(compositionRef.current.source, compositionRef.current.audio),
             )
           }),
         )
@@ -1872,6 +2014,14 @@ export function VideoEditor() {
     [applyCaptionStyle, patchInserts],
   )
 
+  const changeInsertGroup = useCallback((ids: readonly string[], map: (insert: Insert) => Insert) => {
+    const selected = new Set(ids)
+    applyInserts(
+      (inserts) => inserts.map((insert) => (selected.has(insert.id) ? map(insert) : insert)),
+      gestureRef.current.active ? "gesture" : "discrete",
+    )
+  }, [applyInserts])
+
   const removeInsert = useCallback(
     (id: string) => {
       if (textEditRef.current?.id === id) textEditRef.current = null
@@ -1890,7 +2040,8 @@ export function VideoEditor() {
 
   const patchTimings = useCallback(
     (patches: { id: string; start: number; duration: number }[]) => {
-      const duration = compositionRef.current.source.duration
+      const current = compositionRef.current
+      const duration = editorDuration(current.source, current.audio)
       const baseline = gestureRef.current.active ? gestureRef.current.baseline : null
       applyInserts(
         (inserts) => applyTimingPatches(inserts, patches, duration, baseline),
@@ -1928,7 +2079,8 @@ export function VideoEditor() {
     (ids: string[]) => {
       finishTextEditRef.current("commit")
       const prev = compositionRef.current
-      const delta = duplicateGroupDelta(selectableItems(prev.inserts), ids, prev.source.duration)
+      const limit = editorDuration(prev.source, prev.audio)
+      const delta = duplicateGroupDelta(selectableItems(prev.inserts), ids, limit)
       if (delta == null) return
       const selected = prev.inserts.filter((insert) => ids.includes(insert.id))
       const stickerCount = prev.inserts.filter((insert) => insertKind(insert) === "sticker").length
@@ -1944,7 +2096,7 @@ export function VideoEditor() {
         if (insertKind(insert) === "caption") {
           return finalizeCaptionInsert(
             applyCaptionPatch(insert, { id, start }),
-            prev.source.duration,
+            limit,
           )
         }
         return mergeInsertPatch({ ...insert, id }, { start })
@@ -1960,17 +2112,18 @@ export function VideoEditor() {
   const nudgeSelection = useCallback(
     (ids: string[], frames: number) => {
       const prev = compositionRef.current
+      const limit = editorDuration(prev.source, prev.audio)
       const moved = moveTimelineGroup({
         items: selectableItems(prev.inserts),
         selectedIds: ids,
         delta: frames / 30,
-        videoDuration: prev.source.duration,
+        videoDuration: limit,
         snapTolerance: 0,
         snapTargets: [],
       })
       if (!(Math.abs(moved.delta) > 1e-6)) return
       applyInserts(
-        (inserts) => applyTimingPatches(inserts, moved.starts, prev.source.duration, null),
+        (inserts) => applyTimingPatches(inserts, moved.starts, limit, null),
         "discrete",
       )
     },
@@ -1983,17 +2136,18 @@ export function VideoEditor() {
       const items = selectableItems(prev.inserts)
       const primary = items.find((item) => item.id === primaryId)
       if (!primary) return
+      const limit = editorDuration(prev.source, prev.audio)
       const moved = moveTimelineGroup({
         items,
         selectedIds: ids,
         delta: playheadRef.current - primary.start,
-        videoDuration: prev.source.duration,
+        videoDuration: limit,
         snapTolerance: 0,
         snapTargets: [],
       })
       if (!(Math.abs(moved.delta) > 1e-6)) return
       applyInserts(
-        (inserts) => applyTimingPatches(inserts, moved.starts, prev.source.duration, null),
+        (inserts) => applyTimingPatches(inserts, moved.starts, limit, null),
         "discrete",
       )
     },
@@ -2075,7 +2229,7 @@ export function VideoEditor() {
     (x: number, y: number) => {
       finishTextEdit("commit")
       const created = createInsert("texto-livre")
-      created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+      created.start = nextInsertStart(playheadRef.current, insertTimelineLimit(compositionRef.current))
       fitToCut(created)
       created.x = x
       created.y = y
@@ -2263,7 +2417,7 @@ export function VideoEditor() {
   )
 
   const applyTemplate = useCallback((template: Template, mode: "add" | "replace" = "replace") => {
-    const duration = compositionRef.current.source.duration
+    const duration = outputDurationRef.current
     applyInserts(
       (prev) =>
         mode === "add"
@@ -2345,7 +2499,7 @@ export function VideoEditor() {
       const assembled = assembleInserts({
         inserts: payload.inserts,
         stickerHint: payload.stickerHint,
-        duration: compositionRef.current.source.duration,
+        duration: outputDurationRef.current,
         sticker,
       })
       const captions = compositionRef.current.inserts.filter((i) => insertKind(i) === "caption")
@@ -2357,7 +2511,16 @@ export function VideoEditor() {
 
   const applyCaptions = useCallback(
     (lines: CaptionLine[]) => {
-      const incoming = linesToCaptionInserts(lines, compositionRef.current.source.duration)
+      const fitted = fitCaptionLinesToOutput(lines, outputDurationRef.current)
+      if (fitted.dropped > 0) {
+        const count = fitted.dropped
+        setLiveMessage(
+          count === 1
+            ? "1 legenda passou do fim do vídeo"
+            : `${count} legendas passaram do fim do vídeo`,
+        )
+      }
+      const incoming = linesToCaptionInserts(fitted.lines, outputDurationRef.current)
       applyInserts(
         (prev) => replaceCaptionInserts(prev, carryCaptionStyleRef(prev, incoming)),
         "discrete",
@@ -2374,7 +2537,7 @@ export function VideoEditor() {
       applyComposition((prev) => {
         const catalog = presetCatalogOf(userPresets, prev)
         const inserts = applyCaptionLook(prev.inserts, lookId, {
-          videoDuration: prev.source.duration,
+          videoDuration: getOutputDuration(prev),
           catalog,
         })
         const host = captionStyleHost(inserts, selectedInsertId)
@@ -2400,7 +2563,7 @@ export function VideoEditor() {
         const named = catalog[presetId]
         const inserts = applyFactoryPreset(prev.inserts, presetId, {
           selectedId: selectedInsertId,
-          videoDuration: prev.source.duration,
+          videoDuration: getOutputDuration(prev),
           mode,
           catalog,
         })
@@ -2449,7 +2612,7 @@ export function VideoEditor() {
           }
         }
         const catalog = presetCatalogOf(userPresets, prev)
-        const track = trackStyleForInsert(insert, prev.tracks, prev.source.duration, catalog)
+        const track = trackStyleForInsert(insert, prev.tracks, getOutputDuration(prev), catalog)
         const project = { styleRef: prev.styleRef }
         const nextRef = patchStyleRef(workingStyleRef(insert, track, project), path, value)
         const caption = insertKind(insert) === "caption"
@@ -2566,7 +2729,7 @@ export function VideoEditor() {
         const insert = prev.inserts.find((item) => item.id === id)
         if (!insert) return prev
         const catalog = presetCatalogOf(userPresets, prev)
-        const track = trackStyleForInsert(insert, prev.tracks, prev.source.duration, catalog)
+        const track = trackStyleForInsert(insert, prev.tracks, getOutputDuration(prev), catalog)
         const look = insert.styleRef ?? workingStyleRef(insert, track, { styleRef: prev.styleRef })
         const result = applyLookToTextInserts(prev.inserts, prev.tracks, look)
         return { ...prev, inserts: result.inserts, tracks: result.tracks }
@@ -2591,7 +2754,7 @@ export function VideoEditor() {
       const catalog = presetCatalogOf(userPresets, prev)
       const preset = createUserPreset({
         label,
-        group: insertKind(insert) === "caption" ? "legenda" : zoneForInsert(insert, prev.source.duration),
+        group: insertKind(insert) === "caption" ? "legenda" : zoneForInsert(insert, getOutputDuration(prev)),
         style: resolvedInsertLook(prev, insert, catalog),
       })
       void presetStoreRef.current.save(preset).then(refreshUserPresets).catch((error: unknown) => {
@@ -2602,7 +2765,7 @@ export function VideoEditor() {
         customPresets: upsertCustomPreset(current.customPresets, preset),
         inserts: applyFactoryPreset(current.inserts, preset.id, {
           selectedId: insert.id,
-          videoDuration: current.source.duration,
+          videoDuration: getOutputDuration(current),
           mode: "clean",
           catalog: { [preset.id]: preset },
         }),
@@ -3075,7 +3238,7 @@ export function VideoEditor() {
         ? applyVariationPreview(composition.inserts, batchPreview.position)
         : composition.inserts
     if (!comboPreview || activeTab === "batch") return base
-    const ghost = instantiateTemplate(comboPreview, composition.source.duration).map((insert) => ({
+    const ghost = instantiateTemplate(comboPreview, outputDuration).map((insert) => ({
       ...insert,
       id: `preview-${insert.id}`,
     }))
@@ -3096,14 +3259,14 @@ export function VideoEditor() {
           1920,
           30,
           "MP4",
-          composition.source.duration,
+          outputDuration,
         )
       : formatExportSpec(
           exportSize.width,
           exportSize.height,
           composition.output.fps,
           exportFormat?.label ?? "MP4",
-          composition.source.duration,
+          outputDuration,
         )
   const webmWarning =
     exportFormat?.ext === "webm"
@@ -3116,7 +3279,7 @@ export function VideoEditor() {
         ...collectExportWarnings(
           checklistItemsFromComposition({
             inserts: composition.inserts,
-            source: { duration: composition.source.duration },
+            source: { duration: outputDuration },
             captionStyle: composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
             captionPreset: composition.captionPreset,
             tracks: composition.tracks,
@@ -3127,7 +3290,7 @@ export function VideoEditor() {
         ...emptyVariableWarnings(composition.inserts, composition.productData, composition.pricing),
         ...(shopeeStaleWarning(composition.shopee) ? [shopeeStaleWarning(composition.shopee)!] : []),
         ...(() => {
-          const late = insertsPastEnd(composition.inserts, resolveTrimWindow(composition.source).end)
+          const late = insertsPastEnd(composition.inserts, insertTimelineLimit(composition))
           return late.length
             ? [{
                 id: "insert-past-end",
@@ -3202,6 +3365,7 @@ export function VideoEditor() {
       composition.captionStyle,
       composition.inserts,
       composition.source.duration,
+      outputDuration,
       composition.source.trim,
       composition.productData,
       composition.pricing,
@@ -3287,7 +3451,7 @@ export function VideoEditor() {
       if (insertIdOf(selection) !== id) toggleInsert(id)
     },
     onFitInserts: () => {
-      const end = resolveTrimWindow(compositionRef.current.source).end
+      const end = insertTimelineLimit(compositionRef.current)
       const late = new Set(insertsPastEnd(compositionRef.current.inserts, end).map((insert) => insert.id))
       if (late.size === 0) return
       applyInserts(
@@ -3668,6 +3832,9 @@ export function VideoEditor() {
             onApplyTemplate={applyTemplate}
             activeTemplateId={activeTemplateId}
             onChangeInsert={changeInsert}
+            onChangeInsertGroup={changeInsertGroup}
+            onColorsReplaced={() => setUndoToast("Cores personalizadas substituídas")}
+            onTimingsReplaced={() => setUndoToast("Tempos personalizados substituídos")}
             onRemoveInsert={removeInsert}
             onSelectInsert={toggleInsert}
             onMergeDuplicates={mergeDuplicates}
@@ -3710,7 +3877,10 @@ export function VideoEditor() {
               textHistoryTimer.current = setTimeout(() => endInsertHistory(), 800)
             }}
             onNiche={(niche) => applyComposition((prev) => ({ ...prev, niche, nicheManual: true }), "discrete")}
-            onBrandKit={(brandKitId) => applyComposition((prev) => ({ ...prev, brandKitId, kitManual: true }), "discrete")}
+            palette={paletteController}
+            paletteScope={paletteScope}
+            onPaletteScope={setPaletteScope}
+            onBrandKit={selectBrandKit}
             pricing={composition.pricing}
             shopee={composition.shopee}
             nicheManual={composition.nicheManual}
@@ -3759,7 +3929,7 @@ export function VideoEditor() {
               const created = createInsert(type)
               created.start = nextInsertStart(
                 playheadRef.current,
-                resolveTrimWindow(compositionRef.current.source).end,
+                insertTimelineLimit(compositionRef.current),
               )
               fitToCut(created)
               if (point) {
@@ -3833,7 +4003,7 @@ export function VideoEditor() {
           onCancelComboPreview={cancelComboPreview}
           onDropElement={(type, x, y) => {
             const created = createInsert(type)
-            created.start = nextInsertStart(playheadRef.current, resolveTrimWindow(compositionRef.current.source).end)
+            created.start = nextInsertStart(playheadRef.current, insertTimelineLimit(compositionRef.current))
             fitToCut(created)
             created.x = Math.min(100, Math.max(0, Math.round(x * 10) / 10))
             created.y = Math.min(100, Math.max(0, Math.round(y * 10) / 10))
@@ -3870,10 +4040,11 @@ export function VideoEditor() {
           styleRef={composition.styleRef}
           productData={composition.productData}
           brandKitId={composition.brandKitId}
+          brandColors={liveBrandColors}
           tracks={composition.tracks}
           customPresets={composition.customPresets}
           onPatchCaptionStyle={handlePreviewCaptionStyle}
-          timelineDuration={composition.source.duration}
+          sourceDuration={composition.source.duration}
           sourcePlayback={composition.source.playback}
           sourceFps={composition.source.fps}
           reverseSrc={reverseSrc ?? undefined}

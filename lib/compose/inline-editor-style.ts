@@ -7,7 +7,7 @@ import { resolveStyle } from "../style/resolve-style.ts"
 import type { InsertStyle, StyleLayer } from "../style/types.ts"
 import { isTextPresetId } from "../text-presets/catalog.ts"
 import { resolvedTextInsertForPlay } from "./draw-insert-style.ts"
-import { brandKitOf } from "../brand/kits.ts"
+import { paintBrandKit, type BrandColors } from "../brand/kits.ts"
 import { resolveStyleColors } from "../brand/resolve-style-colors.ts"
 import { canvasFontFamily } from "./fonts.ts"
 import { canvasShadow } from "./insert-style.ts"
@@ -121,10 +121,18 @@ export function inlineEditorCss(input: {
   brandFontId: string
   scale: number
   brandKitId?: string
+  brandColors?: BrandColors
 }): InlineEditorCss {
   const { laidOut, layout, brandFontId, scale } = input
   const painted = input.painted
-    ? resolveStyleColors(input.painted, brandKitOf(input.brandKitId))
+    ? resolveStyleColors(
+        input.painted,
+        paintBrandKit({
+          brandKitId: input.brandKitId,
+          brandColors: input.brandColors,
+          paletteOverride: laidOut.paletteOverride,
+        }),
+      )
     : null
   const layer = resolveLayerStyle(laidOut, brandFontId)
   const size = layout.effectiveFontSize

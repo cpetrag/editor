@@ -9,6 +9,10 @@ import {
   formatClockTenths,
   galleryRecipes,
   galleryStyles,
+  hasCustomPaint,
+  insertWithBackground,
+  insertWithColor,
+  insertWithBackgroundPatch,
   insertWithStyle,
   stripMarks,
   thumbGridMetrics,
@@ -78,6 +82,32 @@ test("trocar o estilo conserva texto, tempo e posição", () => {
   assert.equal(next.y, insert.y)
   assert.equal(next.styleRef?.presetId, "editorial")
   assert.equal(next.styleRef?.overrides.animation?.packId, "digitacao")
+})
+
+test("trocar o preset descarta a cor personalizada e guarda fundo ao desligar", () => {
+  const insert = buildReadyInsert(
+    { text: "ACHEI *NATURA*", styleId: "fita-preta", packId: "carimbo", y: 18 },
+    0,
+    20,
+  )
+  const painted = insertWithBackgroundPatch(insertWithColor({ ...insert, styleRef: insert.styleRef }, "#FFF3B0"), {
+    color: "#001F3F",
+    opacity: 60,
+  })
+  assert.equal(hasCustomPaint(painted), true)
+  const off = insertWithBackground(painted, false)
+  assert.equal(off.styleRef?.overrides.text?.background?.enabled, false)
+  assert.equal(off.styleRef?.overrides.text?.background?.color, "#001F3F")
+  assert.equal(off.styleRef?.overrides.text?.background?.opacity, 60)
+  const on = insertWithBackground(off, true)
+  assert.equal(on.styleRef?.overrides.text?.background?.enabled, true)
+  assert.equal(on.styleRef?.overrides.text?.background?.color, "#001F3F")
+  assert.equal(on.styleRef?.overrides.text?.background?.opacity, 60)
+  const swapped = insertWithStyle(painted, "editorial")
+  assert.equal(swapped.styleRef?.overrides.text?.color, undefined)
+  assert.equal(swapped.styleRef?.overrides.text?.background, undefined)
+  assert.equal(swapped.text, painted.text)
+  assert.equal(swapped.y, painted.y)
 })
 
 test("destacar envolve e remove a marcação", () => {

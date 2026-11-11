@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import { BRAND_KITS } from "@/lib/brand/kits"
+import { BRAND_KITS, type BrandColors, type CustomBrandKit } from "@/lib/brand/kits"
 import {
   CONTENT_PRESETS,
   contentPresetsFor,
@@ -153,14 +153,17 @@ export function ProductDataFields({
 
 export function BrandKitPicker({
   kitId,
+  customKits = [],
   onChange,
 }: {
   kitId: string
+  customKits?: readonly CustomBrandKit[]
   onChange: (id: string) => void
 }) {
+  const kits = [...BRAND_KITS, ...customKits]
   return (
     <div className="flex flex-wrap gap-1">
-      {BRAND_KITS.map((kit) => (
+      {kits.map((kit) => (
         <button
           key={kit.id}
           type="button"
@@ -168,8 +171,8 @@ export function BrandKitPicker({
           className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[0.65rem] ${kit.id === kitId ? "border-foreground" : "border-border"}`}
           onClick={() => onChange(kit.id)}
         >
-          {[kit.primary, kit.onPrimary, kit.accent, kit.ink].map((color) => (
-            <span key={color} className="size-2.5 rounded-full border border-black/10" style={{ background: color }} />
+          {[kit.primary, kit.onPrimary, kit.accent, kit.ink].map((color, index) => (
+            <span key={`${kit.id}-${index}`} className="size-2.5 rounded-full border border-black/10" style={{ background: color }} />
           ))}
           {kit.label}
         </button>
@@ -269,7 +272,7 @@ export function sampleTextForPreset(presetId: string): string {
   return "Achei o *melhor*"
 }
 
-function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
+function StyleThumb({ presetId, kitId, colors }: { presetId: string; kitId: string; colors?: BrandColors }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const canvas = ref.current
@@ -309,6 +312,7 @@ function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
         },
         origin: { cx: logicalW / 2, cy: logicalH / 2 },
         brandKitId: kitId,
+        brandColors: colors,
         editPreview: false,
         productData: { preco: "R$ 49,90", preco_de: "R$ 89,90" },
       })
@@ -318,12 +322,13 @@ function StyleThumb({ presetId, kitId }: { presetId: string; kitId: string }) {
     return () => {
       cancelled = true
     }
-  }, [kitId, presetId])
+  }, [colors, kitId, presetId])
   return <canvas ref={ref} className="h-[72px] w-full" />
 }
 
 export function StylePresetGallery({
   kitId,
+  colors,
   moment,
   niche,
   onMoment,
@@ -331,6 +336,7 @@ export function StylePresetGallery({
   onApply,
 }: {
   kitId: string
+  colors?: BrandColors
   moment: string
   niche: string
   onMoment: (moment: string) => void
@@ -366,7 +372,7 @@ export function StylePresetGallery({
       <div className="grid grid-cols-2 gap-2">
         {presets.map((preset) => (
           <button key={preset.id} type="button" className="overflow-hidden rounded-md border border-border text-left" onClick={() => onApply(preset.id)}>
-            <StyleThumb presetId={preset.id} kitId={kitId} />
+            <StyleThumb presetId={preset.id} kitId={kitId} colors={colors} />
             <span className="flex h-6 items-center justify-between px-1.5 text-[0.65rem]">
               {preset.label} · {preset.slots.map((slot) => slot[0]?.toUpperCase() + slot.slice(1)).join(" · ")}
               <span className="rounded bg-amber-400 px-1 text-[0.6rem] font-semibold text-black">NOVO</span>

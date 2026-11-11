@@ -34,6 +34,7 @@ export function ExportCompareLayer({
   styleRef,
   productData,
   brandKitId,
+  brandColors,
   videoDuration,
   customPresets,
   watermark,
@@ -50,6 +51,7 @@ export function ExportCompareLayer({
   styleRef?: StyleRef
   productData?: import("@/lib/content/runs").ProductData
   brandKitId?: string
+  brandColors?: import("@/lib/brand/kits").BrandColors
   videoDuration: number
   customPresets?: UserPreset[]
   watermark?: WatermarkPaint | null
@@ -129,6 +131,7 @@ export function ExportCompareLayer({
           customPresets,
           productData,
           brandKitId,
+          brandColors,
         },
         watermark ?? null,
       )
@@ -150,6 +153,8 @@ export function ExportCompareLayer({
     }
   }, [
     blobUrls,
+    brandColors,
+    brandKitId,
     captionPreset,
     captionStyle,
     customPresets,

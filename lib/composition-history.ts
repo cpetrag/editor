@@ -1,7 +1,7 @@
 import type { CaptionStyle, CompositionInsert, StyleRef, TrackId, TrackStyle } from "./composition.ts"
 import type { ProductData } from "./content/runs.ts"
 import type { ContentNiche } from "./content/presets.ts"
-import type { BrandKitId } from "./brand/kits.ts"
+import type { BrandColors } from "./brand/kits.ts"
 import type { SourceTransform } from "./source-transform.ts"
 import type { SourceTrim } from "./source-trim.ts"
 import type { SourceCut } from "./source-segments.ts"
@@ -23,7 +23,8 @@ export interface HistorySnapshot {
   retention?: { ganchoEnd: number; ctaStart: number }
   productData?: ProductData
   niche?: ContentNiche
-  brandKitId?: BrandKitId
+  brandKitId?: string
+  brandColors?: BrandColors
   audio?: CompositionAudio
 }
 

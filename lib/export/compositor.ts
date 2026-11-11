@@ -174,6 +174,8 @@ export function drawFrame(
       customPresets: composition.customPresets
         ? Object.values(composition.customPresets)
         : undefined,
+      brandKitId: composition.brandKitId,
+      brandColors: composition.brandColors,
     },
     watermark ?? null,
   )
