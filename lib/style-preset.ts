@@ -183,6 +183,7 @@ export function applyFactoryPreset(
         ? { rotation: painted.text.rotation }
         : { rotation: undefined }
       : {}),
+    captionOwnStyle: undefined,
   })
 
   if (preset.group === "legenda") {

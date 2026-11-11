@@ -1043,3 +1043,85 @@ test("clampComposition descarta divisões além da duração e preserva a source
 test("createDefaultComposition has no watermarkEnabled", () => {
   assert.equal(createDefaultComposition().watermarkEnabled, undefined)
 })
+
+test("recarregar ping-pong com fit audio preserva legendas depois da fonte", () => {
+  const composition = sampleComposition({
+    source: {
+      duration: 5.733,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      fileName: "v.mp4",
+      playback: { speed: 0.85, fill: "pingpong", fit: "audio" },
+    },
+    output: {
+      width: 1080,
+      height: 1920,
+      fps: 30,
+      videoBitrate: DEFAULT_VIDEO_BITRATE,
+      duration: 14.6,
+    },
+    audio: {
+      original: { volume: 1, muted: false },
+      tracks: [
+        {
+          id: "voz",
+          kind: "voice",
+          fileId: "a",
+          fileName: "textogrupo004.mp3",
+          duration: 14.6024,
+          start: 0,
+          trimIn: 0,
+          trimOut: 14.6024,
+          volume: 1,
+          fadeIn: 0,
+          fadeOut: 0,
+          loop: false,
+          muted: false,
+        },
+      ],
+      ducking: { enabled: true, amount: 0.65, fade: 0.25 },
+    },
+    inserts: [
+      {
+        id: "c1",
+        type: "legenda",
+        kind: "caption",
+        start: 10,
+        duration: 1.5,
+        text: "Mais e entra agora",
+        words: [
+          { text: "Mais", start: 10, end: 10.3 },
+          { text: "e", start: 10.3, end: 10.5 },
+          { text: "entra", start: 10.5, end: 11 },
+          { text: "agora", start: 11, end: 11.4 },
+        ],
+        anchor: "bottom",
+        animIn: "none",
+        animOut: "none",
+      },
+      {
+        id: "t1",
+        type: "texto-livre",
+        kind: "text",
+        start: 8,
+        duration: 2,
+        text: "ACHEI",
+        anchor: "center",
+        animIn: "none",
+        animOut: "none",
+        x: 50,
+        y: 72,
+      },
+    ],
+  })
+  let current = composition
+  for (let pass = 0; pass < 3; pass += 1) {
+    current = parseComposition(JSON.parse(serializeComposition(current)))
+  }
+  const caption = current.inserts.find((insert) => insert.kind === "caption")
+  const text = current.inserts.find((insert) => insert.id === "t1")
+  assert.equal(caption?.words?.map((word) => word.text).join(" "), "Mais e entra agora")
+  assert.ok(Math.abs((caption?.start ?? 0) - 10) < 0.08)
+  assert.ok(Math.abs((text?.start ?? 0) - 8) < 0.08)
+})

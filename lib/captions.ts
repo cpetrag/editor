@@ -1,3 +1,8 @@
+import { breakCaptionWords } from "./caption-break.ts"
+import { tidyCaptionSpeech } from "./caption-speech.ts"
+import { alignPunctuatedTokens } from "./caption-punctuate.ts"
+import { restoreCaptionWords } from "./caption-restore.ts"
+import { toAbsoluteCaptionWords } from "./caption-time.ts"
 import {
   CAPTION_INSERT_TYPE,
   clampInsert,
@@ -7,7 +12,6 @@ import {
   type CompositionInsert,
 } from "./composition.ts"
 import { createInsert } from "./inserts.ts"
-import { toAbsoluteCaptionWords } from "./caption-time.ts"
 
 export type { CaptionWord }
 
@@ -20,6 +24,7 @@ export interface CaptionLine {
 
 export type GroupOptions = {
   maxWords: number
+  maxChars: number
   maxDuration: number
   gapBreak: number
   breakOnPunctuation: boolean
@@ -27,8 +32,9 @@ export type GroupOptions = {
 
 export const DEFAULT_GROUP_OPTIONS: GroupOptions = {
   maxWords: 4,
+  maxChars: 22,
   maxDuration: 2,
-  gapBreak: 0.4,
+  gapBreak: 0.25,
   breakOnPunctuation: true,
 }
 
@@ -39,7 +45,6 @@ export const WHISPER_CAPTION_REQUEST = {
 
 const MIN_DURATION = 0.5
 const MIN_WORD_DURATION = 0.05
-const SENTENCE_END = /[.?!]$/
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -53,6 +58,14 @@ export function parseMaxWords(raw: unknown): number {
   return Math.round(clamp(parsed, 1, 6))
 }
 
+export function parseMaxChars(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_GROUP_OPTIONS.maxChars
+  const parsed =
+    typeof raw === "number" ? raw : Number(String(raw).trim().replace(",", "."))
+  if (!Number.isFinite(parsed)) return DEFAULT_GROUP_OPTIONS.maxChars
+  return Math.round(clamp(parsed, 8, 48))
+}
+
 export function resolveGroupOptions(partial?: Partial<GroupOptions>): GroupOptions {
   const maxDuration =
     typeof partial?.maxDuration === "number" && Number.isFinite(partial.maxDuration)
@@ -64,14 +77,11 @@ export function resolveGroupOptions(partial?: Partial<GroupOptions>): GroupOptio
       : DEFAULT_GROUP_OPTIONS.gapBreak
   return {
     maxWords: parseMaxWords(partial?.maxWords ?? DEFAULT_GROUP_OPTIONS.maxWords),
+    maxChars: parseMaxChars(partial?.maxChars ?? DEFAULT_GROUP_OPTIONS.maxChars),
     maxDuration,
     gapBreak,
     breakOnPunctuation: partial?.breakOnPunctuation ?? DEFAULT_GROUP_OPTIONS.breakOnPunctuation,
   }
-}
-
-function endsSentence(text: string): boolean {
-  return SENTENCE_END.test(text)
 }
 
 function lineText(words: CaptionWord[]): string {
@@ -117,42 +127,15 @@ function buildLine(words: CaptionWord[]): CaptionLine {
   }
 }
 
-function shouldBreakCard(
-  current: CaptionWord[],
-  nextWord: CaptionWord,
-  previousWord: CaptionWord,
-  options: GroupOptions,
-): boolean {
-  if (current.length >= options.maxWords) return true
-  const span = nextWord.end - current[0]!.start
-  if (span > options.maxDuration) return true
-  if (nextWord.start - previousWord.end > options.gapBreak) return true
-  if (options.breakOnPunctuation && endsSentence(previousWord.text)) return true
-  return false
-}
-
 export function groupCaptionLines(
   inputWords: CaptionWord[],
   options?: Partial<GroupOptions>,
+  emphasis?: (text: string) => boolean,
+  phrases?: readonly string[],
 ): CaptionLine[] {
   if (inputWords.length === 0) return []
   const resolved = resolveGroupOptions(options)
-  const lines: CaptionLine[] = []
-  let current: CaptionWord[] = [inputWords[0]!]
-
-  for (let index = 1; index < inputWords.length; index += 1) {
-    const nextWord = inputWords[index]!
-    const previousWord = current[current.length - 1]!
-    if (shouldBreakCard(current, nextWord, previousWord, resolved)) {
-      lines.push(buildLine(current))
-      current = [nextWord]
-    } else {
-      current.push(nextWord)
-    }
-  }
-
-  lines.push(buildLine(current))
-  return lines
+  return breakCaptionWords(inputWords, resolved, emphasis, phrases).map(buildLine)
 }
 
 export function activeCaptionWord(words: CaptionWord[], time: number): CaptionWord | null {
@@ -229,6 +212,69 @@ function sameToken(left: string, right: string): boolean {
   return left === right || left.toLocaleLowerCase("pt-BR") === right.toLocaleLowerCase("pt-BR")
 }
 
+type AlignOp =
+  | { kind: "keep" | "sub"; prev: CaptionWord; text: string }
+  | { kind: "del"; prev: CaptionWord }
+  | { kind: "ins"; text: string }
+
+function alignTokenOps(previous: CaptionWord[], tokens: string[]): AlignOp[] {
+  const rowCount = previous.length + 1
+  const colCount = tokens.length + 1
+  const cost: number[][] = Array.from({ length: rowCount }, () => new Array<number>(colCount).fill(0))
+  const back: number[][] = Array.from({ length: rowCount }, () => new Array<number>(colCount).fill(0))
+  for (let row = 1; row < rowCount; row += 1) {
+    cost[row]![0] = row
+    back[row]![0] = 1
+  }
+  for (let col = 1; col < colCount; col += 1) {
+    cost[0]![col] = col
+    back[0]![col] = 2
+  }
+  for (let row = 1; row < rowCount; row += 1) {
+    for (let col = 1; col < colCount; col += 1) {
+      const same = sameToken(previous[row - 1]!.text, tokens[col - 1]!)
+      const substitute = cost[row - 1]![col - 1]! + (same ? 0 : 1)
+      const deleted = cost[row - 1]![col]! + 1
+      const inserted = cost[row]![col - 1]! + 1
+      if (substitute <= deleted && substitute <= inserted) {
+        cost[row]![col] = substitute
+        back[row]![col] = 3
+      } else if (deleted <= inserted) {
+        cost[row]![col] = deleted
+        back[row]![col] = 1
+      } else {
+        cost[row]![col] = inserted
+        back[row]![col] = 2
+      }
+    }
+  }
+  const ops: AlignOp[] = []
+  let row = previous.length
+  let col = tokens.length
+  while (row > 0 || col > 0) {
+    const step = row === 0 ? 2 : col === 0 ? 1 : back[row]![col]!
+    if (step === 3) {
+      const prev = previous[row - 1]!
+      const text = tokens[col - 1]!
+      ops.push({ kind: sameToken(prev.text, text) ? "keep" : "sub", prev, text })
+      row -= 1
+      col -= 1
+    } else if (step === 1) {
+      ops.push({ kind: "del", prev: previous[row - 1]! })
+      row -= 1
+    } else {
+      ops.push({ kind: "ins", text: tokens[col - 1]! })
+      col -= 1
+    }
+  }
+  ops.reverse()
+  return ops
+}
+
+/**
+ * Palavra mantida conserva o tempo. Palavra trocada herda o tempo da original.
+ * Palavra inserida divide o tempo livre da vizinha. Palavra removida entrega o tempo à vizinha.
+ */
 export function preserveCaptionWordTimings(
   previous: CaptionWord[],
   text: string,
@@ -237,51 +283,91 @@ export function preserveCaptionWordTimings(
 ): CaptionWord[] {
   const tokens = text.trim().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return []
+  if (previous.length === 0) return reflowTokens(tokens, windowStart, windowEnd)
 
-  const assigned: Array<CaptionWord | null> = tokens.map(() => null)
-  let prevIndex = 0
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!
-    let found = -1
-    for (let cursor = prevIndex; cursor < previous.length; cursor += 1) {
-      if (sameToken(previous[cursor]!.text, token)) {
-        found = cursor
-        break
-      }
+  type Slot = { text: string; start: number; end: number; fixed: boolean }
+  const slots: Slot[] = []
+  const deleted: CaptionWord[] = []
+  for (const op of alignTokenOps(previous, tokens)) {
+    if (op.kind === "del") {
+      deleted.push(op.prev)
+      continue
     }
-    if (found >= 0) {
-      assigned[index] = {
-        text: token,
-        start: previous[found]!.start,
-        end: previous[found]!.end,
-      }
-      prevIndex = found + 1
+    if (op.kind === "ins") {
+      slots.push({ text: op.text, start: Number.NaN, end: Number.NaN, fixed: false })
+      continue
     }
+    let start = op.prev.start
+    let end = op.prev.end
+    if (deleted.length > 0 && deleted[0]!.end <= start + 1e-6) {
+      start = deleted[0]!.start
+      deleted.length = 0
+    }
+    slots.push({ text: op.text, start, end, fixed: true })
+  }
+  if (deleted.length > 0 && slots.length > 0) {
+    const last = slots[slots.length - 1]!
+    if (last.fixed) last.end = Math.max(last.end, deleted[deleted.length - 1]!.end)
   }
 
   let index = 0
-  while (index < tokens.length) {
-    if (assigned[index]) {
+  while (index < slots.length) {
+    if (slots[index]!.fixed) {
       index += 1
       continue
     }
-    let nextKnown = index
-    while (nextKnown < tokens.length && !assigned[nextKnown]) nextKnown += 1
-    const gapTokens = tokens.slice(index, nextKnown)
-    const rangeStart = index === 0 ? windowStart : assigned[index - 1]!.end
-    const rangeEnd =
-      nextKnown >= tokens.length || !assigned[nextKnown] ? windowEnd : assigned[nextKnown]!.start
-    const filled = reflowTokens(gapTokens, rangeStart, rangeEnd)
-    for (let offset = 0; offset < filled.length; offset += 1) {
-      assigned[index + offset] = filled[offset]!
+    let nextFixed = index
+    while (nextFixed < slots.length && !slots[nextFixed]!.fixed) nextFixed += 1
+    const inserted = slots.slice(index, nextFixed)
+    const prev = index > 0 ? slots[index - 1]! : null
+    const next = nextFixed < slots.length ? slots[nextFixed]! : null
+    const slackStart = prev?.fixed ? prev.end : windowStart
+    const slackEnd = next?.fixed ? next.start : windowEnd
+    if (slackEnd - slackStart >= inserted.length * MIN_WORD_DURATION) {
+      const slice = (slackEnd - slackStart) / inserted.length
+      inserted.forEach((slot, offset) => {
+        slot.start = slackStart + offset * slice
+        slot.end = slackStart + (offset + 1) * slice
+        slot.fixed = true
+      })
+    } else if (next?.fixed && next.end > next.start) {
+      const pieces = inserted.length + 1
+      const slice = (next.end - next.start) / pieces
+      let cursor = next.start
+      for (const slot of inserted) {
+        slot.start = cursor
+        slot.end = cursor + slice
+        slot.fixed = true
+        cursor += slice
+      }
+      next.start = cursor
+    } else if (prev?.fixed && prev.end > prev.start) {
+      const pieces = inserted.length + 1
+      const slice = (prev.end - prev.start) / pieces
+      prev.end = prev.start + slice
+      let cursor = prev.end
+      for (const slot of inserted) {
+        slot.start = cursor
+        slot.end = cursor + slice
+        slot.fixed = true
+        cursor += slice
+      }
+    } else {
+      const filled = reflowTokens(inserted.map((slot) => slot.text), windowStart, windowEnd)
+      inserted.forEach((slot, offset) => {
+        slot.start = filled[offset]?.start ?? windowStart
+        slot.end = filled[offset]?.end ?? windowEnd
+        slot.fixed = true
+      })
     }
-    index = nextKnown
+    index = nextFixed
   }
 
-  return assigned.map(
-    (word, wordIndex) =>
-      word ?? { text: tokens[wordIndex]!, start: windowStart, end: windowEnd },
-  )
+  return slots.map((slot) => ({
+    text: slot.text,
+    start: Number.isFinite(slot.start) ? slot.start : windowStart,
+    end: Number.isFinite(slot.end) && slot.end > slot.start ? slot.end : windowEnd,
+  }))
 }
 
 export function retargetCaptionWords(
@@ -310,10 +396,11 @@ export function retargetCaptionWords(
   }
 }
 
-export const CAPTION_WARNINGS = ["words-estimated"] as const
-export type CaptionWarning = (typeof CAPTION_WARNINGS)[number]
+export const CAPTION_WARNINGS = ["words-estimated", "punctuated"] as const
+export type CaptionWarning = (typeof CAPTION_WARNINGS)[number] | `words-restored:${number}`
 
 export interface WhisperCaptionPayload {
+  text?: string
   words?: Array<{ word?: string; text?: string; start?: number; end?: number }>
   segments?: Array<{ start?: number; end?: number; text?: string }>
 }
@@ -355,18 +442,32 @@ export function parseWhisperCaptionResult(payload: WhisperCaptionPayload): {
 }
 
 export async function runCaptionsPipeline(
-  input: { duration: number; mediaBytes: number; maxWords?: number },
-  deps: { transcribe: () => Promise<WhisperCaptionPayload> },
+  input: { duration: number; mediaBytes: number; maxWords?: number; vocabulary?: readonly string[] },
+  deps: {
+    transcribe: () => Promise<WhisperCaptionPayload>
+    punctuate?: (words: readonly string[]) => Promise<string[] | null>
+  },
 ): Promise<{ lines: CaptionLine[]; warnings: CaptionWarning[] }> {
   const payload = await deps.transcribe()
   const parsed = parseWhisperCaptionResult(payload)
-  if (parsed.words.length === 0) throw new Error("captions-empty")
-  const lines = groupCaptionLines(parsed.words, { maxWords: parseMaxWords(input.maxWords) })
-  if (lines.length === 0) throw new Error("captions-empty")
-  return {
-    lines,
-    warnings: parsed.estimated ? ["words-estimated"] : [],
+  const restored = restoreCaptionWords(parsed.words, payload.text ?? "")
+  let spoken = restored.words
+  if (spoken.length === 0) throw new Error("captions-empty")
+  const warnings: CaptionWarning[] = parsed.estimated ? ["words-estimated"] : []
+  if (restored.inserted > 0) warnings.push(`words-restored:${restored.inserted}`)
+  const joined = spoken.map((word) => word.text).join(" ")
+  if (deps.punctuate && !/[,.!?]/.test(joined)) {
+    const raw = await deps.punctuate(spoken.map((word) => word.text))
+    const punctuated = raw ? alignPunctuatedTokens(spoken.map((word) => word.text), raw) : null
+    if (punctuated && punctuated.length === spoken.length) {
+      spoken = spoken.map((word, index) => ({ ...word, text: punctuated[index] ?? word.text }))
+      warnings.push("punctuated")
+    }
   }
+  spoken = tidyCaptionSpeech(spoken)
+  const lines = groupCaptionLines(spoken, { maxWords: parseMaxWords(input.maxWords) })
+  if (lines.length === 0) throw new Error("captions-empty")
+  return { lines, warnings }
 }
 
 export function finalizeCaptionInsert(

@@ -71,6 +71,7 @@ export type RenderProps = {
   brand: { fontId: string; logo: string }
   captionPreset: CaptionPreset
   captionStyle: CaptionStyle
+  dodgeInserts?: boolean
   stickerSrcs: Record<string, string>
   styleRef?: Composition["styleRef"]
   productData?: Composition["productData"]
@@ -232,6 +233,7 @@ export function toRenderProps(input: {
     },
     captionPreset: composition.captionPreset,
     captionStyle: composition.captionStyle,
+    dodgeInserts: composition.captionPrefs?.dodgeInserts !== false,
     stickerSrcs: { ...(input.stickerSrcs ?? {}) },
     ...(composition.styleRef ? { styleRef: composition.styleRef } : {}),
     ...(composition.productData ? { productData: composition.productData } : {}),

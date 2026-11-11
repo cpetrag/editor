@@ -1,7 +1,8 @@
 import { parseDuration } from "@/lib/ai-generate"
-import { getOpenAiApiKey, transcribeCaptionWords } from "@/lib/ai-openai"
+import { getOpenAiApiKey, punctuateCaptionTokens, transcribeCaptionWords } from "@/lib/ai-openai"
 import { AI_FAILURE_STATUS, WHISPER_MAX_BYTES } from "@/lib/ai-schema"
 import { parseMaxWords, runCaptionsPipeline } from "@/lib/captions"
+import { vocabularyPrompt } from "@/lib/caption-vocab"
 
 export const runtime = "nodejs"
 export const maxDuration = 90
@@ -30,6 +31,18 @@ export async function POST(req: Request): Promise<Response> {
 
   const duration = parseDuration(form.get("duration"))
   const maxWords = parseMaxWords(form.get("maxWords"))
+  const vocabularyRaw = form.get("vocabulary")
+  let vocabulary: string[] = []
+  if (typeof vocabularyRaw === "string" && vocabularyRaw.trim()) {
+    try {
+      const parsed = JSON.parse(vocabularyRaw) as unknown
+      if (Array.isArray(parsed)) {
+        vocabulary = parsed.filter((item): item is string => typeof item === "string").slice(0, 40)
+      }
+    } catch {
+      vocabulary = []
+    }
+  }
   const media = form.get("media")
   const file = media instanceof File && media.size > 0 ? media : null
   if (!file) {
@@ -44,7 +57,14 @@ export async function POST(req: Request): Promise<Response> {
     const result = await runCaptionsPipeline(
       { duration, mediaBytes: file.size, maxWords },
       {
-        transcribe: () => transcribeCaptionWords(bytes, file.type, file.name || "audio.mp4"),
+        transcribe: () =>
+          transcribeCaptionWords(
+            bytes,
+            file.type,
+            file.name || "audio.mp4",
+            vocabularyPrompt(vocabulary),
+          ),
+        punctuate: (words) => punctuateCaptionTokens(words),
       },
     )
     return Response.json(result)

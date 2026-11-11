@@ -83,6 +83,7 @@ function paintInserts(
       productData: props.productData,
       brandKitId: props.brandKitId,
       brandColors: props.brandColors,
+      dodgeInserts: props.dodgeInserts,
     },
     props.watermark ?? null,
   )

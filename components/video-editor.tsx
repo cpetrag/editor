@@ -164,17 +164,34 @@ import { pngFileFromBase64 } from "@/lib/ai-client"
 import {
   applyCaptionPatch,
   finalizeCaptionInsert,
-  fitCaptionLinesToOutput,
-  linesToCaptionInserts,
-  replaceCaptionInserts,
   type CaptionLine,
 } from "@/lib/captions"
+import { buildCaptionInserts, regroupCaptions, remarkCaptionInserts, remarkCaptionWords } from "@/lib/caption-flow"
+import { followVoiceCaptions, shiftCaptions } from "@/lib/caption-link"
 import {
+  joinCaptions,
+  splitCaptionAtCursor,
+  splitCaptionAtTime,
+} from "@/lib/caption-edit"
+import {
+  applyOwnCaptionStyleToAll,
   applySharedCaptionVisual,
+  captionExceptionIds,
   captionStyleHost,
   captionStylePatchFromTransform,
+  clearCaptionExceptions,
+  isolateCaptionStyle,
+  releaseCaptionStyle,
   stampCaptionVisual,
 } from "@/lib/caption-panel"
+import { resolveCaptionPrefs, type CaptionPrefs } from "@/lib/caption-prefs"
+import {
+  loadCaptionVocabulary,
+  loadDefaultCaptionStyleId,
+  replaceCaptionText,
+  saveCaptionVocabulary,
+  saveDefaultCaptionStyleId,
+} from "@/lib/caption-vocab"
 import {
   applyUserTransformPatch,
   defaultTransformForInsert,
@@ -182,7 +199,7 @@ import {
   transformPatchFromInsertPatch,
   transformPatchFromStylePath,
 } from "@/lib/insert-transform"
-import { applyCaptionLook, applyFactoryPreset, applyLookToTextInserts, carryCaptionStyleRef, isNativeCaptionLook, trackStyleForInsert } from "@/lib/style-preset"
+import { applyCaptionLook, applyFactoryPreset, applyLookToTextInserts, isNativeCaptionLook, trackStyleForInsert } from "@/lib/style-preset"
 import { patchStyleRef, resetStyleField, resetStyleOverrides, workingStyleRef } from "@/lib/style/edit-style"
 import { legacyInsertPatchFromStylePath } from "@/lib/style/editor-style"
 import { withSyncedComposeStyle } from "@/lib/style/resolve-insert-style"
@@ -305,6 +322,7 @@ function historyPresent(composition: Composition): HistorySnapshot {
   return {
     inserts: composition.inserts,
     captionStyle: composition.captionStyle ?? DEFAULT_CAPTION_STYLE,
+    ...(composition.captionPrefs ? { captionPrefs: composition.captionPrefs } : {}),
     tracks: composition.tracks,
     styleRef: composition.styleRef,
     sourceTransform: composition.source.transform,
@@ -546,6 +564,7 @@ export function VideoEditor() {
   const presetStoreRef = useRef(createIndexedDbPresetStore())
   const paletteStoreRef = useRef(createIndexedDbPaletteStore())
   const [userPresets, setUserPresets] = useState<UserPreset[]>([])
+  const [captionVocabulary, setCaptionVocabulary] = useState<string[]>(() => loadCaptionVocabulary())
   const [customKits, setCustomKits] = useState<CustomBrandKit[]>([])
   const [paletteScope, setPaletteScope] = useState<"project" | "insert">("project")
   const stickerBlobUrlsRef = useRef(stickerBlobUrls)
@@ -1099,6 +1118,7 @@ export function VideoEditor() {
       ...compositionRef.current,
       inserts: snapshot.inserts,
       captionStyle: snapshot.captionStyle,
+      captionPrefs: snapshot.captionPrefs,
       tracks: snapshot.tracks,
       styleRef: snapshot.styleRef,
       source: {
@@ -1288,7 +1308,21 @@ export function VideoEditor() {
   const changeAudio = useCallback(
     (next: CompositionAudio, mode: "discrete" | "gesture") => {
       if (mode === "gesture" && !gestureRef.current.active) beginInsertHistory()
-      applyComposition((current) => ({ ...current, audio: next }), mode)
+      let removed = 0
+      applyComposition((current) => {
+        const duration = getOutputDuration({ ...current, audio: next })
+        const followed = followVoiceCaptions(
+          current.inserts,
+          current.audio?.tracks ?? [],
+          next.tracks,
+          duration,
+        )
+        removed = followed.removed
+        return { ...current, audio: next, inserts: followed.inserts }
+      }, mode)
+      if (removed > 0) {
+        setUndoToast(removed === 1 ? "1 legenda removida" : `${removed} legendas removidas`)
+      }
     },
     [applyComposition, beginInsertHistory],
   )
@@ -1621,15 +1655,24 @@ export function VideoEditor() {
       }
       applyComposition((current) => {
         const audio = current.audio ?? defaultCompositionAudio()
-        return {
-          ...current,
-          audio: {
-            ...audio,
-            tracks: audio.tracks.map((track) =>
-              track.id === id ? clampTrack({ ...track, ...patch }, getOutputDuration(current)) : track,
-            ),
-          },
+        const tracks = audio.tracks.map((track) =>
+          track.id === id ? { ...track, ...patch } : track,
+        )
+        const nextAudio = { ...audio, tracks }
+        const duration = getOutputDuration({ ...current, audio: nextAudio })
+        const clamped = {
+          ...nextAudio,
+          tracks: nextAudio.tracks.map((track) =>
+            track.id === id ? clampTrack(track, duration) : track,
+          ),
         }
+        const followed = followVoiceCaptions(
+          current.inserts,
+          audio.tracks,
+          clamped.tracks,
+          getOutputDuration({ ...current, audio: clamped }),
+        )
+        return { ...current, audio: clamped, inserts: followed.inserts }
       }, "gesture")
     },
     [applyComposition, beginInsertHistory, endInsertHistory],
@@ -1967,10 +2010,18 @@ export function VideoEditor() {
                 : undefined
             const source =
               baselineInsert && insertKind(baselineInsert) === "caption" ? baselineInsert : insert
-            return finalizeCaptionInsert(
+            const patched = finalizeCaptionInsert(
               applyCaptionPatch(source, content),
               editorDuration(compositionRef.current.source, compositionRef.current.audio),
             )
+            return {
+              ...patched,
+              words: remarkCaptionWords(
+                patched.words ?? [],
+                compositionRef.current.captionPrefs,
+                loadCaptionVocabulary(),
+              ),
+            }
           }),
         )
         return
@@ -2264,7 +2315,24 @@ export function VideoEditor() {
     setSelectedAudioId(null)
     revokeObjectUrl()
     sourceBlobRef.current = null
-    const next = newProjectComposition()
+    const fresh = newProjectComposition()
+    const defaultId = loadDefaultCaptionStyleId()
+    const preset = defaultId ? userPresets.find((item) => item.id === defaultId) : undefined
+    const next = preset
+      ? {
+          ...fresh,
+          captionPrefs: resolveCaptionPrefs({
+            lookId: preset.id,
+            maxWords: preset.maxWords,
+            maxChars: preset.maxChars,
+            emphasizeSales: preset.emphasizeSales,
+            saleTerms: preset.saleTerms,
+            dodgeInserts: preset.dodgeInserts,
+          }),
+        }
+      : defaultId === "limpo" || defaultId === "viral"
+        ? { ...fresh, captionPreset: defaultId, captionPrefs: resolveCaptionPrefs({ lookId: defaultId }) }
+        : fresh
     compositionRef.current = next
     setComposition(next)
     saveCompositionJson(next)
@@ -2291,7 +2359,7 @@ export function VideoEditor() {
     void Promise.all(ids.map((id) => fileStoreRef.current.delete(id))).catch((error: unknown) => {
       console.error("[editor] falha ao apagar arquivos do projeto", error)
     })
-  }, [previousSource, revokeObjectUrl])
+  }, [previousSource, revokeObjectUrl, userPresets])
 
   const clearInserts = useCallback(() => {
     finishTextEditRef.current("commit")
@@ -2510,26 +2578,139 @@ export function VideoEditor() {
   )
 
   const applyCaptions = useCallback(
-    (lines: CaptionLine[]) => {
-      const fitted = fitCaptionLinesToOutput(lines, outputDurationRef.current)
-      if (fitted.dropped > 0) {
-        const count = fitted.dropped
+    (lines: CaptionLine[], _warnings: string[], voice?: { id: string; start: number } | null) => {
+      const words = lines.flatMap((line) => line.words ?? [])
+      let dropped = 0
+      applyComposition((prev) => {
+        const built = buildCaptionInserts({
+          words,
+          outputDuration: getOutputDuration(prev),
+          prefs: prev.captionPrefs,
+          vocabulary: loadCaptionVocabulary(),
+          styleRef: prev.inserts.find((item) => insertKind(item) === "caption" && !item.captionOwnStyle)?.styleRef,
+          voice: voice ?? null,
+        })
+        dropped = built.dropped
+        const rest = prev.inserts.filter((item) => insertKind(item) !== "caption")
+        return { ...prev, inserts: [...rest, ...built.inserts] }
+      }, "discrete")
+      if (dropped > 0) {
         setLiveMessage(
-          count === 1
-            ? "1 legenda passou do fim do vídeo"
-            : `${count} legendas passaram do fim do vídeo`,
+          dropped === 1 ? "1 legenda passou do fim do vídeo" : `${dropped} legendas passaram do fim do vídeo`,
         )
       }
-      const incoming = linesToCaptionInserts(fitted.lines, outputDurationRef.current)
-      applyInserts(
-        (prev) => replaceCaptionInserts(prev, carryCaptionStyleRef(prev, incoming)),
-        "discrete",
-      )
-      const first = incoming[0]
+      const first = compositionRef.current.inserts.find((item) => insertKind(item) === "caption")
       if (first) setSelection({ kind: "insert", id: first.id })
       setActiveTab("editor")
     },
-    [applyInserts],
+    [applyComposition],
+  )
+
+  const patchCaptionPrefs = useCallback(
+    (patch: Partial<CaptionPrefs>) => {
+      applyComposition((prev) => {
+        const prefs = resolveCaptionPrefs({ ...prev.captionPrefs, ...patch })
+        const rebuild =
+          patch.maxWords !== undefined ||
+          patch.maxChars !== undefined ||
+          patch.emphasizeSales !== undefined ||
+          patch.saleTerms !== undefined
+        return {
+          ...prev,
+          captionPrefs: prefs,
+          inserts: rebuild
+            ? regroupCaptions(prev.inserts, getOutputDuration(prev), prefs, loadCaptionVocabulary())
+            : prev.inserts,
+        }
+      }, "discrete")
+    },
+    [applyComposition],
+  )
+
+  const replaceCaptionCopy = useCallback(
+    (query: string, replacement: string, mode: "one" | "all") => {
+      applyComposition((prev) => {
+        const result = replaceCaptionText(prev.inserts, query, replacement, mode)
+        return {
+          ...prev,
+          inserts: remarkCaptionInserts(result.inserts, prev.captionPrefs, loadCaptionVocabulary()),
+        }
+      }, "discrete")
+    },
+    [applyComposition],
+  )
+
+  const shiftCaptionTiming = useCallback(
+    (deltaSeconds: number) => {
+      applyComposition((prev) => ({
+        ...prev,
+        inserts: shiftCaptions(prev.inserts, deltaSeconds, getOutputDuration(prev)),
+      }), "discrete")
+    },
+    [applyComposition],
+  )
+
+  const splitCaptionLine = useCallback(
+    (id: string, cursor: number) => {
+      applyComposition((prev) => {
+        const insert = prev.inserts.find((item) => item.id === id)
+        if (!insert) return prev
+        const shared = prev.inserts.find((item) => insertKind(item) === "caption" && !item.captionOwnStyle)?.styleRef
+        const parts = splitCaptionAtCursor(insert, cursor, shared)
+        if (!parts) return prev
+        return {
+          ...prev,
+          inserts: prev.inserts.flatMap((item) => (item.id === id ? [parts.left, parts.right] : [item])),
+        }
+      }, "discrete")
+    },
+    [applyComposition],
+  )
+
+  const joinCaptionLine = useCallback(
+    (id: string) => {
+      applyComposition((prev) => {
+        const captions = prev.inserts
+          .filter((item) => insertKind(item) === "caption")
+          .slice()
+          .sort((a, b) => a.start - b.start)
+        const index = captions.findIndex((item) => item.id === id)
+        const current = captions[index]
+        const previous = index > 0 ? captions[index - 1] : undefined
+        if (!current || !previous) return prev
+        const shared = captions.find((item) => !item.captionOwnStyle)?.styleRef
+        const joined = joinCaptions(previous, current, shared)
+        return {
+          ...prev,
+          inserts: prev.inserts.flatMap((item) => {
+            if (item.id === previous.id) return [joined]
+            if (item.id === current.id) return []
+            return [item]
+          }),
+        }
+      }, "discrete")
+    },
+    [applyComposition],
+  )
+
+  const splitCaptionAtPlayhead = useCallback(
+    (time: number) => {
+      const selected = compositionRef.current.inserts.find((item) => item.id === selectedInsertId)
+      if (!selected || insertKind(selected) !== "caption") return false
+      applyComposition((prev) => {
+        const insert = prev.inserts.find((item) => item.id === selected.id)
+        if (!insert) return prev
+        const shared = prev.inserts.find((item) => insertKind(item) === "caption" && !item.captionOwnStyle)?.styleRef
+        const parts = splitCaptionAtTime(insert, time, shared)
+        if (!parts) return prev
+        return {
+          ...prev,
+          inserts: prev.inserts.flatMap((item) => (item.id === insert.id ? [parts.left, parts.right] : [item])),
+        }
+      }, "discrete")
+      return true
+    },
+    [applyComposition, selectedInsertId],
   )
 
   const applyCaptionLookId = useCallback(
@@ -2543,10 +2724,23 @@ export function VideoEditor() {
         const host = captionStyleHost(inserts, selectedInsertId)
         const synced = host ? stampCaptionVisual(inserts, host) : inserts
         const named = catalog[lookId]
+        const prefs = resolveCaptionPrefs({
+          ...prev.captionPrefs,
+          lookId,
+          ...(typeof named?.maxWords === "number" ? { maxWords: named.maxWords } : {}),
+          ...(typeof named?.maxChars === "number" ? { maxChars: named.maxChars } : {}),
+          ...(typeof named?.emphasizeSales === "boolean" ? { emphasizeSales: named.emphasizeSales } : {}),
+          ...(named?.saleTerms ? { saleTerms: named.saleTerms } : {}),
+          ...(typeof named?.dodgeInserts === "boolean" ? { dodgeInserts: named.dodgeInserts } : {}),
+        })
+        const regrouped =
+          named?.maxWords || named?.maxChars
+            ? regroupCaptions(synced, getOutputDuration(prev), prefs, loadCaptionVocabulary())
+            : synced
         const withPreset =
           named && canWritePresetId(lookId)
-            ? { ...prev, inserts: synced, customPresets: upsertCustomPreset(prev.customPresets, named) }
-            : { ...prev, inserts: synced }
+            ? { ...prev, inserts: regrouped, captionPrefs: prefs, customPresets: upsertCustomPreset(prev.customPresets, named) }
+            : { ...prev, inserts: regrouped, captionPrefs: prefs }
         if (isNativeCaptionLook(lookId)) {
           return { ...withPreset, captionPreset: lookId }
         }
@@ -2752,10 +2946,21 @@ export function VideoEditor() {
       const insert = prev.inserts.find((item) => item.id === selectedInsertId)
       if (!insert) return
       const catalog = presetCatalogOf(userPresets, prev)
+      const caption = insertKind(insert) === "caption"
+      const prefs = resolveCaptionPrefs(prev.captionPrefs)
       const preset = createUserPreset({
         label,
-        group: insertKind(insert) === "caption" ? "legenda" : zoneForInsert(insert, getOutputDuration(prev)),
+        group: caption ? "legenda" : zoneForInsert(insert, getOutputDuration(prev)),
         style: resolvedInsertLook(prev, insert, catalog),
+        ...(caption
+          ? {
+              maxWords: prefs.maxWords,
+              maxChars: prefs.maxChars,
+              emphasizeSales: prefs.emphasizeSales,
+              saleTerms: prefs.saleTerms,
+              dodgeInserts: prefs.dodgeInserts,
+            }
+          : {}),
       })
       void presetStoreRef.current.save(preset).then(refreshUserPresets).catch((error: unknown) => {
         console.error("[editor] falha ao salvar preset", error)
@@ -2896,16 +3101,17 @@ export function VideoEditor() {
         const quality = qualityFromOutput(prev.output, prev.source)
         const output =
           quality === "source" ? outputFromQuality("source", source) : prev.output
-        return clampComposition({
+        const nextSource = { ...prev.source, ...source }
+        const timeline = Math.max(
+          editorDuration(nextSource, prev.audio),
+          prev.output.duration ?? 0,
+          prev.source.playback?.fit === "audio" ? activeVoiceEnd(prev.audio) : 0,
+        )
+        return {
           ...prev,
-          source,
-          output,
-          inserts: prev.inserts.map((insert) =>
-            insertKind(insert) === "caption"
-              ? finalizeCaptionInsert(insert, info.duration)
-              : clampInsert(insert, info.duration),
-          ),
-        })
+          source: nextSource,
+          output: { ...output, ...(timeline > 0 ? { duration: timeline } : {}) },
+        }
       })
     },
     [],
@@ -3909,9 +4115,40 @@ export function VideoEditor() {
             onCommitAudioFile={(input) => commitAudioFile(input)}
             onAudioImportingChange={setAudioImporting}
             captionVoice={
-              captionVoice ? { start: captionVoice.start, trimIn: captionVoice.trimIn } : null
+              captionVoice ? { id: captionVoice.id, start: captionVoice.start, trimIn: captionVoice.trimIn } : null
             }
             loadCaptionVoice={loadCaptionVoice}
+            captionDesk={{
+              prefs: resolveCaptionPrefs(composition.captionPrefs),
+              vocabulary: captionVocabulary,
+              exceptionIds: captionExceptionIds(composition.inserts),
+              onPrefs: patchCaptionPrefs,
+              onVocabulary: (terms) => {
+                saveCaptionVocabulary(terms)
+                setCaptionVocabulary(terms)
+              },
+              onReplace: replaceCaptionCopy,
+              onShift: shiftCaptionTiming,
+              onClearExceptions: () =>
+                applyComposition((prev) => ({ ...prev, inserts: clearCaptionExceptions(prev.inserts) }), "discrete"),
+              onRelease: (id) =>
+                applyComposition((prev) => ({ ...prev, inserts: releaseCaptionStyle(prev.inserts, id) }), "discrete"),
+              onRevealException: () => {
+                const id = captionExceptionIds(composition.inserts)[0]
+                if (id) setSelection({ kind: "insert", id })
+              },
+              onIsolate: (id) =>
+                applyComposition((prev) => ({ ...prev, inserts: isolateCaptionStyle(prev.inserts, id) }), "discrete"),
+              onApplyException: (id) =>
+                applyComposition((prev) => ({ ...prev, inserts: applyOwnCaptionStyleToAll(prev.inserts, id) }), "discrete"),
+              onSplit: splitCaptionLine,
+              onJoin: joinCaptionLine,
+              onSetDefaultStyle: () => {
+                const look = composition.captionPrefs?.lookId ?? composition.captionPreset
+                saveDefaultCaptionStyleId(look)
+                setLiveMessage("Estilo de legenda definido como padrão")
+              },
+            }}
           />
           </PanelErrorBoundary>
         ) : activeTab === "library" ? (
@@ -4016,6 +4253,7 @@ export function VideoEditor() {
           sourceTransform={composition.source.transform}
           sourceCuts={composition.source.cuts}
           onSplitSource={handleSplitSource}
+          onSplitCaption={splitCaptionAtPlayhead}
           onRemoveSourceCut={handleRemoveSourceCut}
           trim={composition.source.trim}
           onChangeTrim={handleChangeTrim}
@@ -4037,6 +4275,7 @@ export function VideoEditor() {
           logoSrc={composition.brand.logo}
           captionPreset={composition.captionPreset}
           captionStyle={composition.captionStyle}
+          dodgeInserts={composition.captionPrefs?.dodgeInserts !== false}
           styleRef={composition.styleRef}
           productData={composition.productData}
           brandKitId={composition.brandKitId}

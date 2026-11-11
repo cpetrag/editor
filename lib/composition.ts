@@ -40,6 +40,7 @@ import type { ContentNiche } from "./content/presets.ts"
 import type { ProductData } from "./content/runs.ts"
 import { parseStoredShopee } from "./shopee/stored.ts"
 import type { ShopeeInsertSource, ShopeeProduct } from "./shopee/types.ts"
+import { parseCaptionPrefs, type CaptionPrefs } from "./caption-prefs.ts"
 import { parseCustomPresets } from "./style/user-presets.ts"
 import { getPresetStyle, LEGADO_PRESET_ID } from "./style/presets.ts"
 import { reconcileInsertStyle } from "./style/resolve-insert-style.ts"
@@ -50,7 +51,7 @@ import {
 } from "./caption-time.ts"
 import { clampTrack } from "./audio/range.ts"
 import { isIdentityPlayback, parsePlayback, type SourcePlayback } from "./video/playback.ts"
-import { editorDuration, restoreVoiceClampedToVideo } from "./video/duration.ts"
+import { activeVoiceEnd, editorDuration, restoreVoiceClampedToVideo } from "./video/duration.ts"
 import {
   AUDIO_VOLUME_MAX,
   MAX_AUDIO_TRACKS,
@@ -176,6 +177,8 @@ export interface CaptionWord {
   text: string
   start: number
   end: number
+  /** Palavra de venda. Não é override de estilo da linha. */
+  emphasis?: boolean
 }
 
 export interface CompositionInsert {
@@ -214,6 +217,10 @@ export interface CompositionInsert {
   /** Cores deste insert por cima da paleta do projeto. Slots ausentes seguem o projeto. */
   paletteOverride?: Partial<BrandColors>
   transform?: InsertTransform
+  /** Vínculo com a locução. O offset guarda o deslocamento individual. */
+  captionSource?: { kind: "voice"; trackId: string; offset: number }
+  /** Estilo próprio, só quando o usuário pede. Ausente = estilo global. */
+  captionOwnStyle?: boolean
 }
 
 export interface CompositionSource {
@@ -251,6 +258,8 @@ export interface CompositionOutput {
   height: number
   fps: number
   videoBitrate: number
+  /** Duração de saída já resolvida, em segundos. A carga não espera metadata. */
+  duration?: number
 }
 
 export interface CompositionBatch {
@@ -345,6 +354,7 @@ export interface Composition {
   output: CompositionOutput
   captionPreset: CaptionPreset
   captionStyle: CaptionStyle
+  captionPrefs?: CaptionPrefs
   styleRef?: StyleRef
   tracks?: Partial<Record<TrackId, TrackStyle>>
   customPresets?: Record<string, UserPreset>
@@ -637,9 +647,13 @@ function clampCompositionAudio(audio: CompositionAudio | undefined, duration: nu
 }
 
 export function clampComposition(composition: Composition): Composition {
-  const outputDuration = editorDuration(composition.source, composition.audio)
+  const computed = editorDuration(composition.source, composition.audio)
+  const saved = composition.output?.duration ?? 0
+  const voice =
+    composition.source.playback?.fit === "audio" ? activeVoiceEnd(composition.audio) : 0
+  const outputDuration = Math.max(computed, saved, voice)
   const duration = outputDuration > 0 ? outputDuration : composition.source.duration
-  const audio = clampCompositionAudio(composition.audio, duration)
+  const audio = clampCompositionAudio(composition.audio, duration > 0 ? duration : 0)
   const audioSame = JSON.stringify(composition.audio) === JSON.stringify(audio)
   const nextAudio = audioSame ? composition.audio : audio
   if (!(duration > 0)) return audioSame ? composition : { ...composition, audio: nextAudio }
@@ -707,7 +721,12 @@ function parseCaptionWords(
     if (start === null || end === null) continue
     if (!(start >= 0)) continue
     if (!(end > start)) continue
-    words.push({ text: item.text, start, end })
+    words.push({
+      text: item.text,
+      start,
+      end,
+      ...(item.emphasis === true ? { emphasis: true } : {}),
+    })
   }
   return clampCaptionWords(words, insertStart, insertDuration)
 }
@@ -888,6 +907,19 @@ function parseInsert(raw: unknown): CompositionInsert | null {
         anchor,
         animIn: "none",
         animOut: "none",
+        ...(raw.captionOwnStyle === true ? { captionOwnStyle: true } : {}),
+        ...(isRecord(raw.captionSource) &&
+        raw.captionSource.kind === "voice" &&
+        typeof raw.captionSource.trackId === "string" &&
+        asNumber(raw.captionSource.offset) !== null
+          ? {
+              captionSource: {
+                kind: "voice" as const,
+                trackId: raw.captionSource.trackId,
+                offset: asNumber(raw.captionSource.offset)!,
+              },
+            }
+          : {}),
         ...(asNumber(raw.x) !== null
           ? { x: clamp(roundTenths(asNumber(raw.x)!), OVERLAY_X_MIN, OVERLAY_X_MAX) }
           : {}),
@@ -1078,6 +1110,9 @@ function parseOutput(
     height: evenSize(clamp(height, 2, DEFAULT_OUTPUT_HEIGHT)),
     fps: clampOutputFps(asNumber(raw.fps) ?? source.fps),
     videoBitrate: clampBitrate(asNumber(raw.videoBitrate) ?? DEFAULT_VIDEO_BITRATE),
+    ...(asNumber(raw.duration) !== null && asNumber(raw.duration)! > 0
+      ? { duration: asNumber(raw.duration)! }
+      : {}),
   }
 }
 
@@ -1247,6 +1282,7 @@ export function parseComposition(input: unknown): Composition {
     output: parseOutput(input.output, source),
     captionPreset: parseCaptionPreset(input.captionPreset),
     captionStyle,
+    ...(parseCaptionPrefs(input.captionPrefs) ? { captionPrefs: parseCaptionPrefs(input.captionPrefs) } : {}),
     ...(styleRef ? { styleRef } : {}),
     ...(tracks ? { tracks } : {}),
     ...(customPresets ? { customPresets } : {}),
@@ -1263,7 +1299,7 @@ export function parseComposition(input: unknown): Composition {
     ...(typeof input.projectSeed === "string" && input.projectSeed ? { projectSeed: input.projectSeed } : {}),
     audio:
       storedVersion >= COMPOSITION_VERSION_V7
-        ? restoreAudioForVersion(parseAudio(input.audio, source.duration), storedVersion, source.duration)
+        ? restoreAudioForVersion(parseAudio(input.audio, Number.POSITIVE_INFINITY), storedVersion, source.duration)
         : defaultCompositionAudio(),
   })
 }
@@ -1392,6 +1428,8 @@ function serializeInsert(insert: CompositionInsert): CompositionInsert {
       words: insert.words ?? [],
       ...(insert.styleRef ? { styleRef: insert.styleRef } : {}),
       ...(insert.transform ? { transform: insert.transform } : {}),
+      ...(insert.captionOwnStyle ? { captionOwnStyle: true } : {}),
+      ...(insert.captionSource ? { captionSource: insert.captionSource } : {}),
       ...(insert.source ? { source: insert.source } : {}),
     }
   }
@@ -1459,9 +1497,13 @@ export function serializeComposition(composition: Composition): string {
       positions: [...composition.batch.positions],
       baseName: composition.batch.baseName,
     },
-    output: { ...composition.output },
+    output: {
+      ...composition.output,
+      duration: editorDuration(composition.source, composition.audio) || composition.output.duration,
+    },
     captionPreset: composition.captionPreset ?? DEFAULT_CAPTION_PRESET,
     captionStyle: composition.captionStyle,
+    ...(composition.captionPrefs ? { captionPrefs: composition.captionPrefs } : {}),
     ...(composition.styleRef ? { styleRef: composition.styleRef } : {}),
     ...(composition.tracks ? { tracks: composition.tracks } : {}),
     ...(composition.customPresets ? { customPresets: composition.customPresets } : {}),

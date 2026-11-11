@@ -8,6 +8,7 @@ export type PlanWord = {
   text: string
   start: number
   end: number
+  emphasis?: boolean
 }
 
 export type PlannedToken = LaidToken &

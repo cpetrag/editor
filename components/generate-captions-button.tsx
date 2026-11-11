@@ -18,11 +18,17 @@ interface GenerateCaptionsButtonProps {
   duration: number
   disabled: boolean
   loadMedia: () => Promise<File | null>
-  onGenerate: (lines: CaptionLine[], warnings: string[]) => void
+  onGenerate: (
+    lines: CaptionLine[],
+    warnings: string[],
+    voice?: { id: string; start: number } | null,
+  ) => void
   onStatus?: (message: string) => void
-  /** Quando há locução, ela é a fonte padrão da transcrição. */
-  voiceTrack?: { start: number; trimIn: number } | null
+  voiceTrack?: { id?: string; start: number; trimIn: number } | null
   loadVoice?: () => Promise<File | null>
+  vocabulary?: readonly string[]
+  maxWords?: number
+  hideSlider?: boolean
 }
 
 export function GenerateCaptionsButton({
@@ -33,9 +39,13 @@ export function GenerateCaptionsButton({
   onStatus,
   voiceTrack = null,
   loadVoice,
+  vocabulary = [],
+  maxWords: maxWordsProp,
+  hideSlider = false,
 }: GenerateCaptionsButtonProps) {
   const [loading, setLoading] = useState(false)
-  const [maxWords, setMaxWords] = useState(DEFAULT_GROUP_OPTIONS.maxWords)
+  const [localMaxWords, setLocalMaxWords] = useState(DEFAULT_GROUP_OPTIONS.maxWords)
+  const maxWords = maxWordsProp ?? localMaxWords
   const [source, setSource] = useState<"voice" | "video">(voiceTrack ? "voice" : "video")
 
   async function handleClick() {
@@ -48,10 +58,14 @@ export function GenerateCaptionsButton({
         onStatus?.(useVoice ? "Não achei o arquivo da locução." : "Carregue um vídeo.")
         return
       }
-      const payload = await requestCaptions({ duration, media, maxWords })
+      const payload = await requestCaptions({ duration, media, maxWords, vocabulary })
       const lines =
         useVoice && voiceTrack ? placeSlicedCaptionLines(payload.lines, voiceTrack) : payload.lines
-      onGenerate(lines, payload.warnings)
+      onGenerate(
+        lines,
+        payload.warnings,
+        useVoice && voiceTrack?.id ? { id: voiceTrack.id, start: voiceTrack.start } : null,
+      )
       onStatus?.(
         payload.warnings.includes("words-estimated")
           ? "Legendas prontas. Timing estimado."
@@ -106,23 +120,25 @@ export function GenerateCaptionsButton({
           </label>
         </div>
       ) : null}
-      <Field className="gap-1">
-        <FieldLabel htmlFor="caption-max-words" className="text-[0.65rem] text-muted-foreground">
-          Palavras por card
-          <span className="ml-1 font-mono tabular-nums text-foreground">{maxWords}</span>
-        </FieldLabel>
-        <input
-          id="caption-max-words"
-          type="range"
-          min={1}
-          max={6}
-          step={1}
-          value={maxWords}
-          disabled={disabled || loading}
-          onChange={(event) => setMaxWords(parseMaxWords(event.target.value))}
-          className="h-5 w-full accent-brand"
-        />
-      </Field>
+      {hideSlider ? null : (
+        <Field className="gap-1">
+          <FieldLabel htmlFor="caption-max-words" className="text-[0.65rem] text-muted-foreground">
+            Palavras por card
+            <span className="ml-1 font-mono tabular-nums text-foreground">{maxWords}</span>
+          </FieldLabel>
+          <input
+            id="caption-max-words"
+            type="range"
+            min={1}
+            max={6}
+            step={1}
+            value={maxWords}
+            disabled={disabled || loading}
+            onChange={(event) => setLocalMaxWords(parseMaxWords(event.target.value))}
+            className="h-5 w-full accent-brand"
+          />
+        </Field>
+      )}
     </div>
   )
 }

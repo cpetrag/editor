@@ -15,6 +15,7 @@ export function StylePresetMenu({
   isMine,
   showApplyToTrack,
   onSaveAs,
+  saveLabel = "Salvar como…",
   onApplyClean,
   onResetStyle,
   onResetPosition,
@@ -29,6 +30,7 @@ export function StylePresetMenu({
   isMine: boolean
   showApplyToTrack?: boolean
   onSaveAs: () => void
+  saveLabel?: string
   onApplyClean: () => void
   onResetStyle: () => void
   onResetPosition: () => void
@@ -57,7 +59,7 @@ export function StylePresetMenu({
         />
         <PopoverContent align="end" className="w-52 gap-0.5 p-1">
           <MenuButton disabled={!presetLibrary} onClick={() => pick(onSaveAs)}>
-            Salvar como…
+            {saveLabel}
           </MenuButton>
           <MenuButton onClick={() => pick(onApplyClean)}>Aplicar limpo</MenuButton>
           <MenuButton disabled={!modified} onClick={() => pick(onResetStyle)}>

@@ -4,6 +4,7 @@ export type CaptionTimeWord = {
   text: string
   start: number
   end: number
+  emphasis?: boolean
 }
 
 export type WordPaint = {
@@ -61,6 +62,11 @@ export function isKeywordToken(token: string, keywords: readonly string[]): bool
   return AUTO_KEYWORD_RE.test(cleaned)
 }
 
+/**
+ * Prioridade: a palavra ativa aplica a escala do karaokê.
+ * A palavra de venda (emphasis) aplica a cor de destaque.
+ * Quando as duas coincidem, a cor de venda permanece e a escala da ativa soma.
+ */
 export function wordHighlight(input: {
   token: string
   word?: CaptionTimeWord
@@ -76,12 +82,15 @@ export function wordHighlight(input: {
     karaoke: null,
     boxColor: null,
   }
-  if (highlight.mode === "nenhum") return idle
+  if (highlight.mode === "nenhum") {
+    if (!input.word?.emphasis) return idle
+    return { fill: highlight.color, scale: 1, karaoke: null, boxColor: null }
+  }
 
   if (highlight.mode === "karaoke-fill") {
     const progress = input.word ? karaokeProgress(input.word, input.time) : 0
     return {
-      fill: baseColor,
+      fill: input.word?.emphasis ? highlight.color : baseColor,
       scale: 1,
       karaoke: progress,
       boxColor: highlight.boxColor,
@@ -89,7 +98,21 @@ export function wordHighlight(input: {
   }
 
   if (highlight.mode === "palavra-ativa") {
-    if (!input.isActive) return idle
+    if (input.isActive) {
+      return {
+        fill: highlight.color,
+        scale: highlight.scale,
+        karaoke: null,
+        boxColor: highlight.boxColor,
+      }
+    }
+    if (input.word?.emphasis) {
+      return { fill: highlight.color, scale: 1, karaoke: null, boxColor: null }
+    }
+    return idle
+  }
+
+  if (input.word?.emphasis || isKeywordToken(input.token, highlight.keywords)) {
     return {
       fill: highlight.color,
       scale: highlight.scale,
@@ -97,12 +120,5 @@ export function wordHighlight(input: {
       boxColor: highlight.boxColor,
     }
   }
-
-  if (!isKeywordToken(input.token, highlight.keywords)) return idle
-  return {
-    fill: highlight.color,
-    scale: highlight.scale,
-    karaoke: null,
-    boxColor: highlight.boxColor,
-  }
+  return idle
 }

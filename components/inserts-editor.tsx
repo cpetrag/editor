@@ -48,6 +48,7 @@ import { listOfferPresets } from "@/lib/style/offer-styles"
 import { isFreshOfferStyle, markStyleUsed } from "@/lib/style/fresh-styles"
 import { getPresetStyle } from "@/lib/style/presets"
 import { resolveStyleForEditor } from "@/lib/style/editor-style"
+import { resolveStyleColors } from "@/lib/brand/resolve-style-colors"
 import { trackStyleForInsert } from "@/lib/style-preset"
 import { hasCustomTiming } from "@/lib/motion/timing"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
@@ -153,7 +154,11 @@ export function InsertsEditor({
   const backgroundOpacity = insert.styleRef?.overrides.text?.background?.opacity ?? presetStyle.background.opacity
   const showAccent = textHasAccentMark(insert.text ?? "")
   const motionTrack = trackStyleForInsert(insert, tracks, videoDuration)
-  const resolvedAnimation = resolveStyleForEditor(insert, motionTrack, projectStyle ?? {}).animation
+  const resolvedLook = resolveStyleColors(
+    resolveStyleForEditor(insert, motionTrack, projectStyle ?? {}),
+    kit,
+  )
+  const resolvedAnimation = resolvedLook.animation
   const plainMotion = stripMarks(insert.text ?? "")
   const motionUnits =
     resolvedAnimation.unit === "letra"
@@ -308,9 +313,21 @@ export function InsertsEditor({
             ))}
           </select>
         </div>
-        <p className="text-sm text-foreground" aria-label="Como vai sair">
+        <p
+          className="rounded px-2 py-1 text-sm"
+          aria-label="Como vai sair"
+          style={{
+            color: resolvedLook.text.color,
+            background: previewPlate(resolvedLook.text.color, resolvedLook.text.background),
+          }}
+        >
           <span className="mr-1 text-[0.65rem] text-muted-foreground">como vai sair</span>
-          {runs.plain.length === 0 ? " " : renderRuns(insert.text ?? "", productData)}
+          {runs.plain.length === 0
+            ? " "
+            : renderRuns(insert.text ?? "", productData, {
+                color: resolvedLook.text.color,
+                accent: resolvedLook.text.accent || resolvedLook.text.highlight.color,
+              })}
         </p>
         <div className="flex flex-col gap-1">
           <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -648,7 +665,11 @@ function YesNo({ on, onChange }: { on: boolean; onChange: (next: boolean) => voi
   )
 }
 
-function renderRuns(text: string, data: ProductData | undefined): ReactNode {
+function renderRuns(
+  text: string,
+  data: ProductData | undefined,
+  colors: { color: string; accent: string },
+): ReactNode {
   const filled = displayRuns(text, data)
   if (filled.spans.length === 0) return filled.plain
   const pieces: React.ReactNode[] = []
@@ -659,8 +680,11 @@ function renderRuns(text: string, data: ProductData | undefined): ReactNode {
     pieces.push(
       <span
         key={index}
-        className={cn(span.accent && "text-[#EE4D2D]", span.missing && "rounded bg-amber-200 px-0.5 text-amber-950")}
-        style={span.strike ? { textDecoration: "line-through" } : undefined}
+        className={cn(span.missing && "rounded bg-amber-200 px-0.5 text-amber-950")}
+        style={{
+          color: span.missing ? undefined : span.accent ? colors.accent : colors.color,
+          textDecoration: span.strike ? "line-through" : undefined,
+        }}
       >
         {slice}
       </span>,
@@ -682,4 +706,27 @@ function sampleText(text: string, data: ProductData | undefined): string {
 function packMotion(packId: string) {
   const painted = getPresetStyle("duplo")
   return packId === "parado" ? stillAnimation(painted.animation) : selectPack(painted.animation, packId)
+}
+
+function channel(hex: string, index: number): number {
+  const body = hex.trim().replace("#", "")
+  const full = body.length === 3 ? body[index] + body[index] : body.slice(index * 2, index * 2 + 2)
+  const value = Number.parseInt(full, 16)
+  return Number.isFinite(value) ? value / 255 : 1
+}
+
+function luminance(hex: string): number {
+  const linear = (value: number) =>
+    value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  return 0.2126 * linear(channel(hex, 0)) + 0.7152 * linear(channel(hex, 1)) + 0.0722 * linear(channel(hex, 2))
+}
+
+function previewPlate(
+  textColor: string,
+  background: { enabled: boolean; color: string },
+): string {
+  if (!background.enabled) return "#161616"
+  const gap = Math.abs(luminance(textColor) - luminance(background.color))
+  if (gap >= 0.35) return background.color
+  return luminance(textColor) > 0.5 ? "#161616" : "#f4f4f5"
 }

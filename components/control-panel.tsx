@@ -10,6 +10,8 @@ import { AppVersionBadge } from "@/components/app-version-badge"
 import { BackgroundSourceCard, WatermarkFields } from "@/components/background-source-card"
 import { InsertCard } from "@/components/insert-card"
 import { CaptionLineList } from "@/components/caption-line-list"
+import { CaptionDesk } from "@/components/caption-desk"
+import type { CaptionPrefs } from "@/lib/caption-prefs"
 import { AudioPanel } from "@/components/audio-panel"
 import { BlockToolbar, CollapsibleBlock, PanelSwitch } from "@/components/collapsible-block"
 import { audioSummary } from "@/lib/audio/summary"
@@ -42,7 +44,6 @@ import type { SourcePlayback } from "@/lib/video/playback"
 import { voiceOverrun, voiceOverrunMessage } from "@/lib/video/duration"
 import { segmentIndexAt } from "@/lib/source-segments"
 import { clampPlaybackSpeed, DEFAULT_PLAYBACK } from "@/lib/video/playback"
-import { hasInsertOverrides } from "@/lib/style"
 import type { StyleLayer, TrackId } from "@/lib/style/types"
 import {
   captionStyleHost,
@@ -145,8 +146,29 @@ interface ControlPanelProps {
   onApplyStyleToTrack: (id: string) => void
   presetLibrary?: PresetLibraryHandlers
   canGenerateCaptions: boolean
-  onGenerateCaptions: (lines: CaptionLine[], warnings: string[]) => void
-  captionVoice?: { start: number; trimIn: number } | null
+  onGenerateCaptions: (
+    lines: CaptionLine[],
+    warnings: string[],
+    voice?: { id: string; start: number } | null,
+  ) => void
+  captionVoice?: { id?: string; start: number; trimIn: number } | null
+  captionDesk?: {
+    prefs: CaptionPrefs
+    vocabulary: string[]
+    exceptionIds: string[]
+    onPrefs: (patch: Partial<CaptionPrefs>) => void
+    onVocabulary: (terms: string[]) => void
+    onReplace: (query: string, replacement: string, mode: "one" | "all") => void
+    onShift: (deltaSeconds: number) => void
+    onClearExceptions: () => void
+    onRelease: (id: string) => void
+    onRevealException: () => void
+    onIsolate: (id: string) => void
+    onApplyException: (id: string) => void
+    onSplit: (id: string, cursor: number) => void
+    onJoin: (id: string) => void
+    onSetDefaultStyle: () => void
+  }
   loadCaptionVoice?: () => Promise<File | null>
   onBeginInsertGesture?: () => void
   onEndInsertGesture?: () => void
@@ -285,6 +307,7 @@ export function ControlPanel({
   canGenerateCaptions,
   onGenerateCaptions,
   captionVoice = null,
+  captionDesk,
   loadCaptionVoice,
   onBeginInsertGesture,
   onEndInsertGesture,
@@ -526,9 +549,26 @@ export function ControlPanel({
           onBegin={onBeginInsertGesture}
           onEnd={onEndInsertGesture}
           onUseSharedStyle={() => {
-            onResetInsertStyleOverrides(selectedCaption.id)
-            if (selectedCaption.transform?.touchedByUser) onResetInsertPosition(selectedCaption.id)
+            if (captionDesk) captionDesk.onRelease(selectedCaption.id)
+            else {
+              onResetInsertStyleOverrides(selectedCaption.id)
+              if (selectedCaption.transform?.touchedByUser) onResetInsertPosition(selectedCaption.id)
+            }
           }}
+          onIsolate={captionDesk ? () => captionDesk.onIsolate(selectedCaption.id) : undefined}
+          onApplyToAll={captionDesk ? () => captionDesk.onApplyException(selectedCaption.id) : undefined}
+          onSplit={captionDesk ? (cursor) => captionDesk.onSplit(selectedCaption.id, cursor) : undefined}
+          onJoin={captionDesk ? () => captionDesk.onJoin(selectedCaption.id) : undefined}
+          onAddTerm={
+            captionDesk
+              ? (term) => {
+                  const exists = captionDesk.vocabulary.some(
+                    (item) => item.toLocaleLowerCase("pt-BR") === term.toLocaleLowerCase("pt-BR"),
+                  )
+                  if (!exists) captionDesk.onVocabulary([...captionDesk.vocabulary, term])
+                }
+              : undefined
+          }
         />
       ) : null}
 
@@ -784,13 +824,84 @@ export function ControlPanel({
                 onStatus={onAiStatus}
                 voiceTrack={captionVoice}
                 loadVoice={loadCaptionVoice}
+                vocabulary={captionDesk?.vocabulary}
+                maxWords={captionDesk?.prefs.maxWords}
+                hideSlider={Boolean(captionDesk)}
               />
-              <CaptionLineList inserts={inserts} selectedId={selectedId} onReveal={onRevealCaption} />
+              {captionDesk ? (
+                <CaptionDesk
+                  inserts={inserts}
+                  prefs={captionDesk.prefs}
+                  vocabulary={captionDesk.vocabulary}
+                  exceptionCount={captionDesk.exceptionIds.length}
+                  onPrefs={captionDesk.onPrefs}
+                  onVocabulary={captionDesk.onVocabulary}
+                  onReplace={captionDesk.onReplace}
+                  onShift={captionDesk.onShift}
+                  onClearExceptions={captionDesk.onClearExceptions}
+                  onRevealException={captionDesk.onRevealException}
+                />
+              ) : null}
+              <CaptionLineList
+                inserts={inserts}
+                selectedId={selectedId}
+                onReveal={onRevealCaption}
+                exceptionIds={captionDesk?.exceptionIds}
+              />
             </>
           ) : null}
 
           {visibleTab === "captions" && captionSub === "style" ? (
             styleHost ? (
+              <>
+                {captionDesk ? (
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-2 text-[0.7rem]">
+                    <label className="flex items-center justify-between gap-2">
+                      Destacar palavras de venda
+                      <input
+                        type="checkbox"
+                        checked={captionDesk.prefs.emphasizeSales}
+                        onChange={(event) => captionDesk.onPrefs({ emphasizeSales: event.target.checked })}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2">
+                      Desviar dos inserts
+                      <input
+                        type="checkbox"
+                        checked={captionDesk.prefs.dodgeInserts}
+                        onChange={(event) => captionDesk.onPrefs({ dodgeInserts: event.target.checked })}
+                      />
+                    </label>
+                    <p className="text-muted-foreground">Exceções não são afetadas. Palavra ativa soma a escala; palavra de venda usa a cor de destaque.</p>
+                    <label className="flex flex-col gap-1">
+                      Palavras de venda
+                      <textarea
+                        aria-label="Palavras de venda"
+                        rows={3}
+                        className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+                        defaultValue={captionDesk.prefs.saleTerms.join(", ")}
+                        key={captionDesk.prefs.saleTerms.join("|")}
+                        onBlur={(event) => {
+                          const terms = event.target.value.split(/[,;\n]/).map((term) => term.trim()).filter(Boolean)
+                          if (terms.length === 0) return
+                          captionDesk.onPrefs({ saleTerms: terms })
+                        }}
+                      />
+                    </label>
+                    <Button type="button" size="xs" variant="outline" className="self-start" onClick={captionDesk.onSetDefaultStyle}>
+                      Definir como padrão
+                    </Button>
+                  </div>
+                ) : null}
+                {captionDesk && captionDesk.exceptionIds.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 text-[0.7rem]">
+                    <span>{captionDesk.exceptionIds.length} legendas com estilo próprio</span>
+                    <Button type="button" size="xs" variant="outline" onClick={captionDesk.onRevealException}>Ver</Button>
+                    <Button type="button" size="xs" variant="outline" onClick={captionDesk.onClearExceptions}>
+                      Voltar todas ao estilo geral
+                    </Button>
+                  </div>
+                ) : null}
               <StyleCustomizePanel
                 insert={styleHost}
                 videoDuration={videoDuration}
@@ -814,6 +925,7 @@ export function ControlPanel({
                 isBlockOpen={captionStyleBlocks.isOpen}
                 onToggleBlock={captionStyleBlocks.toggle}
               />
+              </>
             ) : (
               <p className="text-xs text-muted-foreground">
                 O estilo das legendas aparece depois de gerar.
@@ -1214,16 +1326,30 @@ function SelectedCaptionBar({
   onBegin,
   onEnd,
   onUseSharedStyle,
+  onIsolate,
+  onApplyToAll,
+  onSplit,
+  onJoin,
+  onAddTerm,
 }: {
   insert: Insert
   onChange: (id: string, patch: Partial<Insert>) => void
   onBegin?: () => void
   onEnd?: () => void
   onUseSharedStyle: () => void
+  onIsolate?: () => void
+  onApplyToAll?: () => void
+  onSplit?: (cursor: number) => void
+  onJoin?: () => void
+  onAddTerm?: (term: string) => void
 }) {
   const preview = insert.text?.trim() || "Legenda"
-  const own = hasInsertOverrides(insert.styleRef) || insert.transform?.touchedByUser === true
+  const own = insert.captionOwnStyle === true
   const range = `${formatTime(insert.start)}–${formatTime(insert.start + insert.duration)}`
+  const selectionRef = useRef("")
+  function rememberSelection(field: HTMLTextAreaElement) {
+    selectionRef.current = field.value.slice(field.selectionStart, field.selectionEnd).trim()
+  }
   return (
     <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-2">
       <p className="truncate text-xs font-medium text-foreground">
@@ -1237,12 +1363,66 @@ function SelectedCaptionBar({
         onChange={(event) => onChange(insert.id, { text: event.target.value })}
         onFocus={() => onBegin?.()}
         onBlur={() => onEnd?.()}
+        onSelect={(event) => rememberSelection(event.currentTarget)}
+        onMouseUp={(event) => rememberSelection(event.currentTarget)}
+        onKeyUp={(event) => rememberSelection(event.currentTarget)}
+        onKeyDown={(event) => {
+          const target = event.currentTarget
+          rememberSelection(target)
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault()
+            target.blur()
+            return
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault()
+            onSplit?.(target.selectionStart)
+            return
+          }
+          if (event.key === "Backspace" && target.selectionStart === 0 && target.selectionEnd === 0) {
+            event.preventDefault()
+            onJoin?.()
+          }
+        }}
       />
-      {own ? (
-        <Button type="button" variant="outline" size="xs" className="self-start" onClick={onUseSharedStyle}>
-          Voltar ao estilo geral
-        </Button>
-      ) : null}
+      <div className="flex flex-wrap gap-1">
+        {own ? (
+          <>
+            <Button type="button" variant="outline" size="xs" onClick={onUseSharedStyle}>
+              Voltar ao estilo geral
+            </Button>
+            {onApplyToAll ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  if (window.confirm("Aplicar o estilo desta linha a todas as legendas?")) onApplyToAll()
+                }}
+              >
+                Aplicar este estilo a todas
+              </Button>
+            ) : null}
+          </>
+        ) : onIsolate ? (
+          <Button type="button" variant="outline" size="xs" onClick={onIsolate}>
+            Estilo só nesta linha
+          </Button>
+        ) : null}
+        {onAddTerm ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              const term = selectionRef.current || window.getSelection()?.toString().trim() || ""
+              if (term) onAddTerm(term)
+            }}
+          >
+            Adicionar ao dicionário
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }

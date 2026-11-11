@@ -188,6 +188,9 @@ export function MotionTempo({
                 {label}
               </button>
             ))}
+            {LOOP_SPEEDS.every(([hz]) => Math.abs(animation.loop.speed - hz) >= 0.05) ? (
+              <span className="rounded bg-foreground px-2 py-1 text-[0.65rem] text-background">Personalizado</span>
+            ) : null}
           </div>
           <input
             type="range"
@@ -224,6 +227,15 @@ export function MotionTempo({
                 {label}
               </button>
             ))}
+            {(
+              [
+                [ampBase * 0.6, "Suave"],
+                [ampBase, "Médio"],
+                [ampBase * 1.4, "Forte"],
+              ] as const
+            ).every(([value]) => Math.abs(amplitude.value - value) >= 0.05) ? (
+              <span className="rounded bg-foreground px-2 py-1 text-[0.65rem] text-background">Personalizado</span>
+            ) : null}
           </div>
           <input
             type="range"

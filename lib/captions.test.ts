@@ -1,5 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { alignPunctuatedTokens } from "./caption-punctuate.ts"
+import { restoreCaptionWords } from "./caption-restore.ts"
+import { tidyCaptionSpeech } from "./caption-speech.ts"
 import { CAPTION_INSERT_TYPE, insertKind, type CompositionInsert } from "./composition.ts"
 import {
   DEFAULT_GROUP_OPTIONS,
@@ -186,6 +189,133 @@ test("runCaptionsPipeline returns 422-empty when there is no speech", async () =
       ),
     (error: Error) => error.message === "captions-empty",
   )
+})
+
+test("texto bruto devolve fora e pena sem sobrepor as vizinhas", () => {
+  const gap = restoreCaptionWords(
+    [
+      { text: "ficar", start: 0, end: 0.4 },
+      { text: "de", start: 0.4, end: 1 },
+      { text: "desse", start: 1.2, end: 1.6 },
+      { text: "grupo", start: 1.6, end: 2 },
+    ],
+    "ficar de fora desse grupo.",
+  )
+  assert.equal(gap.inserted, 1)
+  assert.deepEqual(gap.words.map((word) => word.text), ["ficar", "de", "fora", "desse", "grupo"])
+  const fora = gap.words[2]!
+  assert.equal(fora.start, 1)
+  assert.equal(fora.end, 1.2)
+
+  const tight = restoreCaptionWords(
+    [
+      { text: "de", start: 0.6, end: 1 },
+      { text: "desse", start: 1, end: 1.2 },
+      { text: "xx", start: 1.2, end: 1.4 },
+    ],
+    "de fora desse",
+  )
+  assert.deepEqual(tight.words.map((word) => word.text), ["de", "fora", "desse", "xx"])
+  for (let index = 0; index < tight.words.length; index += 1) {
+    const word = tight.words[index]!
+    assert.ok(word.end - word.start >= 1 / 30 - 1e-9)
+    const next = tight.words[index + 1]
+    if (next) assert.ok(word.end <= next.start + 1e-9)
+  }
+  assert.ok(tight.words[0]!.end < 1)
+})
+
+test("E só vira e no meio da frase", () => {
+  const mid = tidyCaptionSpeech([
+    { text: "valem" },
+    { text: "a" },
+    { text: "conferir" },
+    { text: "E" },
+    { text: "quando" },
+  ])
+  assert.deepEqual(mid.map((word) => word.text), ["valem", "a", "conferir", "e", "quando"])
+
+  const nextSentence = tidyCaptionSpeech([
+    { text: "conferir." },
+    { text: "e" },
+    { text: "quando" },
+    { text: "aparece" },
+  ])
+  assert.deepEqual(nextSentence.map((word) => word.text), ["conferir.", "E", "quando", "aparece"])
+})
+
+test("vírgulas soltas voltam para as mesmas palavras", () => {
+  const words = ["uma", "oportunidade", "boa", "eu", "aviso", "por", "lá"]
+  const raw = ["uma", "oportunidade", ",", "boa", ",", "eu", "aviso", "por", "lá"]
+  assert.deepEqual(alignPunctuatedTokens(words, raw), [
+    "uma",
+    "oportunidade,",
+    "boa,",
+    "eu",
+    "aviso",
+    "por",
+    "lá",
+  ])
+})
+
+test("runCaptionsPipeline pontua os tokens antes de montar as linhas", async () => {
+  const result = await runCaptionsPipeline(
+    { duration: 8, mediaBytes: 100, maxWords: 4 },
+    {
+      transcribe: async () => ({
+        words: [
+          { word: "uma", start: 0, end: 0.3 },
+          { word: "oportunidade", start: 0.3, end: 0.9 },
+          { word: "boa", start: 0.9, end: 1.2 },
+          { word: "eu", start: 1.2, end: 1.4 },
+          { word: "aviso", start: 1.4, end: 1.8 },
+          { word: "por", start: 1.8, end: 2 },
+          { word: "lá", start: 2, end: 2.4 },
+        ],
+      }),
+      punctuate: async () => ["uma", "oportunidade", ",", "boa", ",", "eu", "aviso", "por", "lá"],
+    },
+  )
+  const texts = result.lines.flatMap((line) => line.words.map((word) => word.text))
+  assert.deepEqual(texts, ["uma", "oportunidade,", "boa,", "eu", "aviso", "por", "lá"])
+  assert.equal(result.lines[0]?.words[0]?.start, 0)
+  assert.equal(result.lines[0]?.words[1]?.end, 0.9)
+  assert.ok(result.warnings.includes("punctuated"))
+  assert.match(result.lines.map((line) => line.text).join(" | "), /oportunidade,/)
+  assert.match(result.lines.map((line) => line.text).join(" | "), /boa,/)
+})
+
+test("runCaptionsPipeline repõe palavras do texto bruto antes de pontuar", async () => {
+  const result = await runCaptionsPipeline(
+    { duration: 8, mediaBytes: 100, maxWords: 4 },
+    {
+      transcribe: async () => ({
+        text: "ficar de fora desse grupo. que valem a pena conferir. e quando aparece",
+        words: [
+          { word: "ficar", start: 0, end: 0.3 },
+          { word: "de", start: 0.3, end: 0.5 },
+          { word: "desse", start: 0.5, end: 0.8 },
+          { word: "grupo", start: 0.8, end: 1.1 },
+          { word: "que", start: 1.2, end: 1.4 },
+          { word: "valem", start: 1.4, end: 1.7 },
+          { word: "a", start: 1.7, end: 1.8 },
+          { word: "conferir", start: 1.8, end: 2.2 },
+          { word: "e", start: 2.2, end: 2.4 },
+          { word: "quando", start: 2.4, end: 2.7 },
+          { word: "aparece", start: 2.7, end: 3.1 },
+        ],
+      }),
+      punctuate: async (words) =>
+        words.map((word) => (word === "grupo" || word === "conferir" ? `${word}.` : word)),
+    },
+  )
+  const spoken = result.lines.flatMap((line) => line.words.map((word) => word.text)).join(" ")
+  assert.match(spoken, /ficar de fora desse grupo\./)
+  assert.match(spoken, /Que valem a pena conferir\./)
+  assert.match(spoken, /E quando aparece/)
+  assert.ok(result.warnings.includes("words-restored:2"))
+  assert.ok(result.warnings.includes("punctuated"))
+  for (const line of result.lines) assert.ok(line.text.length <= 22, line.text)
 })
 
 test("runCaptionsPipeline groups words and flags estimated timings", async () => {

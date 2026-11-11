@@ -11,10 +11,12 @@ export function CaptionLineList({
   inserts,
   selectedId,
   onReveal,
+  exceptionIds,
 }: {
   inserts: Insert[]
   selectedId: string | null
   onReveal: (id: string) => void
+  exceptionIds?: string[]
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const lines = inserts
@@ -56,6 +58,9 @@ export function CaptionLineList({
             onClick={() => onReveal(insert.id)}
           >
             <span className="min-w-0 flex-1 truncate text-xs">{text}</span>
+            {exceptionIds?.includes(insert.id) ? (
+              <span className="size-1.5 shrink-0 rounded-full bg-amber-400" title="Estilo próprio" />
+            ) : null}
             <span className="shrink-0 font-mono text-[0.7rem] tabular-nums text-muted-foreground">
               {range}
             </span>

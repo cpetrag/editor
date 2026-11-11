@@ -65,6 +65,7 @@ export function TimelineClipBar({
           "z-10 opacity-100 ring-[3px] ring-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.55)]",
         pending &&
           "z-30 border-2 border-dashed border-amber-300 opacity-100 outline outline-2 outline-dashed outline-amber-300 outline-offset-1 ring-0",
+        insert.captionOwnStyle && "border border-dashed border-white",
         disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing",
       )}
       style={{

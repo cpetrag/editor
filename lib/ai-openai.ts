@@ -1,7 +1,9 @@
 import { generateObject, generateText } from "ai"
 import { openai } from "@ai-sdk/openai"
+import { z } from "zod"
 
 import { describeOpenAiError, extractAudioForWhisper, type WhisperAudio } from "./ai-audio.ts"
+import { alignPunctuatedTokens } from "./caption-punctuate.ts"
 import { IA_SYSTEM_PROMPT } from "./ai-prompt.ts"
 import {
   openaiGenerateSchema,
@@ -83,15 +85,50 @@ export async function transcribeCaptionWords(
   bytes: Uint8Array,
   mime: string,
   filename: string,
+  prompt?: string,
 ): Promise<WhisperCaptionPayload> {
-  return (await requestTranscription(
+  if (prompt) console.info("[editor] captions prompt", prompt)
+  const payload = (await requestTranscription(
     { bytes, mime, filename },
     {
       response_format: WHISPER_CAPTION_REQUEST.responseFormat,
       "timestamp_granularities[]": WHISPER_CAPTION_REQUEST.timestampGranularity,
       language: "pt",
+      ...(prompt ? { prompt } : {}),
     },
   )) as WhisperCaptionPayload
+  const rawText = String((payload as { text?: string }).text ?? "").trim()
+  console.info("[editor] captions bruto", rawText.slice(0, 800))
+  return payload
+}
+
+const punctuationSchema = z.object({
+  tokens: z.array(z.string()),
+})
+
+/** Mesma quantidade de tokens, pontuação colada em cada um. */
+export async function punctuateCaptionTokens(words: readonly string[]): Promise<string[] | null> {
+  if (!getOpenAiApiKey() || words.length === 0) return null
+  try {
+    const { object } = await generateObject({
+      model: openai(textModel()),
+      schema: punctuationSchema,
+      system:
+        "Pontue legendas em português do Brasil. Devolva exatamente a mesma quantidade de tokens, na mesma ordem. Cole vírgula, ponto ou interrogação no próprio token. Não junte, não apague, não traduza e não mude a grafia além da pontuação.",
+      prompt: JSON.stringify(words),
+    })
+    console.info("[editor] captions pontuado", object.tokens.join(" | "))
+    const aligned = alignPunctuatedTokens(words, object.tokens)
+    if (!aligned) {
+      console.info("[editor] pontuação ignorada", object.tokens.length, words.length)
+      return null
+    }
+    console.info("[editor] captions alinhado", aligned.join(" | "))
+    return aligned
+  } catch (error) {
+    console.error("[editor] pontuação das legendas falhou", error instanceof Error ? error.message : error)
+    return null
+  }
 }
 
 function toGenerateModel(object: {

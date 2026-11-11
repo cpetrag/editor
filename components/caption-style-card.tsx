@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, type ReactNode } from "react"
+import { Fragment, useMemo, useState, type ReactNode } from "react"
 
 import { CaptionStyleThumb } from "@/components/caption-style-thumb"
 import { PresetPickerRow } from "@/components/preset-picker-row"
@@ -148,10 +148,17 @@ export function CaptionPresetRow({
       menu={menu}
       gridLabel="Estilo das legendas"
     >
-      {chips.map((chip) => {
+      {chips.map((chip, index) => {
         const pressed = activeId === chip.id
+        const mineHeading = chip.mine && !chips[index - 1]?.mine
         return (
-          <button
+          <Fragment key={chip.id}>
+            {mineHeading ? (
+              <p className="col-span-2 pt-1 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Meus estilos
+              </p>
+            ) : null}
+            <button
             key={chip.id}
             type="button"
             aria-pressed={pressed}
@@ -180,6 +187,7 @@ export function CaptionPresetRow({
               ) : null}
             </span>
           </button>
+          </Fragment>
         )
       })}
     </PresetPickerRow>

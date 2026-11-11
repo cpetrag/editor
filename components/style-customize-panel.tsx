@@ -316,6 +316,7 @@ export function StyleCustomizePanel({
       isMine={isMine}
       showApplyToTrack={context === "insert"}
       onSaveAs={beginSaveAs}
+      saveLabel={context === "caption" ? "Salvar como meu estilo" : "Salvar como…"}
       onApplyClean={() => onApplyPreset(activeRef.presetId, "clean")}
       onResetStyle={onResetOverrides}
       onResetPosition={onResetPosition}

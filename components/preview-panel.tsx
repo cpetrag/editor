@@ -31,6 +31,7 @@ import { formatTimecode } from "@/lib/timecode"
 import { fitPreviewFrame } from "@/lib/preview-frame"
 import { TextCommitBar } from "@/components/text-commit-bar"
 import { useEditorShortcuts } from "@/hooks/useEditorShortcuts"
+import { limitCaptionEdge } from "@/lib/caption-timing"
 import { DEFAULT_CAPTION_STYLE, insertKind, resolveTimelineDuration, type CaptionPreset, type CaptionStyle, type Composition, type StyleRef, type TrackStyle, type TrackId } from "@/lib/composition"
 import { INSERT_SIZE_PERCENT_MAX, INSERT_SIZE_PERCENT_MIN, insertWithSize, sizePercentOf } from "@/lib/content/gallery"
 import { PLAY_H, PLAY_W } from "@/lib/compose/layout"
@@ -126,6 +127,7 @@ interface PreviewPanelProps {
   sourceTransform?: SourceTransform
   sourceCuts?: SourceCut[]
   onSplitSource?: (time: number) => void
+  onSplitCaption?: (time: number) => boolean
   onRemoveSourceCut?: (index: number) => void
   trim?: SourceTrim
   /** `gesture` durante o arraste das alças; `discrete` para botões e atalhos. */
@@ -135,6 +137,7 @@ interface PreviewPanelProps {
   stickerBlobUrls?: Record<string, string>
   captionPreset?: CaptionPreset
   captionStyle?: CaptionStyle
+  dodgeInserts?: boolean
   styleRef?: StyleRef
   productData?: Composition["productData"]
   brandKitId?: Composition["brandKitId"]
@@ -218,6 +221,7 @@ export const PreviewPanel = memo(
       sourceTransform,
       sourceCuts,
       onSplitSource,
+      onSplitCaption,
       onRemoveSourceCut,
       trim,
       onChangeTrim,
@@ -226,6 +230,7 @@ export const PreviewPanel = memo(
       stickerBlobUrls = {},
       captionPreset = "viral",
       captionStyle,
+      dodgeInserts = true,
       styleRef,
       productData,
       brandKitId,
@@ -588,7 +593,19 @@ export const PreviewPanel = memo(
           drag.mode === "in"
             ? trimInsertIn(drag.base, time, totalDuration)
             : trimInsertOut(drag.base, time, totalDuration)
-        onPatchInsert?.(drag.id, next)
+        const dragged = insertsRef.current.find((item) => item.id === drag.id)
+        const limited =
+          dragged && insertKind(dragged) === "caption"
+            ? limitCaptionEdge(
+                insertsRef.current
+                  .filter((item) => insertKind(item) === "caption")
+                  .map((item) => ({ id: item.id, start: item.start, duration: item.duration })),
+                drag.id,
+                drag.mode,
+                next,
+              )
+            : next
+        onPatchInsert?.(drag.id, limited)
         return
       }
       const limit = insertLimitRef.current
@@ -682,11 +699,12 @@ export const PreviewPanel = memo(
   }, [exporting, playableUrl, selection, stepFrames, totalDuration])
 
   const splitAtPlayhead = useCallback(() => {
+    if (onSplitCaption?.(currentTimeRef.current)) return
     if (!onSplitSource || !(sourceDuration > 0)) return
     const time = toSourceTime(currentTimeRef.current)
     if (!canSplitSourceAt(framing, time, sourceDuration)) return
     onSplitSource(time)
-  }, [framing, onSplitSource, sourceDuration, toSourceTime])
+  }, [framing, onSplitCaption, onSplitSource, sourceDuration, toSourceTime])
 
   useEffect(() => {
     function onMove(event: PointerEvent) {
@@ -1300,6 +1318,7 @@ export const PreviewPanel = memo(
             blobUrls={stickerBlobUrls}
             captionPreset={captionPreset}
             captionStyle={captionStyle}
+            dodgeInserts={dodgeInserts}
             selection={selection}
             sourceWidth={sourceWidth}
             sourceHeight={sourceHeight}
@@ -1347,6 +1366,7 @@ export const PreviewPanel = memo(
             blobUrls={stickerBlobUrls}
             captionPreset={captionPreset}
             captionStyle={captionStyle ?? DEFAULT_CAPTION_STYLE}
+            dodgeInserts={dodgeInserts}
             tracks={tracks}
             styleRef={styleRef}
             productData={productData}
@@ -1521,7 +1541,7 @@ export const PreviewPanel = memo(
               variant="outline"
               size="xs"
               className="shrink-0"
-              disabled={exporting || !playableUrl || !canSplitHere}
+              disabled={exporting || (!canSplitHere && !inserts.some((item) => item.id === selectedInsertId && insertKind(item) === "caption"))}
               onClick={splitAtPlayhead}
               aria-keyshortcuts="S"
               title={`Dividir (S) · ${SPLIT_HINT}`}

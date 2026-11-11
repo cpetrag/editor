@@ -13,6 +13,7 @@ export const HISTORY_LIMIT = 50
 export interface HistorySnapshot {
   inserts: CompositionInsert[]
   captionStyle: CaptionStyle
+  captionPrefs?: CaptionPrefs
   tracks?: Partial<Record<TrackId, TrackStyle>>
   styleRef?: StyleRef
   sourceTransform?: SourceTransform

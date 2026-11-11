@@ -46,8 +46,10 @@ export function captionStyleHost(
 ): CompositionInsert | null {
   const captions = inserts.filter((insert) => insertKind(insert) === "caption")
   if (captions.length === 0) return null
-  const selected = captions.find((insert) => insert.id === selectedId)
-  return selected ?? captions[0] ?? null
+  const shared = captions.filter((insert) => !insert.captionOwnStyle)
+  const pool = shared.length > 0 ? shared : captions
+  const selected = pool.find((insert) => insert.id === selectedId)
+  return selected ?? pool[0] ?? null
 }
 
 export type CaptionTextEditorState =
@@ -81,7 +83,7 @@ export function applyCaptionTransformToAll(
   patch: Partial<Pick<InsertTransform, "x" | "y" | "scale" | "rotation" | "maxWidth">>,
 ): CompositionInsert[] {
   return inserts.map((insert) =>
-    insertKind(insert) === "caption"
+    insertKind(insert) === "caption" && !insert.captionOwnStyle
       ? applyUserTransformPatch(insert, patch, defaultTransformForInsert(insert))
       : insert,
   )
@@ -94,6 +96,7 @@ export function stampCaptionVisual(
   if (insertKind(host) !== "caption") return inserts
   return inserts.map((insert) => {
     if (insertKind(insert) !== "caption") return insert
+    if (insert.captionOwnStyle && insert.id !== host.id) return insert
     if (insert.id === host.id) return host
     return {
       ...insert,
@@ -142,4 +145,64 @@ export function applySharedCaptionVisual(
     }
   }
   return { inserts: nextInserts, captionStyle: nextStyle }
+}
+
+export function captionExceptionIds(inserts: readonly CompositionInsert[]): string[] {
+  return inserts.filter((insert) => insertKind(insert) === "caption" && insert.captionOwnStyle).map((insert) => insert.id)
+}
+
+export function isolateCaptionStyle(inserts: CompositionInsert[], id: string): CompositionInsert[] {
+  return inserts.map((insert) =>
+    insert.id === id && insertKind(insert) === "caption" ? { ...insert, captionOwnStyle: true } : insert,
+  )
+}
+
+export function releaseCaptionStyle(inserts: CompositionInsert[], id: string): CompositionInsert[] {
+  const shared = inserts.find((insert) => insertKind(insert) === "caption" && !insert.captionOwnStyle && insert.id !== id)
+  return inserts.map((insert) => {
+    if (insert.id !== id || insertKind(insert) !== "caption") return insert
+    if (!shared) return { ...insert, captionOwnStyle: undefined }
+    return {
+      ...insert,
+      captionOwnStyle: undefined,
+      styleRef: shared.styleRef,
+      transform: shared.transform,
+      x: shared.x,
+      y: shared.y,
+      rotation: shared.rotation,
+      maxWidthPct: shared.maxWidthPct,
+      scale: shared.scale,
+    }
+  })
+}
+
+export function clearCaptionExceptions(inserts: CompositionInsert[]): CompositionInsert[] {
+  const shared = inserts.find((insert) => insertKind(insert) === "caption" && !insert.captionOwnStyle)
+  return inserts.map((insert) => {
+    if (insertKind(insert) !== "caption" || !insert.captionOwnStyle) return insert
+    if (!shared) return { ...insert, captionOwnStyle: undefined }
+    return {
+      ...insert,
+      captionOwnStyle: undefined,
+      styleRef: shared.styleRef,
+      transform: shared.transform,
+      x: shared.x,
+      y: shared.y,
+      rotation: shared.rotation,
+      maxWidthPct: shared.maxWidthPct,
+      scale: shared.scale,
+    }
+  })
+}
+
+export function applyOwnCaptionStyleToAll(inserts: CompositionInsert[], id: string): CompositionInsert[] {
+  const host = inserts.find((insert) => insert.id === id && insertKind(insert) === "caption")
+  if (!host) return inserts
+  const shared = { ...host, captionOwnStyle: undefined }
+  return stampCaptionVisual(
+    inserts.map((insert) =>
+      insertKind(insert) === "caption" ? { ...insert, captionOwnStyle: undefined } : insert,
+    ),
+    shared,
+  )
 }

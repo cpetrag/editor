@@ -33,6 +33,10 @@ export function createUserPreset(input: {
   group: PresetGroup
   style: InsertStyle | DeepPartial<InsertStyle>
   maxWords?: number
+  maxChars?: number
+  emphasizeSales?: boolean
+  saleTerms?: string[]
+  dodgeInserts?: boolean
 }): UserPreset {
   const id = input.id ?? allocateUserPresetId()
   if (!canWritePresetId(id)) {
@@ -47,9 +51,11 @@ export function createUserPreset(input: {
     label,
     group: input.group,
     style: deepMerge(LEGADO_STYLE, input.style),
-    ...(typeof input.maxWords === "number" && input.maxWords > 0
-      ? { maxWords: input.maxWords }
-      : {}),
+    ...(typeof input.maxWords === "number" && input.maxWords > 0 ? { maxWords: input.maxWords } : {}),
+    ...(typeof input.maxChars === "number" && input.maxChars > 0 ? { maxChars: input.maxChars } : {}),
+    ...(typeof input.emphasizeSales === "boolean" ? { emphasizeSales: input.emphasizeSales } : {}),
+    ...(input.saleTerms && input.saleTerms.length > 0 ? { saleTerms: input.saleTerms } : {}),
+    ...(typeof input.dodgeInserts === "boolean" ? { dodgeInserts: input.dodgeInserts } : {}),
   }
 }
 
@@ -62,6 +68,10 @@ export function serializeUserPresetFile(presets: UserPreset[]): string {
       group: preset.group,
       style: preset.style,
       ...(preset.maxWords ? { maxWords: preset.maxWords } : {}),
+      ...(preset.maxChars ? { maxChars: preset.maxChars } : {}),
+      ...(typeof preset.emphasizeSales === "boolean" ? { emphasizeSales: preset.emphasizeSales } : {}),
+      ...(preset.saleTerms?.length ? { saleTerms: preset.saleTerms } : {}),
+      ...(typeof preset.dodgeInserts === "boolean" ? { dodgeInserts: preset.dodgeInserts } : {}),
     })),
   }
   return JSON.stringify(payload, null, 2)
@@ -87,6 +97,12 @@ export function parseUserPresetFile(input: unknown): UserPreset[] {
           group: raw.group,
           style,
           maxWords: typeof raw.maxWords === "number" ? raw.maxWords : undefined,
+          maxChars: typeof raw.maxChars === "number" ? raw.maxChars : undefined,
+          emphasizeSales: typeof raw.emphasizeSales === "boolean" ? raw.emphasizeSales : undefined,
+          saleTerms: Array.isArray(raw.saleTerms)
+            ? raw.saleTerms.filter((item): item is string => typeof item === "string")
+            : undefined,
+          dodgeInserts: typeof raw.dodgeInserts === "boolean" ? raw.dodgeInserts : undefined,
         }),
       )
     } catch {

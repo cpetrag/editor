@@ -53,6 +53,7 @@ export async function requestCaptions(input: {
   duration: number
   media: File
   maxWords?: number
+  vocabulary?: readonly string[]
 }) {
   if (input.media.size > WHISPER_MAX_BYTES) {
     throw new AiRequestError("Arquivo acima de 25 MB.", 400)
@@ -60,6 +61,9 @@ export async function requestCaptions(input: {
   const body = new FormData()
   body.set("duration", String(input.duration))
   body.set("maxWords", String(parseMaxWords(input.maxWords)))
+  if (input.vocabulary && input.vocabulary.length > 0) {
+    body.set("vocabulary", JSON.stringify(input.vocabulary))
+  }
   body.set("media", input.media, input.media.name || "video.mp4")
   const response = await fetch("/api/ai/captions", {
     method: "POST",

@@ -250,6 +250,7 @@ export function OverlayCanvas({
   trimStart = 0,
   customPresets,
   watermark,
+  dodgeInserts = true,
   onSelect,
   onPatchInsert,
   onPatchCaptionStyle,
@@ -287,6 +288,7 @@ export function OverlayCanvas({
   trimStart?: number
   customPresets?: UserPreset[]
   watermark?: WatermarkPaint | null
+  dodgeInserts?: boolean
   /** When false, only hit-testing/selection run — Remotion paints the inserts. */
   paintVisual?: boolean
   onSelect?: (selection: PreviewSelection) => void
@@ -484,7 +486,7 @@ export function OverlayCanvas({
           },
           captionPreset,
           captionStyle,
-          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId, brandColors, trimStart },
+          { fps: DEFAULT_FPS, videoDuration, project: project ?? {}, tracks, customPresets, editPreview: true, productData, brandKitId, brandColors, trimStart, dodgeInserts },
           watermark ?? null,
         )
       }
@@ -515,7 +517,7 @@ export function OverlayCanvas({
     return () => {
       cancelled = true
     }
-  }, [brandColors, brandKitId, captionPreset, captionStyle, customPresets, editingTextId, fontFamily, fontId, hasLayer, imageTick, inserts, logoSrc, paintVisual, project, time, tracks, videoDuration, watermark])
+  }, [brandColors, brandKitId, captionPreset, captionStyle, customPresets, dodgeInserts, editingTextId, fontFamily, fontId, hasLayer, imageTick, inserts, logoSrc, paintVisual, project, time, tracks, videoDuration, watermark])
 
   useEffect(() => {
     const host = hostRef.current

@@ -152,6 +152,10 @@ export type Preset = {
   group: PresetGroup
   style: InsertStyle
   maxWords?: number
+  maxChars?: number
+  emphasizeSales?: boolean
+  saleTerms?: string[]
+  dodgeInserts?: boolean
 }
 
 export type UserPreset = Preset & {

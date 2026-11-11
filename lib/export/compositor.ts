@@ -176,6 +176,7 @@ export function drawFrame(
         : undefined,
       brandKitId: composition.brandKitId,
       brandColors: composition.brandColors,
+      dodgeInserts: composition.captionPrefs?.dodgeInserts !== false,
     },
     watermark ?? null,
   )

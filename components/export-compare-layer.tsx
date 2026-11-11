@@ -38,6 +38,7 @@ export function ExportCompareLayer({
   videoDuration,
   customPresets,
   watermark,
+  dodgeInserts = true,
 }: {
   mode: ExportCompareMode
   time: number
@@ -55,6 +56,7 @@ export function ExportCompareLayer({
   videoDuration: number
   customPresets?: UserPreset[]
   watermark?: WatermarkPaint | null
+  dodgeInserts?: boolean
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imagesRef = useRef(new Map<string, HTMLImageElement>())
@@ -132,6 +134,7 @@ export function ExportCompareLayer({
           productData,
           brandKitId,
           brandColors,
+          dodgeInserts,
         },
         watermark ?? null,
       )
@@ -158,6 +161,7 @@ export function ExportCompareLayer({
     captionPreset,
     captionStyle,
     customPresets,
+    dodgeInserts,
     fontId,
     imageTick,
     inserts,

@@ -126,7 +126,7 @@ export function applyCaptionStylePatchToRefs(
   if (updates.length === 0) return inserts
 
   return inserts.map((insert) => {
-    if (insertKind(insert) !== "caption") return insert
+    if (insertKind(insert) !== "caption" || insert.captionOwnStyle) return insert
     const presetId = insert.styleRef?.presetId
     if (!presetId || presetId === LEGADO_PRESET_ID) return insert
     let ref = insert.styleRef
